@@ -33,7 +33,9 @@ import (
 // Tests are intentionally surgical: one bd operation per test, one
 // invariant assertion, one diff in the failure output. Running the suite
 // produces a precise list of which operations break sync under which env
-// configuration. A correct fix lands all of them green.
+// configuration. The real-bd runner logs subprocess timings for each
+// operation so future fixes that add export, locking, or async wait costs are
+// visible in `go test -v` output. A correct fix lands all of them green.
 
 // jsonlBead is the subset of fields bd writes to issues.jsonl that this
 // suite compares. bd's wire format uses `issue_type`/`parent` where the
@@ -143,7 +145,7 @@ func intPtrEqual(a, b *int) bool {
 func assertJSONLMatchesDolt(t *testing.T, ws *coherenceWorkspace, beadID string) {
 	t.Helper()
 
-	verifyStore := ws.withEnvStore(map[string]string{"BD_EXPORT_AUTO": "false"})
+	verifyStore := ws.withEnvStore(t, map[string]string{"BD_EXPORT_AUTO": "false"})
 	doltBead, err := verifyStore.Get(beadID)
 	if err != nil {
 		t.Fatalf("get %s from Dolt: %v", beadID, err)
@@ -191,8 +193,9 @@ func assertJSONLMatchesDolt(t *testing.T, ws *coherenceWorkspace, beadID string)
 // invocations apply the given env overrides on top of the inherited
 // environment. Used to test specific configurations (e.g.,
 // BD_EXPORT_AUTO=false) without touching .beads/config.yaml.
-func (ws *coherenceWorkspace) withEnvStore(env map[string]string) *beads.BdStore {
-	return beads.NewBdStoreWithPrefix(ws.dir, realBdRunner(env), ws.prefix)
+func (ws *coherenceWorkspace) withEnvStore(t testing.TB, env map[string]string) *beads.BdStore {
+	t.Helper()
+	return beads.NewBdStoreWithPrefix(ws.dir, realBdRunner(t, env), ws.prefix)
 }
 
 // setManagedConfigExportFalse writes export.auto: false into
@@ -332,8 +335,8 @@ func TestBdSync_AddLabel_JSONLMatchesDolt(t *testing.T) {
 }
 
 // TestBdSync_Close_JSONLMatchesDolt: close a bead via status=closed.
-// Mirrors #2079: the close lands in Dolt but doesn't make it to JSONL,
-// so the next bd subprocess reverts it.
+// Mirrors #2079 at the status-update level: the close state lands in Dolt
+// but doesn't make it to JSONL, so the next write subprocess reverts it.
 // Expected today: FAIL — JSONL still shows status=open.
 func TestBdSync_Close_JSONLMatchesDolt(t *testing.T) {
 	withCoherenceFixture(t, func(ws *coherenceWorkspace) {
@@ -348,14 +351,33 @@ func TestBdSync_Close_JSONLMatchesDolt(t *testing.T) {
 	})
 }
 
+// TestBdSync_BdStoreClose_JSONLMatchesDolt: close a bead through the exact
+// BdStore.Close path, which performs a verification Get and then shells to
+// `bd close --force --json`. This complements the status-update close test
+// above so future fixes cover the production close path directly.
+// Expected today: FAIL — JSONL still shows status=open.
+func TestBdSync_BdStoreClose_JSONLMatchesDolt(t *testing.T) {
+	withCoherenceFixture(t, func(ws *coherenceWorkspace) {
+		bead, err := ws.store.Create(beads.Bead{Title: "bdstore close target"})
+		if err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		if err := ws.store.Close(bead.ID); err != nil {
+			t.Fatalf("bdstore close: %v", err)
+		}
+		assertJSONLMatchesDolt(t, ws, bead.ID)
+	})
+}
+
 // ============================================================
 //  Group 2 — write ops with BD_EXPORT_AUTO=false (env override)
 // ============================================================
 //
-// The gc bd wrapper sets BD_EXPORT_AUTO=false on every controller- and
-// agent-facing call (cmd/gc/cmd_bd.go:69 → applyControlBdEnv). With this
-// env var, bd skips even the first export that the default-env tests in
-// Group 1 would catch. Every operation should diverge JSONL from Dolt.
+// The gc bd wrapper sets BD_EXPORT_AUTO=false through cmd/gc/cmd_bd.go's
+// bdCommandEnv -> applyExportSuppressionEnv path. Controller-specific runners
+// use applyControllerBdEnv, which applies the same suppression. With this env
+// var, bd skips even the first export that the default-env tests in Group 1
+// would catch. Every operation should diverge JSONL from Dolt.
 
 // TestBdSync_CreateExportAutoFalse_JSONLMatchesDolt: a create with the
 // env override that gascity applies in prod.
@@ -363,7 +385,7 @@ func TestBdSync_Close_JSONLMatchesDolt(t *testing.T) {
 // have written.
 func TestBdSync_CreateExportAutoFalse_JSONLMatchesDolt(t *testing.T) {
 	withCoherenceFixture(t, func(ws *coherenceWorkspace) {
-		store := ws.withEnvStore(map[string]string{"BD_EXPORT_AUTO": "false"})
+		store := ws.withEnvStore(t, map[string]string{"BD_EXPORT_AUTO": "false"})
 		bead, err := store.Create(beads.Bead{Title: "create with env=false"})
 		if err != nil {
 			t.Fatalf("create: %v", err)
@@ -381,7 +403,7 @@ func TestBdSync_UpdateStatusExportAutoFalse_JSONLMatchesDolt(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create: %v", err)
 		}
-		store := ws.withEnvStore(map[string]string{"BD_EXPORT_AUTO": "false"})
+		store := ws.withEnvStore(t, map[string]string{"BD_EXPORT_AUTO": "false"})
 		if err := store.Update(bead.ID, beads.UpdateOpts{Status: stringPtr("in_progress")}); err != nil {
 			t.Fatalf("update status: %v", err)
 		}
@@ -398,7 +420,7 @@ func TestBdSync_UpdateMetadataExportAutoFalse_JSONLMatchesDolt(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create: %v", err)
 		}
-		store := ws.withEnvStore(map[string]string{"BD_EXPORT_AUTO": "false"})
+		store := ws.withEnvStore(t, map[string]string{"BD_EXPORT_AUTO": "false"})
 		if err := store.SetMetadata(bead.ID, "probe", "value"); err != nil {
 			t.Fatalf("set-metadata: %v", err)
 		}
@@ -415,7 +437,7 @@ func TestBdSync_CloseExportAutoFalse_JSONLMatchesDolt(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create: %v", err)
 		}
-		store := ws.withEnvStore(map[string]string{"BD_EXPORT_AUTO": "false"})
+		store := ws.withEnvStore(t, map[string]string{"BD_EXPORT_AUTO": "false"})
 		if err := store.Update(bead.ID, beads.UpdateOpts{Status: stringPtr("closed")}); err != nil {
 			t.Fatalf("close: %v", err)
 		}
@@ -429,7 +451,7 @@ func TestBdSync_CloseExportAutoFalse_JSONLMatchesDolt(t *testing.T) {
 //
 // Same suppression as Group 2 but via the on-disk config file rather
 // than the env var. This is the persistent stance gascity bakes in via
-// EnsureCanonicalConfig (internal/beads/contract/files.go:226). Bd
+// EnsureCanonicalConfig (internal/beads/contract/files.go:401). Bd
 // subprocesses invoked by agents that bypass the gc wrapper inherit
 // this config and behave identically.
 
@@ -471,11 +493,11 @@ func TestBdSync_CloseManagedConfig_JSONLMatchesDolt(t *testing.T) {
 //  Group 4 — reads must not perturb either store
 // ============================================================
 //
-// Reads (`bd show`, `bd list`) should be observationally pure. They may
-// trigger the auto-import pre-flight internally, but the externally
-// visible state — Dolt's row content and JSONL's snapshot — must be
-// unchanged before vs. after. The bug pattern documents that even reads
-// can disturb state in practice; here we lock down the contract.
+// Reads (`bd show`, `bd list`) should be observationally pure. bd v1.0.4 marks
+// them read-only, so they do not trigger the startup auto-import preflight.
+// They can still auto-export in PersistentPostRun when export.auto is enabled
+// and the throttle has expired; these tests run inside the throttle window and
+// lock down the no-perturbation contract for immediate reads.
 
 // TestBdSync_Show_PreservesDoltAndJSONL: a default-env bd show should
 // not perturb Dolt's row content nor JSONL's representation of the
@@ -483,8 +505,8 @@ func TestBdSync_CloseManagedConfig_JSONLMatchesDolt(t *testing.T) {
 // store so that the SNAPSHOT itself doesn't trigger the very export-
 // flush we're measuring.
 //
-// Expected today: FAIL — empirical evidence shows default-env bd show
-// flushes pending exports, mutating JSONL as a side effect of the read.
+// Expected today: PASS — immediate read-only show skips auto-import and remains
+// inside the export throttle window.
 func TestBdSync_Show_PreservesDoltAndJSONL(t *testing.T) {
 	withCoherenceFixture(t, func(ws *coherenceWorkspace) {
 		bead, err := ws.store.Create(beads.Bead{Title: "show target"})
@@ -497,14 +519,14 @@ func TestBdSync_Show_PreservesDoltAndJSONL(t *testing.T) {
 			t.Fatalf("set-metadata: %v", err)
 		}
 
-		probe := ws.withEnvStore(map[string]string{"BD_EXPORT_AUTO": "false"})
+		probe := ws.withEnvStore(t, map[string]string{"BD_EXPORT_AUTO": "false"})
 		preDolt, err := probe.Get(bead.ID)
 		if err != nil {
 			t.Fatalf("pre-show probe Get: %v", err)
 		}
 		preJB, _ := readBeadFromJSONL(t, ws.dir, bead.ID)
 
-		// The operation under test: a default-env (export-allowed) Get.
+		// The operation under test: a default-env immediate Get.
 		if _, err := ws.store.Get(bead.ID); err != nil {
 			t.Fatalf("show: %v", err)
 		}
@@ -532,7 +554,8 @@ func TestBdSync_Show_PreservesDoltAndJSONL(t *testing.T) {
 // not perturb Dolt's row content nor JSONL's representation of any
 // listed bead. Same probe-vs-operation env split as the show test.
 //
-// Expected today: FAIL — list flushes pending exports too.
+// Expected today: PASS — immediate read-only list skips auto-import and remains
+// inside the export throttle window.
 func TestBdSync_List_PreservesDoltAndJSONL(t *testing.T) {
 	withCoherenceFixture(t, func(ws *coherenceWorkspace) {
 		bead, err := ws.store.Create(beads.Bead{Title: "list target"})
@@ -543,7 +566,7 @@ func TestBdSync_List_PreservesDoltAndJSONL(t *testing.T) {
 			t.Fatalf("set-metadata: %v", err)
 		}
 
-		probe := ws.withEnvStore(map[string]string{"BD_EXPORT_AUTO": "false"})
+		probe := ws.withEnvStore(t, map[string]string{"BD_EXPORT_AUTO": "false"})
 		preDolt, err := probe.Get(bead.ID)
 		if err != nil {
 			t.Fatalf("pre-list probe Get: %v", err)

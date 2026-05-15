@@ -10,7 +10,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,12 +26,12 @@ import (
 // These tests reproduce the destructive auto-import behavior reported in
 // gastownhall/gascity issues #2079, #2080, #2081, #2093, #2094, #2131 and
 // the local runbook gastown-reconciler-assignee-eviction-bug.md. All seven
-// reduce to one mechanism inside the bd CLI: on every subprocess startup,
-// bd auto-imports .beads/issues.jsonl into Dolt as a blanket overwrite,
-// with no merge or freshness check. Combined with the export.auto: false
-// setting that gascity bakes into managed configs (commit a7921dc4 /
-// PR #1965), JSONL goes stale and every subsequent bd write reverts any
-// Dolt mutation that occurred since the last export.
+// reduce to one mechanism inside the bd CLI: every server-mode, non-read-only
+// bd subprocess auto-imports .beads/issues.jsonl into Dolt as a blanket
+// overwrite, with no merge or freshness check. Combined with the
+// export.auto: false setting that gascity bakes into managed configs
+// (commit a7921dc4 / PR #1965), JSONL goes stale and every subsequent bd
+// write reverts any Dolt mutation that occurred since the last export.
 //
 // Each test performs a sequence of writes that should remain coherent in
 // any sane store, then asserts on the final state. Today they all fail —
@@ -42,13 +44,23 @@ var coherenceWorkspaceCounter atomic.Int64
 // than the file-shim used by the conformance suite. envOverrides is
 // merged on top of the inherited environment so each test can mirror
 // gascity's prod settings (BD_EXPORT_AUTO=false, BEADS_DOLT_AUTO_START=0).
-func realBdRunner(envOverrides map[string]string) beads.CommandRunner {
+//
+// The runner logs one timing line for every bd subprocess. These tests are the
+// guardrail for a future state-coherence fix, and the timing lines make any
+// fix that adds expensive subprocesses or export work visible in `go test -v`
+// output without baking in brittle machine-specific thresholds.
+func realBdRunner(t testing.TB, envOverrides map[string]string) beads.CommandRunner {
+	t.Helper()
 	base := beads.ExecCommandRunnerWithEnv(envOverrides)
 	return func(dir, name string, args ...string) ([]byte, error) {
+		displayName := name
 		if name == "bd" && realBDBinary != "" {
 			name = realBDBinary
 		}
-		return base(dir, name, args...)
+		start := time.Now()
+		out, err := base(dir, name, args...)
+		logSubprocessTiming(t, append([]string{displayName}, args...), start, err)
+		return out, err
 	}
 }
 
@@ -95,7 +107,7 @@ func newCoherenceWorkspace(t *testing.T, env []string, doltPort string) *coheren
 
 	// Permissive runner: matches the bd default. Initial Create()s on this
 	// runner auto-export to JSONL, giving us a populated baseline to freeze.
-	permissive := realBdRunner(nil)
+	permissive := realBdRunner(t, nil)
 
 	return &coherenceWorkspace{
 		dir:    wsDir,
@@ -114,13 +126,14 @@ func newCoherenceWorkspace(t *testing.T, env []string, doltPort string) *coheren
 //     later mutation drifts JSONL out of sync with Dolt
 //
 // After this call, the destructive auto-import path is loaded: the next
-// bd subprocess that reads the stale JSONL will overwrite Dolt with it.
+// non-read-only bd write subprocess that reads the stale JSONL will overwrite
+// Dolt with it.
 func (ws *coherenceWorkspace) freezeJSONLAndDisableAutoExport(t *testing.T) {
 	t.Helper()
 	runRealBDExportAll(t, ws.env, ws.dir)
 	runRealBDConfigSet(t, ws.env, ws.dir, "export.auto", "false")
 
-	frozen := realBdRunner(map[string]string{
+	frozen := realBdRunner(t, map[string]string{
 		"BD_EXPORT_AUTO": "false",
 	})
 	ws.store = beads.NewBdStoreWithPrefix(ws.dir, frozen, ws.prefix)
@@ -138,7 +151,9 @@ func runRealBDInit(t *testing.T, env []string, dir, prefix, port string) {
 		"--skip-hooks", "--skip-agents")
 	cmd.Dir = dir
 	cmd.Env = env
+	start := time.Now()
 	out, err := cmd.CombinedOutput()
+	logSubprocessTiming(t, []string{"bd", "init", "--server"}, start, errorsForTiming(ctx.Err(), err))
 	if ctx.Err() == context.DeadlineExceeded {
 		t.Fatalf("bd init timed out: %s", out)
 	}
@@ -154,7 +169,9 @@ func runRealBDConfigSet(t *testing.T, env []string, dir, key, value string) {
 	cmd := exec.CommandContext(ctx, realBDBinary, "config", "set", key, value)
 	cmd.Dir = dir
 	cmd.Env = env
+	start := time.Now()
 	out, err := cmd.CombinedOutput()
+	logSubprocessTiming(t, []string{"bd", "config", "set", key, value}, start, errorsForTiming(ctx.Err(), err))
 	if ctx.Err() == context.DeadlineExceeded {
 		t.Fatalf("bd config set %s=%s timed out: %s", key, value, out)
 	}
@@ -174,7 +191,9 @@ func runRealBDExportAll(t *testing.T, env []string, dir string) {
 	cmd := exec.CommandContext(ctx, realBDBinary, "export", "-o", ".beads/issues.jsonl", "--all")
 	cmd.Dir = dir
 	cmd.Env = env
+	start := time.Now()
 	out, err := cmd.CombinedOutput()
+	logSubprocessTiming(t, []string{"bd", "export", "-o", ".beads/issues.jsonl", "--all"}, start, errorsForTiming(ctx.Err(), err))
 	if ctx.Err() == context.DeadlineExceeded {
 		t.Fatalf("bd export timed out: %s", out)
 	}
@@ -190,7 +209,9 @@ func configureCustomTypesReal(t *testing.T, env []string, dir string, types []st
 	cmd := exec.CommandContext(ctx, realBDBinary, "config", "set", "types.custom", strings.Join(types, ","))
 	cmd.Dir = dir
 	cmd.Env = env
+	start := time.Now()
 	out, err := cmd.CombinedOutput()
+	logSubprocessTiming(t, []string{"bd", "config", "set", "types.custom", strings.Join(types, ",")}, start, errorsForTiming(ctx.Err(), err))
 	if ctx.Err() == context.DeadlineExceeded {
 		t.Fatalf("bd config set types.custom timed out: %s", out)
 	}
@@ -201,6 +222,88 @@ func configureCustomTypesReal(t *testing.T, env []string, dir string, types []st
 
 // stringPtr returns a pointer to s. Helper for UpdateOpts fields.
 func stringPtr(s string) *string { return &s }
+
+func errorsForTiming(errs ...error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func logSubprocessTiming(t testing.TB, cmd []string, start time.Time, err error) {
+	t.Helper()
+	status := "ok"
+	if err != nil {
+		status = "error"
+	}
+	t.Logf("timing: bd subprocess status=%s duration=%s cmd=%q",
+		status, roundDuration(time.Since(start)), strings.Join(cmd, " "))
+}
+
+func roundDuration(d time.Duration) time.Duration {
+	if d >= time.Second {
+		return d.Round(10 * time.Millisecond)
+	}
+	if d >= time.Millisecond {
+		return d.Round(time.Millisecond)
+	}
+	return d
+}
+
+func timedCreate(t testing.TB, store *beads.BdStore, name string, b beads.Bead) (beads.Bead, time.Duration) {
+	t.Helper()
+	start := time.Now()
+	created, err := store.Create(b)
+	elapsed := time.Since(start)
+	logStoreTiming(t, name, elapsed, err)
+	if err != nil {
+		t.Fatalf("%s: %v", name, err)
+	}
+	return created, elapsed
+}
+
+func logStoreTiming(t testing.TB, name string, elapsed time.Duration, err error) {
+	t.Helper()
+	status := "ok"
+	if err != nil {
+		status = "error"
+	}
+	t.Logf("timing: store operation status=%s duration=%s op=%q",
+		status, roundDuration(elapsed), name)
+}
+
+func logDurationSummary(t testing.TB, label string, durations []time.Duration) {
+	t.Helper()
+	if len(durations) == 0 {
+		t.Logf("timing-summary: %s count=0", label)
+		return
+	}
+	sorted := append([]time.Duration(nil), durations...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	var total time.Duration
+	for _, d := range sorted {
+		total += d
+	}
+	pick := func(percentile float64) time.Duration {
+		if len(sorted) == 1 {
+			return sorted[0]
+		}
+		idx := int(float64(len(sorted)-1) * percentile)
+		return sorted[idx]
+	}
+	t.Logf("timing-summary: %s count=%d min=%s p50=%s p95=%s max=%s total=%s avg=%s",
+		label,
+		len(sorted),
+		roundDuration(sorted[0]),
+		roundDuration(pick(0.50)),
+		roundDuration(pick(0.95)),
+		roundDuration(sorted[len(sorted)-1]),
+		roundDuration(total),
+		roundDuration(total/time.Duration(len(sorted))),
+	)
+}
 
 // dumpCoherenceState reads the bd-side view of beadID plus the on-disk
 // JSONL fragment for it, returning a single multi-line string suitable
@@ -249,8 +352,8 @@ func withCoherenceFixture(t *testing.T, fn func(ws *coherenceWorkspace)) {
 }
 
 // TestPersistenceCoherence_CloseSurvivesSubsequentBdCall reproduces #2079:
-// `bd close` writes to Dolt but the next bd invocation reverts it via
-// stale-JSONL auto-import. Captured in the wild by the refinery on
+// a close-status write lands in Dolt but the next bd write invocation reverts
+// it via stale-JSONL auto-import. Captured in the wild by the refinery on
 // vehicle-graph-city merging vg-o2mx.2 (issue #2079 comment, 2026-05-13).
 func TestPersistenceCoherence_CloseSurvivesSubsequentBdCall(t *testing.T) {
 	withCoherenceFixture(t, func(ws *coherenceWorkspace) {
@@ -273,7 +376,7 @@ func TestPersistenceCoherence_CloseSurvivesSubsequentBdCall(t *testing.T) {
 			t.Fatalf("precondition: target.Status = %q, want %q", got.Status, "closed")
 		}
 
-		// Provoke: any subsequent bd command triggers a stale-JSONL auto-import.
+		// Provoke: any subsequent bd write command triggers a stale-JSONL auto-import.
 		if _, err := ws.store.Create(beads.Bead{Title: "decoy bead"}); err != nil {
 			t.Fatalf("create decoy: %v", err)
 		}
@@ -403,9 +506,9 @@ func TestPersistenceCoherence_StateAwakeMetadataPersistsAcrossBdCalls(t *testing
 
 		wokeAt := time.Now().UTC().Format(time.RFC3339)
 		if err := ws.store.SetMetadataBatch(target.ID, map[string]string{
-			"state":         "awake",
-			"last_woke_at":  wokeAt,
-			"wake_reason":   "test",
+			"state":        "awake",
+			"last_woke_at": wokeAt,
+			"wake_reason":  "test",
 		}); err != nil {
 			t.Fatalf("set wake metadata: %v", err)
 		}
@@ -418,7 +521,7 @@ func TestPersistenceCoherence_StateAwakeMetadataPersistsAcrossBdCalls(t *testing
 			t.Fatalf("precondition: state = %q, want %q", got.Metadata["state"], "awake")
 		}
 
-		// Any other bd command — the same shape the reconciler emits on
+		// Any other bd write command — the same shape the reconciler emits on
 		// the next tick — reverts the wake.
 		if _, err := ws.store.Create(beads.Bead{Title: "decoy"}); err != nil {
 			t.Fatalf("create decoy: %v", err)
@@ -620,6 +723,59 @@ func TestPersistenceCoherence_ConcurrentBeadsAllPersist(t *testing.T) {
 		if gotB.Metadata["marker"] != "B-payload" {
 			t.Errorf("B.marker = %q, want %q (cross-bead auto-import revert, #2093)\n%s",
 				gotB.Metadata["marker"], "B-payload", dumpCoherenceState(ws, b.ID))
+		}
+	})
+}
+
+// TestPersistenceCoherence_ConcurrentWriteTimingVisibility does not assert a
+// wall-clock threshold. Its job is to make the cost profile of a 25-agent-style
+// write burst visible while the coherence fix is being developed. Future fixes
+// that add export subprocesses, async waits, or locking should leave clear
+// timing evidence here before we promote them into broader concurrent tests.
+func TestPersistenceCoherence_ConcurrentWriteTimingVisibility(t *testing.T) {
+	withCoherenceFixture(t, func(ws *coherenceWorkspace) {
+		const workers = 25
+		beadsByWorker := make([]beads.Bead, workers)
+		createDurations := make([]time.Duration, workers)
+		for i := 0; i < workers; i++ {
+			created, elapsed := timedCreate(t, ws.store, fmt.Sprintf("setup-create-%02d", i), beads.Bead{
+				Title: fmt.Sprintf("timing target %02d", i),
+			})
+			beadsByWorker[i] = created
+			createDurations[i] = elapsed
+		}
+		logDurationSummary(t, "timing setup creates", createDurations)
+
+		ws.freezeJSONLAndDisableAutoExport(t)
+
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		durations := make([]time.Duration, workers)
+		errs := make([]error, workers)
+		for i := 0; i < workers; i++ {
+			i := i
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				opName := fmt.Sprintf("concurrent-set-metadata-%02d", i)
+				begin := time.Now()
+				errs[i] = ws.store.SetMetadata(beadsByWorker[i].ID, "timing_worker", fmt.Sprintf("%02d", i))
+				durations[i] = time.Since(begin)
+				logStoreTiming(t, opName, durations[i], errs[i])
+			}()
+		}
+
+		burstStart := time.Now()
+		close(start)
+		wg.Wait()
+		t.Logf("timing-summary: concurrent write burst workers=%d wall=%s", workers, roundDuration(time.Since(burstStart)))
+		logDurationSummary(t, "concurrent SetMetadata operations", durations)
+
+		for i, err := range errs {
+			if err != nil {
+				t.Errorf("worker %02d SetMetadata failed: %v", i, err)
+			}
 		}
 	})
 }
