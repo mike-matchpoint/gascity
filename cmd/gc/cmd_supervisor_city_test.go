@@ -1812,6 +1812,90 @@ func TestWaitForSupervisorCityPrintsStatusChanges(t *testing.T) {
 	}
 }
 
+func TestWaitForSupervisorCityReturnsSentinelWhenStillInitializing(t *testing.T) {
+	withSupervisorTestHooks(
+		t,
+		func(_, _ io.Writer) int { return 0 },
+		func(_, _ io.Writer) int { return 0 },
+		func() int { return 4242 },
+		// Always report: not running, but actively initializing.
+		func(string) (bool, string, bool) { return false, "adopting_sessions", true },
+		50*time.Millisecond,
+		time.Millisecond,
+	)
+
+	var stdout bytes.Buffer
+	err := waitForSupervisorCity("/fake/city", true, 50*time.Millisecond, &stdout)
+	var stillInit errCityStillInitializing
+	if !errors.As(err, &stillInit) {
+		t.Fatalf("waitForSupervisorCity err = %v, want errCityStillInitializing", err)
+	}
+	if stillInit.Status != "adopting_sessions" {
+		t.Errorf("sentinel.Status = %q, want %q", stillInit.Status, "adopting_sessions")
+	}
+}
+
+func TestWaitForSupervisorCityErrorsOnTimeoutWithoutStatus(t *testing.T) {
+	withSupervisorTestHooks(
+		t,
+		func(_, _ io.Writer) int { return 0 },
+		func(_, _ io.Writer) int { return 0 },
+		func() int { return 4242 },
+		// Known but no status — supervisor lost track of init progress.
+		func(string) (bool, string, bool) { return false, "", true },
+		50*time.Millisecond,
+		time.Millisecond,
+	)
+
+	err := waitForSupervisorCity("/fake/city", true, 50*time.Millisecond, nil)
+	if err == nil {
+		t.Fatalf("waitForSupervisorCity err = nil, want timeout error")
+	}
+	var stillInit errCityStillInitializing
+	if errors.As(err, &stillInit) {
+		t.Fatalf("err = %v, want generic timeout, not sentinel", err)
+	}
+	if !strings.Contains(err.Error(), "did not become ready") {
+		t.Errorf("err = %v, want 'did not become ready'", err)
+	}
+}
+
+func TestRegisterCityWithSupervisorReturnsZeroWhenStillInitializing(t *testing.T) {
+	gcHome := t.TempDir()
+	t.Setenv("GC_HOME", gcHome)
+
+	cityPath := filepath.Join(t.TempDir(), "slow-starter")
+	if err := os.MkdirAll(cityPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte("[workspace]\nname = \"slow-starter\"\n[session]\nstartup_timeout = \"20ms\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	withSupervisorTestHooks(
+		t,
+		func(_, _ io.Writer) int { return 0 },
+		func(_, _ io.Writer) int { return 0 },
+		func() int { return 4242 },
+		// Supervisor keeps reporting active init progress past the deadline.
+		func(string) (bool, string, bool) { return false, "adopting_sessions", true },
+		20*time.Millisecond,
+		time.Millisecond,
+	)
+
+	var stdout, stderr bytes.Buffer
+	code := registerCityWithSupervisor(cityPath, &stdout, &stderr, "gc start", true)
+	if code != 0 {
+		t.Fatalf("registerCityWithSupervisor code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "still initializing") {
+		t.Errorf("stdout = %q, want 'still initializing' notice", stdout.String())
+	}
+	if strings.Contains(stderr.String(), "keeping registration") {
+		t.Errorf("stderr = %q, should NOT contain 'keeping registration' (that's the error path)", stderr.String())
+	}
+}
+
 func TestListCitiesIncludesInitStatus(t *testing.T) {
 	reg := newCityRegistry()
 	reg.Add("/running", &managedCity{

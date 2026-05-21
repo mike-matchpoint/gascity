@@ -18,9 +18,26 @@ import (
 )
 
 var (
-	supervisorCityReadyTimeout = 180 * time.Second
-	supervisorCityPollInterval = 100 * time.Millisecond
+	supervisorCityReadyTimeout      = 180 * time.Second
+	supervisorCityPollInterval      = 100 * time.Millisecond
+	supervisorCityProgressHeartbeat = 30 * time.Second
 )
+
+// errCityStillInitializing is returned by waitForSupervisorCity when the
+// wait deadline elapses but the supervisor still reports the city as
+// actively initializing (status != "" and != "init_failed"). Callers
+// treat this as a soft success: registration is accepted, the supervisor
+// will keep working, and the user should poll `gc status` for progress.
+type errCityStillInitializing struct {
+	Status string
+}
+
+func (e errCityStillInitializing) Error() string {
+	if e.Status == "" {
+		return "city is still initializing under supervisor"
+	}
+	return "city is still initializing under supervisor (status: " + e.Status + ")"
+}
 
 // registerCityWithSupervisorTestHook lets tests intercept registration after
 // the registry entry is written but before any real supervisor lifecycle runs.
@@ -245,6 +262,12 @@ func registerCityWithSupervisorNamed(cityPath, nameOverride string, stdout, stde
 				}
 				err = retriedErr
 			}
+			var stillInit errCityStillInitializing
+			if errors.As(err, &stillInit) {
+				fmt.Fprintf(stdout, "%s: supervisor is still initializing '%s' (status: %s); check 'gc status' or 'gc supervisor logs' for progress\n", //nolint:errcheck // best-effort stdout
+					commandName, entry.EffectiveName(), stillInit.Status)
+				return 0
+			}
 			keepRegisteredCity(entry, stderr, commandName, err.Error())
 			fmt.Fprintf(stderr, "%s: check 'gc supervisor logs' for details\n", commandName) //nolint:errcheck // best-effort stderr
 			return 1
@@ -357,8 +380,12 @@ func keepRegisteredCity(entry supervisor.CityEntry, stderr io.Writer, commandNam
 }
 
 func waitForSupervisorCity(cityPath string, wantRunning bool, timeout time.Duration, stdout io.Writer) error {
-	deadline := time.Now().Add(timeout)
-	var lastStatus string
+	start := time.Now()
+	deadline := start.Add(timeout)
+	var (
+		lastStatus      string
+		lastHeartbeatAt time.Time
+	)
 	for {
 		running, status, known := supervisorCityRunningHook(cityPath)
 		switch {
@@ -381,9 +408,25 @@ func waitForSupervisorCity(cityPath string, wantRunning bool, timeout time.Durat
 		if stdout != nil && status != "" && status != lastStatus {
 			fmt.Fprintf(stdout, "  %s\n", statusDisplayText(status)) //nolint:errcheck // best-effort stdout
 			lastStatus = status
+			lastHeartbeatAt = time.Now()
+		} else if stdout != nil && status != "" && supervisorCityProgressHeartbeat > 0 &&
+			time.Since(lastHeartbeatAt) >= supervisorCityProgressHeartbeat {
+			// Same status for a while — reprint with elapsed time so the
+			// user sees the wait is still alive instead of silence.
+			elapsed := time.Since(start).Round(time.Second)
+			fmt.Fprintf(stdout, "  %s (still working, elapsed %s)\n", statusDisplayText(status), elapsed) //nolint:errcheck // best-effort stdout
+			lastHeartbeatAt = time.Now()
 		}
 		if time.Now().After(deadline) {
 			if wantRunning {
+				// If the supervisor knows the city and reports it as still
+				// actively initializing (status non-empty and not failed),
+				// treat the wait timeout as a soft success. The supervisor
+				// will continue startup in the background — gc start should
+				// not pretend this is a failure.
+				if known && status != "" && status != "init_failed" {
+					return errCityStillInitializing{Status: status}
+				}
 				return fmt.Errorf("city did not become ready under supervisor")
 			}
 			return fmt.Errorf("city did not stop under supervisor")
