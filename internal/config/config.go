@@ -1460,6 +1460,13 @@ type DaemonConfig struct {
 	// wake fast path triggered by enqueue, eliminating the per-session bd
 	// shellout storm.
 	NudgeDispatcher string `toml:"nudge_dispatcher,omitempty" jsonschema:"default=legacy,enum=legacy,enum=supervisor"`
+	// TickBudget bounds the wall-clock time a single reconciler tick is
+	// allowed for synchronous, in-tick Dolt work (order dispatch gating,
+	// bead reads/writes). Long-lived per-order or per-session goroutines
+	// spawned by the tick are NOT bounded by this — they keep using the
+	// controller's lifetime context. Duration string (e.g., "15s", "30s").
+	// Empty defaults to "30s".
+	TickBudget string `toml:"tick_budget,omitempty" jsonschema:"default=30s"`
 }
 
 // PatrolIntervalDuration returns the patrol interval as a time.Duration.
@@ -1470,6 +1477,21 @@ func (d *DaemonConfig) PatrolIntervalDuration() time.Duration {
 	}
 	dur, err := time.ParseDuration(d.PatrolInterval)
 	if err != nil {
+		return 30 * time.Second
+	}
+	return dur
+}
+
+// TickBudgetDuration returns the per-tick synchronous budget as a
+// time.Duration. Defaults to 30s if empty or unparseable. Bounds only
+// the in-tick synchronous work; per-order/per-session goroutines keep
+// using the controller lifetime context.
+func (d *DaemonConfig) TickBudgetDuration() time.Duration {
+	if d.TickBudget == "" {
+		return 30 * time.Second
+	}
+	dur, err := time.ParseDuration(d.TickBudget)
+	if err != nil || dur <= 0 {
 		return 30 * time.Second
 	}
 	return dur

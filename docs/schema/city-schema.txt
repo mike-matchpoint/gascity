@@ -1141,6 +1141,11 @@
           ],
           "description": "NudgeDispatcher selects how queued nudges get delivered to running\nsessions. \"legacy\" (default) auto-spawns a per-session `gc nudge poll`\nprocess that polls the file-backed queue every 2s. \"supervisor\" runs\nthe delivery loop inside the city runtime instead, with a unix-socket\nwake fast path triggered by enqueue, eliminating the per-session bd\nshellout storm.",
           "default": "legacy"
+        },
+        "tick_budget": {
+          "type": "string",
+          "description": "TickBudget bounds the wall-clock time a single reconciler tick is\nallowed for synchronous, in-tick Dolt work (order dispatch gating,\nbead reads/writes). Long-lived per-order or per-session goroutines\nspawned by the tick are NOT bounded by this — they keep using the\ncontroller's lifetime context. Duration string (e.g., \"15s\", \"30s\").\nEmpty defaults to \"30s\".",
+          "default": "30s"
         }
       },
       "additionalProperties": false,

@@ -281,6 +281,7 @@ DaemonConfig holds controller daemon settings.
 | `probe_concurrency` | integer |  | `8` | ProbeConcurrency bounds the number of concurrent bd subprocess probes issued by the pool scale_check and work_query paths. bd serializes on a shared dolt sql-server, so unbounded parallelism causes contention. Nil (unset) defaults to 8. Set higher for workspaces with a fast dedicated dolt server, or lower to reduce contention on slow storage. |
 | `max_wakes_per_tick` | integer |  | `5` | MaxWakesPerTick caps how many sessions the reconciler may start in a single tick. Nil (unset) defaults to 5. Values &lt;= 0 are treated as the default — set a positive integer to override. |
 | `nudge_dispatcher` | string |  | `legacy` | NudgeDispatcher selects how queued nudges get delivered to running sessions. "legacy" (default) auto-spawns a per-session `gc nudge poll` process that polls the file-backed queue every 2s. "supervisor" runs the delivery loop inside the city runtime instead, with a unix-socket wake fast path triggered by enqueue, eliminating the per-session bd shellout storm. Enum: `legacy`, `supervisor` |
+| `tick_budget` | string |  | `30s` | TickBudget bounds the wall-clock time a single reconciler tick is allowed for synchronous, in-tick Dolt work (order dispatch gating, bead reads/writes). Long-lived per-order or per-session goroutines spawned by the tick are NOT bounded by this — they keep using the controller's lifetime context. Duration string (e.g., "15s", "30s"). Empty defaults to "30s". |
 
 ## DoctorConfig
 

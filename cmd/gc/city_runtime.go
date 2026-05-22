@@ -700,6 +700,14 @@ func (cr *CityRuntime) tick(
 	if ctx.Err() != nil {
 		return
 	}
+	// tickCtx bounds the synchronous in-tick work (order-dispatch trigger
+	// gating, tracking-bead reads, snapshot reads) so a slow Dolt cannot
+	// hang the reconciler indefinitely. Per-order and per-session
+	// goroutines spawned by the tick continue to use the parent ctx so
+	// they outlive the tick (per dispatch design: tickCtx must not cancel
+	// inflight starts). Cancel on tick return either way.
+	tickCtx, tickCancel := context.WithTimeout(ctx, cr.cfg.Daemon.TickBudgetDuration())
+	defer tickCancel()
 	traceTrigger := trigger
 	traceDetail := "controller_tick"
 	cr.reloadMu.Lock()
@@ -823,7 +831,11 @@ func (cr *CityRuntime) tick(
 	// phases so due formulas are not starved by slow startup/config drift work,
 	// but after the pressure gate and managed-Dolt preflight so skipped or
 	// endpoint-repair ticks do not add tracking writes first.
-	cr.dispatchOrders(ctx, cityRoot)
+	//
+	// tickCtx bounds the synchronous trigger gating + tracking-bead writes;
+	// per-order goroutines spawned by the dispatcher outlive the tick via
+	// the dispatcher's own m.dispatchCtx (see launchDispatchOne).
+	cr.dispatchOrders(tickCtx, cityRoot)
 	if ctx.Err() != nil {
 		return
 	}
@@ -926,14 +938,20 @@ func (cr *CityRuntime) tick(
 	tickCompleted = true
 }
 
-func (cr *CityRuntime) dispatchOrders(ctx context.Context, cityRoot string) {
-	if ctx.Err() != nil {
+// dispatchOrders runs one order-dispatch pass. tickCtx bounds the
+// synchronous trigger-evaluation/tracking-bead path so a slow Dolt
+// cannot hang the tick. Per-order goroutines spawned inside
+// memoryOrderDispatcher.dispatch use the dispatcher's own long-lived
+// context (m.dispatchCtx, created from context.Background) and are not
+// canceled when tickCtx expires.
+func (cr *CityRuntime) dispatchOrders(tickCtx context.Context, cityRoot string) {
+	if tickCtx.Err() != nil {
 		return
 	}
 	now := time.Now()
 	cr.runOrderTrackingSweepWatchdog(now)
 	if cr.od != nil {
-		cr.od.dispatch(ctx, cityRoot, now)
+		cr.od.dispatch(tickCtx, cityRoot, now)
 	}
 }
 

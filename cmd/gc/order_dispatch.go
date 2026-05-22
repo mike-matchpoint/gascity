@@ -136,9 +136,9 @@ type orderStoreFunc func(execStoreTarget) (beads.Store, error)
 // concurrent drain call on the same instance.
 //
 // dispatchCtx is the parent context for every dispatchOne goroutine. The
-// per-goroutine ctx is derived to cancel when EITHER the caller's tick
-// ctx OR dispatchCtx is done (see launchDispatchOne). cancel() cancels
-// dispatchCtx.
+// per-goroutine ctx is derived purely from dispatchCtx so order execs
+// outlive the caller's tick ctx (see launchDispatchOne). cancel()
+// cancels dispatchCtx, which is the sole cancellation surface.
 type memoryOrderDispatcher struct {
 	aa           []orders.Order
 	storeFn      orderStoreFunc
@@ -220,6 +220,16 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 	}
 
 	stores := make(map[string]beads.Store)
+	// openTrackingByStore caches the open-tracking-bead set per store
+	// for the duration of this dispatch call. Without this cache, every
+	// due order does its own TierBoth scan via hasOpenWorkStrict — which
+	// on BdStore expands to a `bd list` AND a `bd query` subprocess pair
+	// per check. Under Dolt connection pressure that fans out to seconds
+	// of serial blocking per tick. Built lazily on first store visit;
+	// nil value distinguishes "cache miss" (still need to populate) from
+	// "populated with no entries". On any error populating, the cache is
+	// left nil so the per-call fallback (hasOpenWorkStrict) still runs.
+	openTrackingByStore := make(map[beads.Store]map[string]bool)
 
 	for _, a := range m.aa {
 		// Skip orders targeting suspended rigs.
@@ -313,7 +323,7 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 
 		// Skip dispatch if previous work hasn't been processed yet.
 		scoped := a.ScopedName()
-		hasOpenWork, err := m.hasOpenWorkInStoresStrict(storesForGate, scoped)
+		hasOpenWork, err := m.hasOpenWorkInStoresStrictCached(storesForGate, scoped, openTrackingByStore)
 		if err != nil {
 			logDispatchError(m.stderr, "gc: order dispatch: checking open work for %s: %v", scoped, err)
 			continue
@@ -334,6 +344,14 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 			continue
 		}
 		m.rememberLastRun(scoped, storeKeysForGate, trackingBead.CreatedAt)
+		// Reflect the new tracking bead in the per-tick cache so a
+		// subsequent due-order iteration in this same dispatch call
+		// observes the in-flight work for this order. Cached entries
+		// for this store may be nil if the lookup failed — only update
+		// when the cache is populated.
+		if cache, ok := openTrackingByStore[store]; ok && cache != nil {
+			cache[scoped] = true
+		}
 
 		// Fire with timeout; inflight tracks the spawned goroutine so
 		// drain can wait for tracking-bead outcome persistence before
@@ -344,22 +362,24 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 	}
 }
 
-// launchDispatchOne spawns dispatchOne with a context that cancels when
-// EITHER the caller's tick ctx OR m.dispatchCtx is done — required so
-// cancel() reaches goroutines whose tick ctx was context.Background().
-// Falls back to the bare caller ctx when m.dispatchCtx is nil (test
-// sites that don't initialize the cancel fields).
+// launchDispatchOne spawns dispatchOne with a context derived from the
+// dispatcher's long-lived m.dispatchCtx so the goroutine outlives the
+// caller's per-tick ctx. The reconciler bounds the synchronous dispatch
+// path (trigger evaluation, tracking-bead create) with a tick-scoped
+// context; without isolating the goroutine root here, that same tickCtx
+// would cancel inflight order execs when the tick returned. cancel()
+// remains the cancellation surface (via m.dispatchCtx). Falls back to
+// the caller ctx when m.dispatchCtx is nil (test sites that don't
+// initialize the cancel fields).
 func (m *memoryOrderDispatcher) launchDispatchOne(ctx context.Context, store beads.Store, target execStoreTarget, a orders.Order, cityPath, trackingID string) {
 	if m.dispatchCtx == nil {
 		go m.dispatchOne(ctx, store, target, a, cityPath, trackingID)
 		return
 	}
-	mergedCtx, cancelMerged := context.WithCancel(ctx)
-	stopAfter := context.AfterFunc(m.dispatchCtx, cancelMerged)
+	goroutineCtx, cancelGoroutine := context.WithCancel(m.dispatchCtx)
 	go func() {
-		defer stopAfter()
-		defer cancelMerged()
-		m.dispatchOne(mergedCtx, store, target, a, cityPath, trackingID)
+		defer cancelGoroutine()
+		m.dispatchOne(goroutineCtx, store, target, a, cityPath, trackingID)
 	}()
 }
 
@@ -826,20 +846,96 @@ func (m *memoryOrderDispatcher) hasOpenWorkStrict(store beads.Store, scopedName 
 	return false, nil
 }
 
-func (m *memoryOrderDispatcher) hasOpenWorkInStoresStrict(stores []beads.Store, scopedName string) (bool, error) {
+// hasOpenWorkInStoresStrictCached is the per-dispatch-call cached
+// per-store open-tracking-bead gate. On first visit for a given store
+// it issues
+// ONE ListByLabel("order-tracking") and partitions the result by the
+// "order-run:<scoped>" labels carried on every tracking bead. Subsequent
+// checks for OTHER orders against the same store are served from the
+// resulting map without a second store call. Across a dispatch call
+// with N due orders against the same store, this collapses N
+// store/list calls into 1.
+//
+// The cache is owned by the caller (memoryOrderDispatcher.dispatch),
+// passed in fresh each tick — it must NEVER outlive a single dispatch
+// call or it would serve stale data to a later tick.
+//
+// Cache semantics:
+//   - missing key (not in map): not yet populated, populate now
+//   - key present, value non-nil: serve from map
+//   - key present, value nil: prior populate FAILED, fall back to the
+//     per-order hasOpenWorkStrict on each lookup. We don't re-attempt
+//     the bulk populate within the same dispatch call — one failure is
+//     enough signal that the store is unhealthy.
+func (m *memoryOrderDispatcher) hasOpenWorkInStoresStrictCached(
+	stores []beads.Store,
+	scopedName string,
+	cache map[beads.Store]map[string]bool,
+) (bool, error) {
 	for _, store := range stores {
 		if store == nil {
 			continue
 		}
-		hasOpen, err := m.hasOpenWorkStrict(store, scopedName)
-		if err != nil {
-			return false, err
+		entry, populated := cache[store]
+		if !populated {
+			built, err := m.listOpenOrderTrackingByScope(store)
+			if err != nil {
+				// Mark this store as failed-to-populate so subsequent
+				// orders in this dispatch call don't re-attempt the bulk
+				// list. Fall back to the per-order check for this lookup.
+				cache[store] = nil
+				hasOpen, perr := m.hasOpenWorkStrict(store, scopedName)
+				if perr != nil {
+					return false, perr
+				}
+				if hasOpen {
+					return true, nil
+				}
+				continue
+			}
+			cache[store] = built
+			entry = built
 		}
-		if hasOpen {
+		if entry == nil {
+			// Prior populate failed; fall back to per-order check.
+			hasOpen, err := m.hasOpenWorkStrict(store, scopedName)
+			if err != nil {
+				return false, err
+			}
+			if hasOpen {
+				return true, nil
+			}
+			continue
+		}
+		if entry[scopedName] {
 			return true, nil
 		}
 	}
 	return false, nil
+}
+
+// listOpenOrderTrackingByScope issues a single ListByLabel for
+// "order-tracking" against the store and partitions the open results by
+// the "order-run:<scoped>" label each tracking bead carries (see
+// memoryOrderDispatcher.dispatch where the tracking bead is created
+// with Labels: ["order-run:"+scoped, labelOrderTracking]). Returns a
+// map[scopedName]bool. ListByLabel without IncludeClosed returns only
+// open beads (mirrors sweepOrphanedOrderTracking's contract), so we
+// do not filter closed status here.
+func (m *memoryOrderDispatcher) listOpenOrderTrackingByScope(store beads.Store) (map[string]bool, error) {
+	results, err := store.ListByLabel(labelOrderTracking, 0, beads.WithBothTiers)
+	if err != nil {
+		return nil, fmt.Errorf("listing order-tracking beads: %w", err)
+	}
+	out := make(map[string]bool, len(results))
+	for _, b := range results {
+		for _, lbl := range b.Labels {
+			if strings.HasPrefix(lbl, "order-run:") {
+				out[strings.TrimPrefix(lbl, "order-run:")] = true
+			}
+		}
+	}
+	return out, nil
 }
 
 // sweepOrphanedOrderTracking closes any open order-tracking beads left

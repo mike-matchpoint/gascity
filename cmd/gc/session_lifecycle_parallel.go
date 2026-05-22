@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -134,6 +135,56 @@ var stopPerTargetTimeoutDefault = 30 * time.Second
 // dispatch cap separately from the post-interrupt grace wait because a blocked
 // provider Interrupt call and a graceful process exit are sequential phases.
 var interruptPerTargetTimeoutMargin = 2 * time.Second
+
+// structuralAgentBases names agents that drive the city's core work loop;
+// they receive wake-budget priority over opportunistic ephemeral agents
+// (cartographer-watch fanout, debugger-watch, landing-arbiter cooldown
+// wisps) inside a wave so the polecat / refinery / witness / mayor /
+// deacon / boot are not starved when a slow agent holds limiter slots.
+// Keys are unqualified agent bases (the value after the last "." in a
+// binding-prefixed template name, and after the last "/" in a path-
+// prefixed one — see agentBaseFromTemplate). The map values are
+// integers so a future caller can introduce additional priority bands;
+// currently 0 == structural, 1 == default.
+var structuralAgentBases = map[string]int{
+	"polecat":  0,
+	"refinery": 0,
+	"witness":  0,
+	"mayor":    0,
+	"deacon":   0,
+	"boot":     0,
+}
+
+// agentWakePriority returns 0 for structural agents and 1 for everything
+// else. Lower value sorts first.
+func agentWakePriority(agentBase string) int {
+	if p, ok := structuralAgentBases[agentBase]; ok {
+		return p
+	}
+	return 1
+}
+
+// agentBaseFromTemplate extracts the unqualified agent base from a
+// template name. Examples:
+//
+//	"polecat"                       -> "polecat"
+//	"gastown.polecat"               -> "polecat"
+//	"repo/gs.polecat"               -> "polecat"
+//	"hello-world/gastown.refinery"  -> "refinery"
+//	"riga/mayor"                    -> "mayor"
+//
+// The split is the same idiom config.ParseQualifiedName uses for the
+// directory boundary, plus a trailing binding-name strip on the "."
+// separator.
+func agentBaseFromTemplate(template string) string {
+	if i := strings.LastIndex(template, "/"); i >= 0 {
+		template = template[i+1:]
+	}
+	if i := strings.LastIndex(template, "."); i >= 0 {
+		template = template[i+1:]
+	}
+	return template
+}
 
 type startCandidate struct {
 	session *beads.Bead
@@ -1802,6 +1853,21 @@ func executePlannedStartsTraced(
 		if len(waveCandidates) == 0 {
 			continue
 		}
+		// Order candidates within the wave so structural agents (polecat,
+		// refinery, witness, mayor, deacon, boot) consume wake-budget
+		// slots before opportunistic ephemeral agents. The wake budget
+		// (maxWakes) is shared across the wave; without this sort a
+		// burst of cartographer-watch / debugger-watch / landing-arbiter
+		// cooldown wisps can hold every limiter slot and starve the
+		// agents that drive the city's core work loop. SliceStable
+		// preserves intra-priority order (candidate.order), so the
+		// only behavior change is moving structural-priority candidates
+		// to the front of the wave.
+		sort.SliceStable(waveCandidates, func(i, j int) bool {
+			pi := agentWakePriority(agentBaseFromTemplate(waveCandidates[i].logicalTemplate(cfg)))
+			pj := agentWakePriority(agentBaseFromTemplate(waveCandidates[j].logicalTemplate(cfg)))
+			return pi < pj
+		})
 		if wakeCount >= maxWakes {
 			for _, candidate := range waveCandidates {
 				logLifecycleOutcome(stderr, "start", wave, candidate.name(), candidate.logicalTemplate(cfg), "deferred_by_wake_budget", time.Time{}, time.Time{}, nil)
