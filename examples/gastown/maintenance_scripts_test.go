@@ -1138,7 +1138,7 @@ exit 0
 		purgeSQL := log[purgeIdx:]
 		if !strings.Contains(purgeSQL, "child_wisp.status IN ('open', 'hooked', 'in_progress')") ||
 			!strings.Contains(purgeSQL, "d.type = 'parent-child'") ||
-			!strings.Contains(purgeSQL, "d.depends_on_id IS NOT NULL") {
+			!strings.Contains(purgeSQL, "d.depends_on_wisp_id IS NOT NULL") {
 			t.Errorf("reaper purge can delete closed parents with non-closed children:\n%s", purgeSQL)
 		}
 	}

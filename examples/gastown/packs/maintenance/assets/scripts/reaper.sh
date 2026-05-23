@@ -332,8 +332,10 @@ while IFS= read -r DB; do
             INNER JOIN \`$DB\`.dependencies d
                 ON d.issue_id = w.id
                 AND d.type = 'parent-child'
-            LEFT JOIN \`$DB\`.wisps parent_wisp ON d.depends_on_id = parent_wisp.id
-            LEFT JOIN \`$DB\`.issues parent_issue ON d.depends_on_id = parent_issue.id
+            LEFT JOIN \`$DB\`.wisps parent_wisp
+                ON d.depends_on_wisp_id = parent_wisp.id
+            LEFT JOIN \`$DB\`.issues parent_issue
+                ON d.depends_on_issue_id = parent_issue.id
             WHERE w.status IN ('open', 'hooked', 'in_progress')
             AND w.created_at < DATE_SUB(NOW(), INTERVAL $MAX_AGE_H HOUR)
             AND (
@@ -356,8 +358,10 @@ while IFS= read -r DB; do
                     INNER JOIN \`$DB\`.dependencies d
                         ON d.issue_id = w.id
                         AND d.type = 'parent-child'
-                    LEFT JOIN \`$DB\`.wisps parent_wisp ON d.depends_on_id = parent_wisp.id
-                    LEFT JOIN \`$DB\`.issues parent_issue ON d.depends_on_id = parent_issue.id
+                    LEFT JOIN \`$DB\`.wisps parent_wisp
+                        ON d.depends_on_wisp_id = parent_wisp.id
+                    LEFT JOIN \`$DB\`.issues parent_issue
+                        ON d.depends_on_issue_id = parent_issue.id
                     WHERE w.status IN ('open', 'hooked', 'in_progress')
                     AND w.created_at < DATE_SUB(NOW(), INTERVAL $MAX_AGE_H HOUR)
                     AND (
@@ -386,10 +390,10 @@ while IFS= read -r DB; do
         WHERE status = 'closed'
         AND closed_at < DATE_SUB(NOW(), INTERVAL $PURGE_AGE_H HOUR)
         AND id NOT IN (
-            SELECT DISTINCT d.depends_on_id FROM \`$DB\`.dependencies d
+            SELECT DISTINCT d.depends_on_wisp_id FROM \`$DB\`.dependencies d
             INNER JOIN \`$DB\`.wisps child_wisp ON d.issue_id = child_wisp.id
             WHERE d.type = 'parent-child'
-            AND d.depends_on_id IS NOT NULL
+            AND d.depends_on_wisp_id IS NOT NULL
             AND child_wisp.status IN ('open', 'hooked', 'in_progress')
         )
     "
@@ -401,10 +405,10 @@ while IFS= read -r DB; do
             WHERE status = 'closed'
             AND closed_at < DATE_SUB(NOW(), INTERVAL $PURGE_AGE_H HOUR)
             AND id NOT IN (
-                SELECT DISTINCT d.depends_on_id FROM \`$DB\`.dependencies d
+                SELECT DISTINCT d.depends_on_wisp_id FROM \`$DB\`.dependencies d
                 INNER JOIN \`$DB\`.wisps child_wisp ON d.issue_id = child_wisp.id
                 WHERE d.type = 'parent-child'
-                AND d.depends_on_id IS NOT NULL
+                AND d.depends_on_wisp_id IS NOT NULL
                 AND child_wisp.status IN ('open', 'hooked', 'in_progress')
             )
         "; then
@@ -425,10 +429,10 @@ while IFS= read -r DB; do
         AND issue_type != 'epic'
         AND id NOT IN (
             SELECT DISTINCT d.issue_id FROM \`$DB\`.dependencies d
-            INNER JOIN \`$DB\`.issues i ON d.depends_on_id = i.id
+            INNER JOIN \`$DB\`.issues i ON d.depends_on_issue_id = i.id
             WHERE i.status IN ('open', 'in_progress')
             UNION
-            SELECT DISTINCT d.depends_on_id FROM \`$DB\`.dependencies d
+            SELECT DISTINCT d.depends_on_issue_id FROM \`$DB\`.dependencies d
             INNER JOIN \`$DB\`.issues i ON d.issue_id = i.id
             WHERE i.status IN ('open', 'in_progress')
         )
