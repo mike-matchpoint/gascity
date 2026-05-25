@@ -52,15 +52,17 @@ func buildDSN(cfg Config) string {
 	if user == "" {
 		user = "root"
 	}
-	mysqlCfg := mysql.Config{
-		User:      user,
-		Passwd:    cfg.Password,
-		Net:       "tcp",
-		Addr:      fmt.Sprintf("%s:%d", strings.TrimSpace(cfg.Host), cfg.Port),
-		DBName:    strings.TrimSpace(cfg.Database),
-		ParseTime: true,
-		Timeout:   10 * time.Second,
-	}
+	mysqlCfg := mysql.NewConfig()
+	mysqlCfg.User = user
+	mysqlCfg.Passwd = cfg.Password
+	mysqlCfg.Net = "tcp"
+	mysqlCfg.Addr = fmt.Sprintf("%s:%d", strings.TrimSpace(cfg.Host), cfg.Port)
+	mysqlCfg.DBName = strings.TrimSpace(cfg.Database)
+	mysqlCfg.ParseTime = true
+	mysqlCfg.Timeout = 10 * time.Second
+	mysqlCfg.ReadTimeout = 10 * time.Second
+	mysqlCfg.WriteTimeout = 10 * time.Second
+	mysqlCfg.AllowNativePasswords = true
 	return mysqlCfg.FormatDSN()
 }
 
