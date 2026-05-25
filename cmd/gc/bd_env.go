@@ -12,6 +12,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/beads/contract"
+	"github.com/gastownhall/gascity/internal/beads/doltread"
 	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/doltauth"
@@ -40,7 +41,8 @@ func bdStoreForCity(dir, cityPath string) *beads.BdStore {
 		cfg = nil
 	}
 	reapStaleBdExportJSONL(dir)
-	return beads.NewBdStoreWithPrefix(dir, bdCommandRunnerForCity(cityPath), issuePrefixForScope(dir, cityPath, cfg))
+	store := beads.NewBdStoreWithPrefix(dir, bdCommandRunnerForCity(cityPath), issuePrefixForScope(dir, cityPath, cfg))
+	return attachIndexedDoltReader(store, cityPath, dir)
 }
 
 // bdStoreForRig opens a bead store at rigDir using rig-level Dolt config
@@ -57,7 +59,8 @@ func bdStoreForRig(rigDir, cityPath string, cfg *config.City, knownPrefix ...str
 		}
 	}
 	reapStaleBdExportJSONL(rigDir)
-	return beads.NewBdStoreWithPrefix(rigDir, bdCommandRunnerForRig(cityPath, cfg, rigDir), prefix)
+	store := beads.NewBdStoreWithPrefix(rigDir, bdCommandRunnerForRig(cityPath, cfg, rigDir), prefix)
+	return attachIndexedDoltReader(store, cityPath, rigDir)
 }
 
 // reapStaleBdExportJSONL removes .beads/issues.jsonl best-effort when the
@@ -142,7 +145,8 @@ func scopeIsGCManaged(scopeRoot string) bool {
 
 func controlBdStoreForCity(dir, cityPath string, cfg *config.City) *beads.BdStore {
 	reapStaleBdExportJSONL(dir)
-	return beads.NewBdStoreWithPrefix(dir, controlBdCommandRunnerForCity(cityPath), issuePrefixForScope(dir, cityPath, cfg))
+	store := beads.NewBdStoreWithPrefix(dir, controlBdCommandRunnerForCity(cityPath), issuePrefixForScope(dir, cityPath, cfg))
+	return attachIndexedDoltReader(store, cityPath, dir)
 }
 
 func controlBdStoreForRig(rigDir, cityPath string, cfg *config.City, knownPrefix ...string) *beads.BdStore {
@@ -156,7 +160,38 @@ func controlBdStoreForRig(rigDir, cityPath string, cfg *config.City, knownPrefix
 		}
 	}
 	reapStaleBdExportJSONL(rigDir)
-	return beads.NewBdStoreWithPrefix(rigDir, controlBdCommandRunnerForRig(cityPath, cfg, rigDir), prefix)
+	store := beads.NewBdStoreWithPrefix(rigDir, controlBdCommandRunnerForRig(cityPath, cfg, rigDir), prefix)
+	return attachIndexedDoltReader(store, cityPath, rigDir)
+}
+
+func attachIndexedDoltReader(store *beads.BdStore, cityPath, scopeRoot string) *beads.BdStore {
+	if store == nil || strings.TrimSpace(os.Getenv("GC_BD_INDEX_READS")) != "1" {
+		return store
+	}
+	target, err := contract.ResolveDoltConnectionTarget(fsys.OSFS{}, cityPath, scopeRoot)
+	if err != nil {
+		return store
+	}
+	port, err := strconv.Atoi(strings.TrimSpace(target.Port))
+	if err != nil {
+		return store
+	}
+	host := strings.TrimSpace(target.Host)
+	if host == "" {
+		return store
+	}
+	auth := doltauth.Resolve(doltauth.AuthScopeRoot(cityPath, scopeRoot, target), strings.TrimSpace(target.User), host, port)
+	reader, err := doltread.Open(doltread.Config{
+		Host:     host,
+		Port:     port,
+		Database: target.Database,
+		User:     auth.User,
+		Password: auth.Password,
+	})
+	if err != nil {
+		return store
+	}
+	return store.WithIndexedReader(reader)
 }
 
 func controlBdCommandRunnerForCity(cityPath string) beads.CommandRunner {
