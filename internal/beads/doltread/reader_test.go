@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	mysql "github.com/go-sql-driver/mysql"
+
 	"github.com/gastownhall/gascity/internal/beads"
 )
 
@@ -29,6 +31,34 @@ func TestValidateSupportedRejectsClosedAndRawStatuses(t *testing.T) {
 		if err := validateSupported(query); err != nil {
 			t.Fatalf("validateSupported(%+v) = %v, want nil", query, err)
 		}
+	}
+}
+
+func TestBuildDSNUsesManagedDoltDriverDefaults(t *testing.T) {
+	dsn := buildDSN(Config{
+		Host:     "127.0.0.1",
+		Port:     3317,
+		Database: "hq",
+	})
+
+	cfg, err := mysql.ParseDSN(dsn)
+	if err != nil {
+		t.Fatalf("ParseDSN(%q): %v", dsn, err)
+	}
+	if cfg.User != "root" {
+		t.Fatalf("User = %q, want root", cfg.User)
+	}
+	if cfg.Net != "tcp" || cfg.Addr != "127.0.0.1:3317" || cfg.DBName != "hq" {
+		t.Fatalf("target = net:%q addr:%q db:%q, want tcp 127.0.0.1:3317 hq", cfg.Net, cfg.Addr, cfg.DBName)
+	}
+	if !cfg.ParseTime {
+		t.Fatal("ParseTime = false, want true")
+	}
+	if !cfg.AllowNativePasswords {
+		t.Fatal("AllowNativePasswords = false, want true for Dolt SQL auth")
+	}
+	if cfg.Timeout != 10*time.Second || cfg.ReadTimeout != 10*time.Second || cfg.WriteTimeout != 10*time.Second {
+		t.Fatalf("timeouts = %s/%s/%s, want 10s/10s/10s", cfg.Timeout, cfg.ReadTimeout, cfg.WriteTimeout)
 	}
 }
 
