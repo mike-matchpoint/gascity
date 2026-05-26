@@ -32,6 +32,7 @@ func TestValidateSupportedRejectsBroadHistoryAndRawStatuses(t *testing.T) {
 		{Status: "in_progress"},
 		{IncludeClosed: true, Label: "order-run:digest", Limit: 1},
 		{Status: "closed", Label: "order-tracking", Limit: 5},
+		{IncludeClosed: true, ParentID: "bd-parent"},
 		{IncludeClosed: true, Metadata: map[string]string{"configured_named_identity": "gastown.deacon"}},
 		{Status: "closed", Metadata: map[string]string{"session_name": "vgc-lyr"}},
 		{IncludeClosed: true, Type: "session"},
@@ -106,10 +107,11 @@ func TestBuildListSQLUsesBoundedSplitDependencySelectors(t *testing.T) {
 
 	for _, want := range []string{
 		"FROM labels l JOIN issues b ON b.id = l.issue_id",
+		"JOIN dependencies d ON d.issue_id = b.id AND d.type = 'parent-child'",
 		"b.status NOT IN ('closed', 'in_progress')",
 		"b.issue_type <> ?",
 		"l.label = ?",
-		"EXISTS (SELECT 1 FROM dependencies d WHERE d.issue_id = b.id AND d.type = 'parent-child' AND COALESCE(d.depends_on_issue_id, d.depends_on_wisp_id, d.depends_on_external) = ?)",
+		"COALESCE(d.depends_on_issue_id, d.depends_on_wisp_id, d.depends_on_external) = ?",
 		"JSON_UNQUOTE(JSON_EXTRACT(b.metadata, ?)) = ?",
 		"ORDER BY b.created_at ASC, b.id ASC LIMIT ?",
 	} {
@@ -125,13 +127,13 @@ func TestBuildListSQLUsesBoundedSplitDependencySelectors(t *testing.T) {
 		"task",
 		"epic",
 		"rig/agent",
-		"bd-parent",
 		createdBefore,
 		`$."gc.routed_to"`,
 		"refinery",
 		`$."plain"`,
 		"value",
 		"ready",
+		"bd-parent",
 		5,
 	}
 	if !reflect.DeepEqual(args, wantArgs) {
@@ -231,9 +233,10 @@ func TestBuildListSQLSupportsWispsTier(t *testing.T) {
 
 	for _, want := range []string{
 		"FROM wisp_labels l JOIN wisps b ON b.id = l.issue_id",
+		"JOIN wisp_dependencies d ON d.issue_id = b.id AND d.type = 'parent-child'",
 		"b.status = ?",
 		"l.label = ?",
-		"FROM wisp_dependencies d",
+		"COALESCE(d.depends_on_issue_id, d.depends_on_wisp_id, d.depends_on_external) = ?",
 	} {
 		if !strings.Contains(sqlText, want) {
 			t.Fatalf("SQL missing %q:\n%s", want, sqlText)

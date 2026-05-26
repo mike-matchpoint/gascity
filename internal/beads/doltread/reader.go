@@ -165,6 +165,9 @@ func isBoundedHistoryQuery(query beads.ListQuery) bool {
 	if query.Type == "session" || query.Label == "gc:session" {
 		return true
 	}
+	if query.ParentID != "" {
+		return true
+	}
 	if query.Limit <= 0 {
 		return false
 	}
@@ -314,10 +317,22 @@ func buildFromWhereSQL(query beads.ListQuery, tier tierSpec) (string, []string, 
 		from = tier.labelTable + " l JOIN " + tier.beadTable + " b ON b.id = l.issue_id"
 		whereQuery.Label = ""
 	}
+	if query.ParentID != "" {
+		if query.Label == "" {
+			from = tier.depTable + " d JOIN " + tier.beadTable + " b ON b.id = d.issue_id AND d.type = 'parent-child'"
+		} else {
+			from += " JOIN " + tier.depTable + " d ON d.issue_id = b.id AND d.type = 'parent-child'"
+		}
+		whereQuery.ParentID = ""
+	}
 	where, args := buildWhereSQL(whereQuery, tier)
 	if query.Label != "" {
 		where = append(where, "l.label = ?")
 		args = append(args, query.Label)
+	}
+	if query.ParentID != "" {
+		where = append(where, dependencyTargetExpr("d")+" = ?")
+		args = append(args, query.ParentID)
 	}
 	return from, where, args
 }
