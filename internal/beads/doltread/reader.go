@@ -127,6 +127,9 @@ func isBoundedHistoryQuery(query beads.ListQuery) bool {
 	if len(query.Metadata) > 0 {
 		return true
 	}
+	if query.Type == "session" || query.Label == "gc:session" {
+		return true
+	}
 	if query.Limit <= 0 {
 		return false
 	}

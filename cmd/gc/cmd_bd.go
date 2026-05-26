@@ -293,7 +293,7 @@ func parseIndexedBdListQuery(args []string) (indexedBdListQuery, bool, string) {
 			// Indexed active reads include infrastructure/gate rows unless the
 			// caller asks for an explicit --exclude-type.
 		case arg == "--all":
-			return parsed, false, "all"
+			query.IncludeClosed = true
 		case arg == "--no-assignee":
 			parsed.Unassigned = true
 		case arg == "--status" || arg == "-s":
@@ -416,10 +416,20 @@ func parseIndexedBdListQuery(args []string) (indexedBdListQuery, bool, string) {
 	if query.Type == "wisp" {
 		return parsed, false, "wisp-tier"
 	}
+	if query.IncludeClosed && !isIndexedBdListHistoryQuery(query) {
+		return parsed, false, "all"
+	}
 	if parsed.Unassigned && strings.TrimSpace(query.Assignee) != "" {
 		return parsed, false, "assignee"
 	}
 	return parsed, true, ""
+}
+
+func isIndexedBdListHistoryQuery(query *beads.ListQuery) bool {
+	if query == nil {
+		return false
+	}
+	return query.Type == "session" || query.Label == "gc:session"
 }
 
 func nextBdListArg(args []string, idx *int) (string, bool) {

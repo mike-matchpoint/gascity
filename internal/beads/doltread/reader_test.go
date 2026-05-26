@@ -19,7 +19,6 @@ func TestValidateSupportedRejectsBroadHistoryAndRawStatuses(t *testing.T) {
 		{Status: "closed", Limit: 1},
 		{IncludeClosed: true, Label: "order-run:digest"},
 		{IncludeClosed: true, ExcludeType: "epic", Limit: 1},
-		{IncludeClosed: true, Type: "session"},
 		{Status: "blocked"},
 	} {
 		if err := validateSupported(query); !errors.Is(err, beads.ErrIndexedListUnsupported) {
@@ -35,6 +34,8 @@ func TestValidateSupportedRejectsBroadHistoryAndRawStatuses(t *testing.T) {
 		{Status: "closed", Label: "order-tracking", Limit: 5},
 		{IncludeClosed: true, Metadata: map[string]string{"configured_named_identity": "gastown.deacon"}},
 		{Status: "closed", Metadata: map[string]string{"session_name": "vgc-lyr"}},
+		{IncludeClosed: true, Type: "session"},
+		{IncludeClosed: true, Label: "gc:session"},
 	} {
 		if err := validateSupported(query); err != nil {
 			t.Fatalf("validateSupported(%+v) = %v, want nil", query, err)
