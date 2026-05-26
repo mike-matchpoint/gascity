@@ -39,23 +39,57 @@ func TestCachedStoreHealthServesMemoized(t *testing.T) {
 	}
 }
 
-func TestCachedStoreHealthRefreshesAfterTTL(t *testing.T) {
+func TestCachedStoreHealthReturnsStaleWhileRefreshingAfterTTL(t *testing.T) {
 	var calls int
+	refreshStarted := make(chan struct{})
+	allowRefresh := make(chan struct{})
 	s := &Server{}
 	s.storeHealthComputer = func() *StatusStoreHealth {
 		calls++
+		if calls == 2 {
+			close(refreshStarted)
+			<-allowRefresh
+		}
 		return &StatusStoreHealth{SizeBytes: int64(calls)}
 	}
 
 	now := time.Unix(1_000_000, 0)
 	_ = s.cachedStoreHealth(now)
 	later := now.Add(storeHealthCacheTTL + time.Second)
-	got := s.cachedStoreHealth(later)
-	if calls != 2 {
-		t.Fatalf("computer calls = %d, want 2", calls)
+	returned := make(chan *StatusStoreHealth, 1)
+	go func() {
+		returned <- s.cachedStoreHealth(later)
+	}()
+
+	select {
+	case got := <-returned:
+		if got.SizeBytes != 1 {
+			t.Fatalf("expired cachedStoreHealth SizeBytes = %d, want stale 1", got.SizeBytes)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expired cachedStoreHealth blocked on refresh")
 	}
-	if got.SizeBytes != 2 {
-		t.Fatalf("refreshed entry SizeBytes = %d, want 2", got.SizeBytes)
+
+	select {
+	case <-refreshStarted:
+	case <-time.After(time.Second):
+		t.Fatal("background refresh did not start")
+	}
+	close(allowRefresh)
+
+	deadline := time.After(time.Second)
+	for {
+		s.storeHealthMu.Lock()
+		refreshed := s.storeHealthEntry != nil && s.storeHealthEntry.SizeBytes == 2 && !s.storeHealthRefreshing
+		s.storeHealthMu.Unlock()
+		if refreshed {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("background refresh did not update cached entry")
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
 
