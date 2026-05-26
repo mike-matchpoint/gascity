@@ -68,6 +68,18 @@ const (
 	completedOrderTrackingCloseReason = "order dispatch completed: tracking bead lifecycle finished"
 )
 
+func orderRunLabel(scopedName string) string {
+	return "order-run:" + scopedName
+}
+
+func scopedOrderTrackingLabel(scopedName string) string {
+	return labelOrderTracking + ":" + scopedName
+}
+
+func orderTrackingLabels(scopedName string) []string {
+	return []string{orderRunLabel(scopedName), labelOrderTracking, scopedOrderTrackingLabel(scopedName)}
+}
+
 var (
 	// shellExecPostCancelWaitDelay is os/exec's pipe-close wait after
 	// Cancel returns; the TERM and KILL waits each use shellExecSignalGrace.
@@ -374,6 +386,7 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 	}
 
 	stores := make(map[string]beads.Store)
+	openWorkCache := make(map[string]orderOpenWorkCacheEntry)
 
 	for _, a := range m.aa {
 		// Skip orders targeting suspended rigs.
@@ -411,7 +424,7 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 			storeKeysForGate = append(storeKeysForGate, orderStoreTargetKey(legacyOrderCityTarget(cityPath, m.cfg)))
 		}
 		scoped := a.ScopedName()
-		hasOpenWork, err := m.hasOpenWorkInStoresStrict(storesForGate, scoped)
+		hasOpenWork, err := m.hasOpenWorkInStoresStrictCached(storesForGate, storeKeysForGate, scoped, openWorkCache)
 		if err != nil {
 			logDispatchError(m.stderr, "gc: order dispatch: checking open work for %s: %v", scoped, err)
 			continue
@@ -453,7 +466,7 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 			// ticks until the normal stale tracking sweep gives the order another try.
 			trackingBead, createErr := store.Create(beads.Bead{
 				Title:     "order:" + scoped,
-				Labels:    []string{"order-run:" + scoped, labelOrderTracking, labelTriggerEnvFailed},
+				Labels:    append(orderTrackingLabels(scoped), labelTriggerEnvFailed),
 				Ephemeral: true,
 			})
 			if createErr != nil {
@@ -496,7 +509,7 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 		}
 
 		// Skip dispatch if previous work hasn't been processed yet.
-		hasOpenWork, err = m.hasOpenWorkInStoresStrict(storesForGate, scoped)
+		hasOpenWork, err = m.hasOpenWorkInStoresStrictCached(storesForGate, storeKeysForGate, scoped, openWorkCache)
 		if err != nil {
 			logDispatchError(m.stderr, "gc: order dispatch: checking open work for %s: %v", scoped, err)
 			continue
@@ -509,7 +522,7 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 		// This prevents the cooldown trigger from re-firing on the next tick.
 		trackingBead, err := store.Create(beads.Bead{
 			Title:     "order:" + scoped,
-			Labels:    []string{"order-run:" + scoped, labelOrderTracking},
+			Labels:    orderTrackingLabels(scoped),
 			Ephemeral: true,
 		})
 		if err != nil {
@@ -1083,29 +1096,36 @@ func (m *memoryOrderDispatcher) rigSuspendedByName(rigName string) bool {
 	return false
 }
 
-// hasOpenWorkStrict reports whether any in-flight work exists for this
-// order — either a dispatchOne goroutine still running, or a wisp whose
-// step beads have not all been completed by the pool agent.
+// hasOpenWorkStrict reports whether any in-flight work exists for this order.
 //
-// Tracking beads carry both "order-run:<scoped>" and labelOrderTracking;
-// dispatchOne closes them via defer when dispatch returns. An open
-// tracking bead means a dispatchOne goroutine is in flight.
+// New tracking beads carry order-tracking:<scoped> as the hot single-flight
+// label. If that scoped label is present, the gate can avoid scanning the
+// historical order-run:<scoped> label. The order-run fallback is retained for
+// legacy tracking beads and wisp roots created before the scoped label existed.
 //
-// Wisp root beads also carry "order-run:<scoped>" (so gc order history
-// and the orders API feed can attribute the wisp to its order) but never
-// carry labelOrderTracking. Molecule roots never auto-close when their
-// step beads finish, so a leftover open root with all-closed children is
-// orphan state — counting it would permanently block re-dispatch
-// (ga-jra/ga-lo8c, where formula+pool orders stalled after a city restart
-// because the first auto-fire's wisp root tripped this check). But a
-// wisp root whose child step beads are still open IS in-flight work: the
-// pool agent has not yet executed the wisp. Counting those prevents the
-// cooldown gate from pouring duplicate wisps when the pool stalls
-// (tr-kds01, where 24h-interval digest wisps accumulated because the
-// pool never picked them up).
+// Wisp root beads also carry order-run:<scoped> so history/API feeds can
+// attribute the wisp to its order, but they never carry labelOrderTracking.
+// Molecule roots never auto-close when their step beads finish, so a leftover
+// open root with all-closed children is orphan state and must not permanently
+// block re-dispatch. A root whose children are still open is in-flight work and
+// must block duplicate pours.
 func (m *memoryOrderDispatcher) hasOpenWorkStrict(store beads.Store, scopedName string) (bool, error) {
+	tracking, err := store.List(beads.ListQuery{
+		Label:    scopedOrderTrackingLabel(scopedName),
+		Limit:    1,
+		TierMode: beads.TierBoth,
+	})
+	if err != nil {
+		return false, fmt.Errorf("listing scoped order-tracking beads: %w", err)
+	}
+	for _, b := range tracking {
+		if b.Status != "closed" {
+			return true, nil
+		}
+	}
+
 	results, err := store.List(beads.ListQuery{
-		Label: "order-run:" + scopedName,
+		Label: orderRunLabel(scopedName),
 		Sort:  beads.SortCreatedDesc,
 		// Tracking beads are ephemeral while wisp roots are issue-tier, so
 		// the single-flight gate must union both tiers.
@@ -1136,6 +1156,28 @@ func (m *memoryOrderDispatcher) hasOpenWorkStrict(store beads.Store, scopedName 
 		}
 	}
 	return false, nil
+}
+
+type orderOpenWorkCacheEntry struct {
+	hasOpen bool
+	err     error
+}
+
+func (m *memoryOrderDispatcher) hasOpenWorkInStoresStrictCached(stores []beads.Store, storeKeys []string, scopedName string, cache map[string]orderOpenWorkCacheEntry) (bool, error) {
+	if cache == nil {
+		return m.hasOpenWorkInStoresStrict(stores, scopedName)
+	}
+	key := orderOpenWorkCacheKey(scopedName, storeKeys)
+	if cached, ok := cache[key]; ok {
+		return cached.hasOpen, cached.err
+	}
+	hasOpen, err := m.hasOpenWorkInStoresStrict(stores, scopedName)
+	cache[key] = orderOpenWorkCacheEntry{hasOpen: hasOpen, err: err}
+	return hasOpen, err
+}
+
+func orderOpenWorkCacheKey(scopedName string, storeKeys []string) string {
+	return scopedName + "\x00" + strings.Join(storeKeys, "\x00")
 }
 
 func isOrderWispRootCandidate(b beads.Bead) bool {
@@ -1317,7 +1359,7 @@ func sweepStaleOrderTrackingWithOptions(store beads.Store, now time.Time, staleA
 	if includeWispSubtrees && len(onlyOrders) == 0 {
 		return orderTrackingSweepResult{}, fmt.Errorf("include-wisps requires at least one order name")
 	}
-	all, err := store.ListByLabel(labelOrderTracking, 0, beads.WithBothTiers)
+	all, err := listOrderTrackingCandidates(store, onlyOrders)
 	if err != nil {
 		return orderTrackingSweepResult{}, fmt.Errorf("listing order-tracking beads: %w", err)
 	}
@@ -1367,6 +1409,41 @@ func sweepStaleOrderTrackingWithOptions(store beads.Store, now time.Time, staleA
 		}
 	}
 	return result, nil
+}
+
+func listOrderTrackingCandidates(store beads.Store, onlyOrders map[string]struct{}) ([]beads.Bead, error) {
+	if len(onlyOrders) == 0 {
+		return store.ListByLabel(labelOrderTracking, 0, beads.WithBothTiers)
+	}
+	seen := make(map[string]struct{})
+	var out []beads.Bead
+	var errs []error
+	for orderName := range onlyOrders {
+		for _, query := range []beads.ListQuery{
+			{Label: scopedOrderTrackingLabel(orderName), TierMode: beads.TierBoth},
+			{Label: orderRunLabel(orderName), TierMode: beads.TierBoth},
+		} {
+			items, err := store.List(query)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("listing %s: %w", query.Label, err))
+				continue
+			}
+			for _, b := range items {
+				if b.ID == "" {
+					continue
+				}
+				if _, ok := seen[b.ID]; ok {
+					continue
+				}
+				if !beadLabelsContain(b.Labels, labelOrderTracking) {
+					continue
+				}
+				seen[b.ID] = struct{}{}
+				out = append(out, b)
+			}
+		}
+	}
+	return out, errors.Join(errs...)
 }
 
 func sweepStaleOrderWispSubtrees(store beads.Store, cutoff time.Time, onlyOrders map[string]struct{}, initiator string) (int, error) {
@@ -1557,6 +1634,9 @@ func openSubtreeOlderThan(subtree []beads.Bead, cutoff time.Time) bool {
 
 func orderNameFromTrackingBead(b beads.Bead) (string, bool) {
 	for _, label := range b.Labels {
+		if name, ok := strings.CutPrefix(label, labelOrderTracking+":"); ok && name != "" {
+			return name, true
+		}
 		if name, ok := strings.CutPrefix(label, "order-run:"); ok && name != "" {
 			return name, true
 		}
