@@ -229,20 +229,39 @@ func TestParseIndexedBdListQuerySupportsSessionHistoryShapes(t *testing.T) {
 	enableIndexedBdListTestEnv(t)
 
 	tests := []struct {
-		name      string
-		args      []string
-		wantType  string
-		wantLabel string
+		name       string
+		args       []string
+		wantType   string
+		wantLabel  string
+		wantLimit  int
+		wantAll    bool
+		wantStatus string
 	}{
 		{
 			name:     "type session all",
 			args:     []string{"list", "--json", "--type=session", "--all", "--include-infra", "--include-gates", "--limit=0"},
 			wantType: "session",
+			wantAll:  true,
 		},
 		{
 			name:      "label session all",
 			args:      []string{"list", "--json", "--label=gc:session", "--all", "--include-infra", "--include-gates", "--limit=0"},
 			wantLabel: "gc:session",
+			wantAll:   true,
+		},
+		{
+			name:      "bounded label history",
+			args:      []string{"list", "--json", "--label=order-run:blocker-unblock-sweep", "--all", "--include-infra", "--include-gates", "--limit=1"},
+			wantLabel: "order-run:blocker-unblock-sweep",
+			wantLimit: 1,
+			wantAll:   true,
+		},
+		{
+			name:       "bounded closed label history",
+			args:       []string{"list", "--json", "--status=closed", "--label=order-tracking", "--limit=5"},
+			wantLabel:  "order-tracking",
+			wantLimit:  5,
+			wantStatus: "closed",
 		},
 	}
 	for _, tt := range tests {
@@ -251,11 +270,17 @@ func TestParseIndexedBdListQuerySupportsSessionHistoryShapes(t *testing.T) {
 			if !ok {
 				t.Fatalf("parseIndexedBdListQuery() ok = false, reason=%q", reason)
 			}
-			if !got.Query.IncludeClosed {
-				t.Fatalf("IncludeClosed = false, want true")
+			if got.Query.IncludeClosed != tt.wantAll {
+				t.Fatalf("IncludeClosed = %v, want %v", got.Query.IncludeClosed, tt.wantAll)
 			}
 			if got.Query.Type != tt.wantType || got.Query.Label != tt.wantLabel {
 				t.Fatalf("query = %+v, want type=%q label=%q", got.Query, tt.wantType, tt.wantLabel)
+			}
+			if got.Query.Limit != tt.wantLimit {
+				t.Fatalf("Limit = %d, want %d", got.Query.Limit, tt.wantLimit)
+			}
+			if got.Query.Status != tt.wantStatus {
+				t.Fatalf("Status = %q, want %q", got.Query.Status, tt.wantStatus)
 			}
 		})
 	}
