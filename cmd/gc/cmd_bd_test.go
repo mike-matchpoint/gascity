@@ -225,6 +225,42 @@ func TestParseIndexedBdListQuerySupportsUnassignedShapes(t *testing.T) {
 	}
 }
 
+func TestParseIndexedBdListQuerySupportsSessionHistoryShapes(t *testing.T) {
+	enableIndexedBdListTestEnv(t)
+
+	tests := []struct {
+		name      string
+		args      []string
+		wantType  string
+		wantLabel string
+	}{
+		{
+			name:     "type session all",
+			args:     []string{"list", "--json", "--type=session", "--all", "--include-infra", "--include-gates", "--limit=0"},
+			wantType: "session",
+		},
+		{
+			name:      "label session all",
+			args:      []string{"list", "--json", "--label=gc:session", "--all", "--include-infra", "--include-gates", "--limit=0"},
+			wantLabel: "gc:session",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok, reason := parseIndexedBdListQuery(tt.args)
+			if !ok {
+				t.Fatalf("parseIndexedBdListQuery() ok = false, reason=%q", reason)
+			}
+			if !got.Query.IncludeClosed {
+				t.Fatalf("IncludeClosed = false, want true")
+			}
+			if got.Query.Type != tt.wantType || got.Query.Label != tt.wantLabel {
+				t.Fatalf("query = %+v, want type=%q label=%q", got.Query, tt.wantType, tt.wantLabel)
+			}
+		})
+	}
+}
+
 func TestParseIndexedBdListQueryFallsBackForUnsupportedShapes(t *testing.T) {
 	tests := []struct {
 		name       string
