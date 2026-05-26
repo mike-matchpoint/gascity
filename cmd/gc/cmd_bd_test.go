@@ -236,6 +236,7 @@ func TestParseIndexedBdListQuerySupportsSessionHistoryShapes(t *testing.T) {
 		wantLimit  int
 		wantAll    bool
 		wantStatus string
+		wantParent string
 	}{
 		{
 			name:     "type session all",
@@ -263,6 +264,12 @@ func TestParseIndexedBdListQuerySupportsSessionHistoryShapes(t *testing.T) {
 			wantLimit:  5,
 			wantStatus: "closed",
 		},
+		{
+			name:       "exact parent history",
+			args:       []string{"list", "--json", "--all", "--include-infra", "--include-gates", "--limit=0", "--parent=vgc-parent"},
+			wantAll:    true,
+			wantParent: "vgc-parent",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -281,6 +288,9 @@ func TestParseIndexedBdListQuerySupportsSessionHistoryShapes(t *testing.T) {
 			}
 			if got.Query.Status != tt.wantStatus {
 				t.Fatalf("Status = %q, want %q", got.Query.Status, tt.wantStatus)
+			}
+			if got.Query.ParentID != tt.wantParent {
+				t.Fatalf("ParentID = %q, want %q", got.Query.ParentID, tt.wantParent)
 			}
 		})
 	}

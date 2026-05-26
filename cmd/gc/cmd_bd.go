@@ -438,6 +438,9 @@ func isIndexedBdListHistoryQuery(query *beads.ListQuery) bool {
 	if query.Type == "session" || query.Label == "gc:session" {
 		return true
 	}
+	if query.ParentID != "" {
+		return true
+	}
 	if query.Limit <= 0 {
 		return false
 	}
