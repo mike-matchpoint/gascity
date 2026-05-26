@@ -109,16 +109,51 @@ func (r *Reader) ListIndexed(ctx context.Context, query beads.ListQuery) (beads.
 	}
 }
 
-func validateSupported(query beads.ListQuery) error {
-	switch query.Status {
-	case "", "open", "in_progress", "closed":
+// CountIndexed returns a cheap aggregate count for supported Beads table
+// filters. Unlike ListIndexed it does not hydrate labels or dependencies, so
+// broad all-status counts are safe for status/health summaries.
+func (r *Reader) CountIndexed(ctx context.Context, query beads.ListQuery) (int, error) {
+	if r == nil || r.db == nil {
+		return 0, fmt.Errorf("indexed dolt reader unavailable")
+	}
+	if err := validateSupportedStatus(query); err != nil {
+		return 0, err
+	}
+	switch query.TierMode {
+	case beads.TierWisps:
+		return r.countTier(ctx, query, tierWisps)
+	case beads.TierBoth:
+		issues, err := r.countTier(ctx, query, tierIssues)
+		if err != nil {
+			return 0, err
+		}
+		wisps, err := r.countTier(ctx, query, tierWisps)
+		if err != nil {
+			return 0, err
+		}
+		return issues + wisps, nil
 	default:
-		return fmt.Errorf("%w: raw status %q", beads.ErrIndexedListUnsupported, query.Status)
+		return r.countTier(ctx, query, tierIssues)
+	}
+}
+
+func validateSupported(query beads.ListQuery) error {
+	if err := validateSupportedStatus(query); err != nil {
+		return err
 	}
 	if query.IncludeClosed || query.Status == "closed" {
 		if !isBoundedHistoryQuery(query) {
 			return fmt.Errorf("%w: broad closed/history reads", beads.ErrIndexedListUnsupported)
 		}
+	}
+	return nil
+}
+
+func validateSupportedStatus(query beads.ListQuery) error {
+	switch query.Status {
+	case "", "open", "in_progress", "closed":
+	default:
+		return fmt.Errorf("%w: raw status %q", beads.ErrIndexedListUnsupported, query.Status)
 	}
 	return nil
 }
@@ -206,7 +241,16 @@ func (r *Reader) listTier(ctx context.Context, query beads.ListQuery, tier tierS
 	}, nil
 }
 
-func buildListSQL(query beads.ListQuery, tier tierSpec, applyLimit bool) (string, []any) {
+func (r *Reader) countTier(ctx context.Context, query beads.ListQuery, tier tierSpec) (int, error) {
+	sqlText, args := buildCountSQL(query, tier)
+	var count int
+	if err := r.db.QueryRowContext(ctx, sqlText, args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("indexed count %s: %w", tier.beadTable, err)
+	}
+	return count, nil
+}
+
+func buildWhereSQL(query beads.ListQuery, tier tierSpec) ([]string, []any) {
 	where := []string{}
 	args := []any{}
 
@@ -260,7 +304,11 @@ func buildListSQL(query beads.ListQuery, tier tierSpec, applyLimit bool) (string
 	if len(where) == 0 {
 		where = append(where, "1=1")
 	}
+	return where, args
+}
 
+func buildListSQL(query beads.ListQuery, tier tierSpec, applyLimit bool) (string, []any) {
+	where, args := buildWhereSQL(query, tier)
 	order := "DESC"
 	if query.Sort == beads.SortCreatedAsc {
 		order = "ASC"
@@ -272,6 +320,12 @@ func buildListSQL(query beads.ListQuery, tier tierSpec, applyLimit bool) (string
 		text += " LIMIT ?"
 		args = append(args, query.Limit)
 	}
+	return text, args
+}
+
+func buildCountSQL(query beads.ListQuery, tier tierSpec) (string, []any) {
+	where, args := buildWhereSQL(query, tier)
+	text := "SELECT COUNT(*) FROM " + tier.beadTable + " b WHERE " + strings.Join(where, " AND ")
 	return text, args
 }
 

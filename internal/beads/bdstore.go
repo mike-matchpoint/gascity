@@ -229,6 +229,19 @@ func (s *BdStore) ListIndexed(ctx context.Context, query ListQuery) (IndexedList
 	return s.indexedReader.ListIndexed(ctx, query)
 }
 
+// CountIndexed exposes the optional read-only indexed count path without
+// falling back to the Beads CLI.
+func (s *BdStore) CountIndexed(ctx context.Context, query ListQuery) (int, error) {
+	if s == nil || s.indexedReader == nil {
+		return 0, ErrIndexedListUnsupported
+	}
+	counter, ok := s.indexedReader.(IndexedCounter)
+	if !ok {
+		return 0, ErrIndexedListUnsupported
+	}
+	return counter.CountIndexed(ctx, query)
+}
+
 // IDPrefix returns the bead ID prefix owned by this store, without trailing "-".
 func (s *BdStore) IDPrefix() string {
 	if s == nil {

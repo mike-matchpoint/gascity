@@ -43,6 +43,21 @@ func TestValidateSupportedRejectsBroadHistoryAndRawStatuses(t *testing.T) {
 	}
 }
 
+func TestValidateSupportedStatusAllowsBroadCountShapes(t *testing.T) {
+	for _, query := range []beads.ListQuery{
+		{IncludeClosed: true},
+		{Status: "closed"},
+		{IncludeClosed: true, Label: "order-run:digest"},
+	} {
+		if err := validateSupportedStatus(query); err != nil {
+			t.Fatalf("validateSupportedStatus(%+v) = %v, want nil", query, err)
+		}
+	}
+	if err := validateSupportedStatus(beads.ListQuery{Status: "blocked"}); !errors.Is(err, beads.ErrIndexedListUnsupported) {
+		t.Fatalf("validateSupportedStatus(blocked) = %v, want ErrIndexedListUnsupported", err)
+	}
+}
+
 func TestBuildDSNUsesManagedDoltDriverDefaults(t *testing.T) {
 	dsn := buildDSN(Config{
 		Host:     "127.0.0.1",
@@ -157,6 +172,27 @@ func TestBuildListSQLStatusSemantics(t *testing.T) {
 	}
 	if !reflect.DeepEqual(args, []any{"order-run:digest", 1}) {
 		t.Fatalf("include-closed args = %#v, want [order-run:digest 1]", args)
+	}
+}
+
+func TestBuildCountSQLSupportsBroadIncludeClosedWithoutHydration(t *testing.T) {
+	sqlText, args := buildCountSQL(beads.ListQuery{AllowScan: true, IncludeClosed: true}, tierIssues)
+	if strings.Contains(sqlText, "ORDER BY") || strings.Contains(sqlText, "JSON_ARRAYAGG") {
+		t.Fatalf("count SQL should not hydrate or sort rows:\n%s", sqlText)
+	}
+	if !strings.Contains(sqlText, "SELECT COUNT(*) FROM issues b WHERE 1=1") {
+		t.Fatalf("count SQL = %s, want broad count over issues", sqlText)
+	}
+	if len(args) != 0 {
+		t.Fatalf("count args = %#v, want none", args)
+	}
+
+	sqlText, args = buildCountSQL(beads.ListQuery{Status: "closed", Label: "order-tracking"}, tierIssues)
+	if !strings.Contains(sqlText, "b.status = ?") || !strings.Contains(sqlText, "EXISTS (SELECT 1 FROM labels l") {
+		t.Fatalf("filtered count SQL missing status/label predicates:\n%s", sqlText)
+	}
+	if !reflect.DeepEqual(args, []any{"closed", "order-tracking"}) {
+		t.Fatalf("filtered count args = %#v, want [closed order-tracking]", args)
 	}
 }
 
