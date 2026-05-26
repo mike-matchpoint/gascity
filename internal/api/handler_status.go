@@ -206,20 +206,7 @@ func (s *Server) buildStatusBody() StatusBody {
 		}
 	}
 
-	// Count mail (best-effort).
-	var mc mailCounts
-	seenProvs := make(map[string]bool)
-	for _, mp := range s.state.MailProviders() {
-		key := fmt.Sprintf("%p", mp)
-		if seenProvs[key] {
-			continue
-		}
-		seenProvs[key] = true
-		if total, unread, err := mp.Count(""); err == nil {
-			mc.Total += total
-			mc.Unread += unread
-		}
-	}
+	mc := s.cachedStatusMailCounts(time.Now())
 
 	// Collect named sessions (best-effort; skip when unavailable).
 	var namedSessionDetails []StatusNamedSessionDetail

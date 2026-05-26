@@ -85,6 +85,17 @@ type Server struct {
 	storeHealthRefreshing bool
 	storeHealthComputer   func() *StatusStoreHealth
 
+	// statusMailCounts caches /v0/status's aggregate mail count. Global
+	// beadmail counts can take seconds on large stores, so expired values
+	// are served stale while one background refresh recomputes the next
+	// snapshot.
+	statusMailCountsMu         sync.Mutex
+	statusMailCountsEntry      StatusMailCounts
+	statusMailCountsSet        bool
+	statusMailCountsExpires    time.Time
+	statusMailCountsRefreshing bool
+	statusMailCountsComputer   func() StatusMailCounts
+
 	// LookPathFunc can be overridden in tests. Defaults to exec.LookPath.
 	LookPathFunc func(string) (string, error)
 
