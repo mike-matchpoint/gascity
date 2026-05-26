@@ -8,24 +8,30 @@ import (
 )
 
 // storeHealthCacheTTL is the refresh interval for the /v0/status
-// StoreHealth block. The underlying inputs (directory size walk,
-// maintenance-log read) are cheap enough to run every minute but
-// running them on every dashboard poll is wasteful.
+// StoreHealth block. The underlying inputs include a directory size walk
+// and bead row count, so expired snapshots are refreshed in the background
+// instead of blocking every operator status poll.
 const storeHealthCacheTTL = 30 * time.Second
 
 // cachedStoreHealth returns the memoized StoreHealth block, refreshing
 // when the TTL has elapsed. Safe for concurrent callers.
 func (s *Server) cachedStoreHealth(now time.Time) *StatusStoreHealth {
 	s.storeHealthMu.Lock()
-	if s.storeHealthEntry != nil && now.Before(s.storeHealthExpires) {
+	if s.storeHealthEntry != nil {
 		entry := s.storeHealthEntry
+		if now.Before(s.storeHealthExpires) {
+			s.storeHealthMu.Unlock()
+			return entry
+		}
+		if !s.storeHealthRefreshing {
+			compute := s.storeHealthComputeFunc()
+			s.storeHealthRefreshing = true
+			go s.refreshStoreHealth(compute)
+		}
 		s.storeHealthMu.Unlock()
 		return entry
 	}
-	compute := s.storeHealthComputer
-	if compute == nil {
-		compute = s.computeStoreHealth
-	}
+	compute := s.storeHealthComputeFunc()
 	s.storeHealthMu.Unlock()
 
 	h := compute()
@@ -38,6 +44,30 @@ func (s *Server) cachedStoreHealth(now time.Time) *StatusStoreHealth {
 	s.storeHealthEntry = h
 	s.storeHealthExpires = now.Add(storeHealthCacheTTL)
 	return h
+}
+
+func (s *Server) storeHealthComputeFunc() func() *StatusStoreHealth {
+	if s.storeHealthComputer != nil {
+		return s.storeHealthComputer
+	}
+	return s.computeStoreHealth
+}
+
+func (s *Server) refreshStoreHealth(compute func() *StatusStoreHealth) {
+	defer func() {
+		if recover() != nil {
+			s.storeHealthMu.Lock()
+			s.storeHealthRefreshing = false
+			s.storeHealthMu.Unlock()
+		}
+	}()
+	h := compute()
+
+	s.storeHealthMu.Lock()
+	s.storeHealthEntry = h
+	s.storeHealthExpires = time.Now().Add(storeHealthCacheTTL)
+	s.storeHealthRefreshing = false
+	s.storeHealthMu.Unlock()
 }
 
 // computeStoreHealth measures the Dolt store on disk and the latest
