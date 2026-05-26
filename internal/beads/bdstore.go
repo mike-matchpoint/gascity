@@ -776,6 +776,52 @@ func (s *BdStore) Update(id string, opts UpdateOpts) error {
 	return nil
 }
 
+// Claim atomically claims a bead using bd's --claim primitive and applies
+// metadata in the same update invocation when provided.
+func (s *BdStore) Claim(id string, opts ClaimOpts) (Bead, error) {
+	assignee := strings.TrimSpace(opts.Assignee)
+	if assignee == "" {
+		return Bead{}, fmt.Errorf("claiming bead %q: assignee is required", id)
+	}
+	args := []string{"update", "--json", id, "--claim", "--actor", assignee}
+	if len(opts.Metadata) > 0 {
+		keys := make([]string, 0, len(opts.Metadata))
+		for k := range opts.Metadata {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			args = append(args, "--set-metadata", k+"="+opts.Metadata[k])
+		}
+	}
+	err := s.runBDTransientWrite(args...)
+	if err != nil {
+		if isBdNotFound(err) {
+			return Bead{}, fmt.Errorf("claiming bead %q: %w", id, ErrNotFound)
+		}
+		if isBdClaimLost(err) {
+			return Bead{}, fmt.Errorf("claiming bead %q: %w", id, ErrClaimLost)
+		}
+		return Bead{}, fmt.Errorf("claiming bead %q: %w", id, err)
+	}
+	claimed, err := s.Get(id)
+	if err != nil {
+		return Bead{}, fmt.Errorf("claiming bead %q: refresh after claim: %w", id, err)
+	}
+	return claimed, nil
+}
+
+func isBdClaimLost(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "claim") ||
+		strings.Contains(msg, "already assigned") ||
+		strings.Contains(msg, "already claimed") ||
+		strings.Contains(msg, "not ready")
+}
+
 // WaitForParentProjection blocks until bd's parent-child listing projection
 // reflects a successful reparent from oldParentID to newParentID for id.
 func (s *BdStore) WaitForParentProjection(ctx context.Context, id, oldParentID, newParentID string) error {
