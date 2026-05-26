@@ -105,10 +105,10 @@ func TestBuildListSQLUsesBoundedSplitDependencySelectors(t *testing.T) {
 	}, tierIssues, true)
 
 	for _, want := range []string{
-		"FROM issues b",
+		"FROM labels l JOIN issues b ON b.id = l.issue_id",
 		"b.status NOT IN ('closed', 'in_progress')",
 		"b.issue_type <> ?",
-		"EXISTS (SELECT 1 FROM labels l WHERE l.issue_id = b.id AND l.label = ?)",
+		"l.label = ?",
 		"EXISTS (SELECT 1 FROM dependencies d WHERE d.issue_id = b.id AND d.type = 'parent-child' AND COALESCE(d.depends_on_issue_id, d.depends_on_wisp_id, d.depends_on_external) = ?)",
 		"JSON_UNQUOTE(JSON_EXTRACT(b.metadata, ?)) = ?",
 		"ORDER BY b.created_at ASC, b.id ASC LIMIT ?",
@@ -125,13 +125,13 @@ func TestBuildListSQLUsesBoundedSplitDependencySelectors(t *testing.T) {
 		"task",
 		"epic",
 		"rig/agent",
-		"ready",
 		"bd-parent",
 		createdBefore,
 		`$."gc.routed_to"`,
 		"refinery",
 		`$."plain"`,
 		"value",
+		"ready",
 		5,
 	}
 	if !reflect.DeepEqual(args, wantArgs) {
@@ -188,7 +188,9 @@ func TestBuildCountSQLSupportsBroadIncludeClosedWithoutHydration(t *testing.T) {
 	}
 
 	sqlText, args = buildCountSQL(beads.ListQuery{Status: "closed", Label: "order-tracking"}, tierIssues)
-	if !strings.Contains(sqlText, "b.status = ?") || !strings.Contains(sqlText, "EXISTS (SELECT 1 FROM labels l") {
+	if !strings.Contains(sqlText, "FROM labels l JOIN issues b ON b.id = l.issue_id") ||
+		!strings.Contains(sqlText, "b.status = ?") ||
+		!strings.Contains(sqlText, "l.label = ?") {
 		t.Fatalf("filtered count SQL missing status/label predicates:\n%s", sqlText)
 	}
 	if !reflect.DeepEqual(args, []any{"closed", "order-tracking"}) {
@@ -228,9 +230,9 @@ func TestBuildListSQLSupportsWispsTier(t *testing.T) {
 	}, tierWisps, false)
 
 	for _, want := range []string{
-		"FROM wisps b",
+		"FROM wisp_labels l JOIN wisps b ON b.id = l.issue_id",
 		"b.status = ?",
-		"FROM wisp_labels l",
+		"l.label = ?",
 		"FROM wisp_dependencies d",
 	} {
 		if !strings.Contains(sqlText, want) {

@@ -307,14 +307,29 @@ func buildWhereSQL(query beads.ListQuery, tier tierSpec) ([]string, []any) {
 	return where, args
 }
 
+func buildFromWhereSQL(query beads.ListQuery, tier tierSpec) (string, []string, []any) {
+	from := tier.beadTable + " b"
+	whereQuery := query
+	if query.Label != "" {
+		from = tier.labelTable + " l JOIN " + tier.beadTable + " b ON b.id = l.issue_id"
+		whereQuery.Label = ""
+	}
+	where, args := buildWhereSQL(whereQuery, tier)
+	if query.Label != "" {
+		where = append(where, "l.label = ?")
+		args = append(args, query.Label)
+	}
+	return from, where, args
+}
+
 func buildListSQL(query beads.ListQuery, tier tierSpec, applyLimit bool) (string, []any) {
-	where, args := buildWhereSQL(query, tier)
+	from, where, args := buildFromWhereSQL(query, tier)
 	order := "DESC"
 	if query.Sort == beads.SortCreatedAsc {
 		order = "ASC"
 	}
 	text := "SELECT b.id, b.title, b.description, b.status, b.priority, b.issue_type, b.assignee, b.created_at, b.external_ref, b.metadata FROM " +
-		tier.beadTable + " b WHERE " + strings.Join(where, " AND ") +
+		from + " WHERE " + strings.Join(where, " AND ") +
 		" ORDER BY b.created_at " + order + ", b.id " + order
 	if applyLimit && query.Limit > 0 {
 		text += " LIMIT ?"
@@ -324,8 +339,8 @@ func buildListSQL(query beads.ListQuery, tier tierSpec, applyLimit bool) (string
 }
 
 func buildCountSQL(query beads.ListQuery, tier tierSpec) (string, []any) {
-	where, args := buildWhereSQL(query, tier)
-	text := "SELECT COUNT(*) FROM " + tier.beadTable + " b WHERE " + strings.Join(where, " AND ")
+	from, where, args := buildFromWhereSQL(query, tier)
+	text := "SELECT COUNT(*) FROM " + from + " WHERE " + strings.Join(where, " AND ")
 	return text, args
 }
 

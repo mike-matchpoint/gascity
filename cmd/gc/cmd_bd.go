@@ -409,12 +409,15 @@ func parseIndexedBdListQuery(args []string) (indexedBdListQuery, bool, string) {
 		return parsed, false, "format"
 	}
 	switch query.Status {
-	case "", "open", "in_progress":
+	case "", "open", "in_progress", "closed":
 	default:
 		return parsed, false, "status"
 	}
 	if query.Type == "wisp" {
 		return parsed, false, "wisp-tier"
+	}
+	if query.Status == "closed" && !isIndexedBdListHistoryQuery(query) {
+		return parsed, false, "status"
 	}
 	if query.IncludeClosed && !isIndexedBdListHistoryQuery(query) {
 		return parsed, false, "all"
@@ -429,7 +432,20 @@ func isIndexedBdListHistoryQuery(query *beads.ListQuery) bool {
 	if query == nil {
 		return false
 	}
-	return query.Type == "session" || query.Label == "gc:session"
+	if len(query.Metadata) > 0 {
+		return true
+	}
+	if query.Type == "session" || query.Label == "gc:session" {
+		return true
+	}
+	if query.Limit <= 0 {
+		return false
+	}
+	return query.Label != "" ||
+		query.Type != "" ||
+		query.Assignee != "" ||
+		query.ParentID != "" ||
+		!query.CreatedBefore.IsZero()
 }
 
 func nextBdListArg(args []string, idx *int) (string, bool) {
