@@ -3493,6 +3493,52 @@ func orderFilterForTest(names ...string) map[string]struct{} {
 	return out
 }
 
+type failBroadOrderTrackingListStore struct {
+	beads.Store
+}
+
+func (s failBroadOrderTrackingListStore) ListByLabel(label string, limit int, opts ...beads.QueryOpt) ([]beads.Bead, error) {
+	if label == labelOrderTracking {
+		return nil, fmt.Errorf("unexpected broad order-tracking scan")
+	}
+	return s.Store.ListByLabel(label, limit, opts...)
+}
+
+func TestSweepStaleOrderTrackingWithOrderFilterAvoidsBroadTrackingScan(t *testing.T) {
+	base := beads.NewMemStore()
+	tracking, err := base.Create(beads.Bead{
+		Title:     "order:digest",
+		Labels:    orderTrackingLabels("digest"),
+		Ephemeral: true,
+	})
+	if err != nil {
+		t.Fatalf("Create(tracking): %v", err)
+	}
+	store := failBroadOrderTrackingListStore{Store: base}
+
+	result, err := sweepStaleOrderTrackingWithOptions(
+		store,
+		tracking.CreatedAt.Add(time.Hour),
+		time.Minute,
+		orderFilterForTest("digest"),
+		orderTrackingSweepMetadataInitiator,
+		false,
+	)
+	if err != nil {
+		t.Fatalf("sweepStaleOrderTrackingWithOptions: %v", err)
+	}
+	if result.trackingClosed != 1 {
+		t.Fatalf("trackingClosed = %d, want 1", result.trackingClosed)
+	}
+	got, err := base.Get(tracking.ID)
+	if err != nil {
+		t.Fatalf("Get(tracking): %v", err)
+	}
+	if got.Status != "closed" {
+		t.Fatalf("tracking status = %q, want closed", got.Status)
+	}
+}
+
 type parentLastCloseStore struct {
 	beads.Store
 }
@@ -6544,6 +6590,80 @@ func TestOrderDispatchSingleFlightLockSeesEphemeralTracker(t *testing.T) {
 	}
 	if !hasOpen {
 		t.Fatal("single-flight lock missed ephemeral tracking bead — would dispatch again")
+	}
+}
+
+type failLabelListStore struct {
+	beads.Store
+	failLabel string
+}
+
+func (s failLabelListStore) List(q beads.ListQuery) ([]beads.Bead, error) {
+	if q.Label == s.failLabel {
+		return nil, fmt.Errorf("unexpected list for label %q", q.Label)
+	}
+	return s.Store.List(q)
+}
+
+func TestOrderDispatchSingleFlightLockUsesScopedTrackingLabel(t *testing.T) {
+	base := beads.NewMemStore()
+	if _, err := base.Create(beads.Bead{
+		Title:     "order:double-fire",
+		Labels:    orderTrackingLabels("double-fire"),
+		Ephemeral: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store := failLabelListStore{Store: base, failLabel: orderRunLabel("double-fire")}
+
+	m := &memoryOrderDispatcher{}
+	hasOpen, err := m.hasOpenWorkStrict(store, "double-fire")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasOpen {
+		t.Fatal("single-flight lock missed scoped tracking bead")
+	}
+}
+
+type countingLabelListStore struct {
+	beads.Store
+	counts map[string]int
+}
+
+func (s *countingLabelListStore) List(q beads.ListQuery) ([]beads.Bead, error) {
+	if q.Label != "" {
+		if s.counts == nil {
+			s.counts = make(map[string]int)
+		}
+		s.counts[q.Label]++
+	}
+	return s.Store.List(q)
+}
+
+func TestOrderDispatchCachesOpenWorkGateWithinDispatch(t *testing.T) {
+	store := &countingLabelListStore{Store: beads.NewMemStore(), counts: make(map[string]int)}
+	ran := false
+	fakeExec := func(_ context.Context, _, _ string, _ []string) ([]byte, error) {
+		ran = true
+		return []byte("ok\n"), nil
+	}
+	aa := []orders.Order{{
+		Name:     "cache-test",
+		Trigger:  "cooldown",
+		Interval: "1s",
+		Exec:     "scripts/run.sh",
+	}}
+	ad := buildOrderDispatcherFromListExec(aa, store, nil, fakeExec, nil)
+
+	ad.dispatch(context.Background(), t.TempDir(), time.Now())
+	ad.drain(context.Background())
+
+	if !ran {
+		t.Fatal("expected order to dispatch")
+	}
+	if got := store.counts[scopedOrderTrackingLabel("cache-test")]; got != 1 {
+		t.Fatalf("scoped tracking label queries = %d, want 1 cached open-work check", got)
 	}
 }
 
