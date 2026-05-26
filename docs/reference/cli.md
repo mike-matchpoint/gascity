@@ -3605,6 +3605,7 @@ gc work claim [flags]
 | `--assignee` | string |  | claim assignee (defaults to session identity) |
 | `--json` | bool |  | print JSON |
 | `--set-metadata` | stringArray |  | metadata key=value to set atomically with the claim |
+| `--status` | string |  | claim status (default and only supported value: in_progress) |
 
 ## gc work count
 

@@ -21,6 +21,7 @@ type workCommandOptions struct {
 	Agent       string
 	Assignee    string
 	JSON        bool
+	Status      string
 	SetMetadata []string
 }
 
@@ -74,6 +75,7 @@ func newWorkCmd(stdout, stderr io.Writer) *cobra.Command {
 	}
 	claimCmd.Flags().StringVar(&claimOpts.Assignee, "assignee", "", "claim assignee (defaults to session identity)")
 	claimCmd.Flags().BoolVar(&claimOpts.JSON, "json", false, "print JSON")
+	claimCmd.Flags().StringVar(&claimOpts.Status, "status", "", "claim status (default and only supported value: in_progress)")
 	claimCmd.Flags().StringArrayVar(&claimOpts.SetMetadata, "set-metadata", nil, "metadata key=value to set atomically with the claim")
 
 	cmd.AddCommand(countCmd, nextCmd, claimCmd)
@@ -130,6 +132,10 @@ func cmdWorkClaim(opts workCommandOptions, stdout, stderr io.Writer) int {
 	}
 	metadata, err := parseWorkMetadata(opts.SetMetadata)
 	if err != nil {
+		fmt.Fprintf(stderr, "gc work claim: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	if _, err := normalizeWorkClaimStatus(opts.Status); err != nil {
 		fmt.Fprintf(stderr, "gc work claim: %v\n", err) //nolint:errcheck
 		return 1
 	}
@@ -250,6 +256,17 @@ func parseWorkMetadata(values []string) (map[string]string, error) {
 		out[key] = val
 	}
 	return out, nil
+}
+
+func normalizeWorkClaimStatus(raw string) (string, error) {
+	status := strings.TrimSpace(raw)
+	if status == "" {
+		return "in_progress", nil
+	}
+	if status != "in_progress" {
+		return "", fmt.Errorf("unsupported --status %q (only in_progress is supported by the atomic claim primitive)", raw)
+	}
+	return status, nil
 }
 
 func defaultWorkClaimAssignee(agentCfg config.Agent) string {

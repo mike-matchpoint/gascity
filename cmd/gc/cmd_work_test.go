@@ -76,3 +76,19 @@ func TestClaimNextWorkSingleWinner(t *testing.T) {
 		t.Fatalf("claimed_by metadata = %q, want winner %q", final.Metadata["claimed_by"], winner)
 	}
 }
+
+func TestNormalizeWorkClaimStatus(t *testing.T) {
+	for _, raw := range []string{"", "in_progress", "  in_progress  "} {
+		got, err := normalizeWorkClaimStatus(raw)
+		if err != nil {
+			t.Fatalf("normalizeWorkClaimStatus(%q): %v", raw, err)
+		}
+		if got != "in_progress" {
+			t.Fatalf("normalizeWorkClaimStatus(%q) = %q, want in_progress", raw, got)
+		}
+	}
+
+	if _, err := normalizeWorkClaimStatus("open"); err == nil {
+		t.Fatal("normalizeWorkClaimStatus(open) error = nil, want unsupported status error")
+	}
+}
