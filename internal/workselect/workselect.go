@@ -14,6 +14,7 @@ import (
 type Compiled struct {
 	Query        beads.ListQuery
 	Unassigned   bool
+	Ready        bool
 	ExplicitType bool
 	Limit        int
 }
@@ -74,6 +75,7 @@ func Compile(selector config.WorkSelector, limit int) (Compiled, error) {
 	compiled := Compiled{
 		Query:        query,
 		Unassigned:   selector.Unassigned,
+		Ready:        selector.Ready,
 		ExplicitType: query.Type != "",
 		Limit:        limit,
 	}
@@ -97,6 +99,12 @@ func List(store beads.Store, selector config.WorkSelector, limit int) ([]beads.B
 		return nil, err
 	}
 	items = ApplyPostFilters(items, compiled)
+	if compiled.Ready {
+		items, err = applyReadyFilter(store, items)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if limit > 0 && len(items) > limit {
 		items = items[:limit]
 	}
@@ -156,5 +164,75 @@ func ApplyPostFilters(items []beads.Bead, compiled Compiled) []beads.Bead {
 }
 
 func requiresPostFilter(compiled Compiled) bool {
-	return compiled.Unassigned || !compiled.ExplicitType
+	return compiled.Unassigned || compiled.Ready || !compiled.ExplicitType
+}
+
+// ApplyStorePostFilters completes selector filters that need store reads.
+// Controller demand uses this after its cache-aware list path; gc work commands
+// use List, which calls the same helper after a direct store list.
+func ApplyStorePostFilters(store beads.Store, items []beads.Bead, compiled Compiled) ([]beads.Bead, error) {
+	items = ApplyPostFilters(items, compiled)
+	if compiled.Ready {
+		return applyReadyFilter(store, items)
+	}
+	return items, nil
+}
+
+func applyReadyFilter(store beads.Store, items []beads.Bead) ([]beads.Bead, error) {
+	if len(items) == 0 {
+		return items, nil
+	}
+	statusByID := make(map[string]string, len(items))
+	for _, item := range items {
+		statusByID[item.ID] = item.Status
+	}
+	filtered := items[:0]
+	for _, item := range items {
+		ready, err := selectorItemReady(store, item, statusByID)
+		if err != nil {
+			return nil, err
+		}
+		if ready {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered, nil
+}
+
+func selectorItemReady(store beads.Store, item beads.Bead, statusByID map[string]string) (bool, error) {
+	deps := item.Dependencies
+	if len(deps) == 0 {
+		var err error
+		deps, err = store.DepList(item.ID, "down")
+		if err != nil {
+			return false, err
+		}
+	}
+	for _, dep := range deps {
+		if !selectorBlockingDep(dep.Type) {
+			continue
+		}
+		status, ok := statusByID[dep.DependsOnID]
+		if !ok {
+			depBead, err := store.Get(dep.DependsOnID)
+			if err != nil {
+				return false, err
+			}
+			status = depBead.Status
+			statusByID[dep.DependsOnID] = status
+		}
+		if status != "closed" {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func selectorBlockingDep(depType string) bool {
+	switch strings.TrimSpace(depType) {
+	case "blocks", "waits-for", "conditional-blocks":
+		return true
+	default:
+		return false
+	}
 }

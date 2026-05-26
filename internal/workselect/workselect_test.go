@@ -71,3 +71,49 @@ func TestSelectorIncludesInfrastructureOnlyWhenExplicit(t *testing.T) {
 		t.Fatalf("Next explicit step = (%+v, %v), want step", next, ok)
 	}
 }
+
+func TestSelectorReadyFiltersExplicitSteps(t *testing.T) {
+	store := beads.NewMemStore()
+	root, err := store.Create(beads.Bead{Title: "root", Type: "molecule"})
+	if err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+	first, err := store.Create(beads.Bead{Title: "first", Type: "step", Metadata: map[string]string{"gc.routed_to": "rig/cartographer", "formula": "spec-cartographer"}})
+	if err != nil {
+		t.Fatalf("create first: %v", err)
+	}
+	second, err := store.Create(beads.Bead{Title: "second", Type: "step", Metadata: map[string]string{"gc.routed_to": "rig/cartographer", "formula": "spec-cartographer"}})
+	if err != nil {
+		t.Fatalf("create second: %v", err)
+	}
+	if err := store.DepAdd(first.ID, root.ID, "parent-child"); err != nil {
+		t.Fatalf("parent dep first: %v", err)
+	}
+	if err := store.DepAdd(second.ID, root.ID, "parent-child"); err != nil {
+		t.Fatalf("parent dep second: %v", err)
+	}
+	if err := store.DepAdd(second.ID, first.ID, "blocks"); err != nil {
+		t.Fatalf("blocks dep second: %v", err)
+	}
+	selector := config.WorkSelector{
+		Status:     "open",
+		Type:       "step",
+		Unassigned: true,
+		Ready:      true,
+		Metadata:   map[string]string{"gc.routed_to": "rig/cartographer", "formula": "spec-cartographer"},
+	}
+	count, err := Count(store, selector)
+	if err != nil {
+		t.Fatalf("Count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("Count = %d, want only the unblocked first step", count)
+	}
+	next, ok, err := Next(store, selector)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if !ok || next.ID != first.ID {
+		t.Fatalf("Next = (%+v, %v), want %s", next, ok, first.ID)
+	}
+}
