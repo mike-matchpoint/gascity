@@ -694,6 +694,7 @@ WorkSelector is a declarative bead predicate shared by controller demand, worker
 | `label` | string |  |  | Label selects one exact label. |
 | `assignee` | string |  |  | Assignee selects one exact assignee. |
 | `unassigned` | boolean |  |  | Unassigned selects beads with an empty assignee. |
+| `ready` | boolean |  |  | Ready filters to currently unblocked work. Unlike Ready()'s default actionable-work view, explicit Type selectors can opt infrastructure beads such as formula steps into this dependency-aware filter. |
 | `parent` | string |  |  | Parent selects one parent bead ID. |
 | `metadata` | map[string]string |  |  | Metadata selects beads whose metadata contains every key/value pair. |
 | `tier` | string |  |  | Tier selects the physical bead tier: issues (default), wisps, or both. Enum: `issues`, `wisps`, `both` |

@@ -400,6 +400,10 @@ type WorkSelector struct {
 	Assignee string `toml:"assignee,omitempty"`
 	// Unassigned selects beads with an empty assignee.
 	Unassigned bool `toml:"unassigned,omitempty"`
+	// Ready filters to currently unblocked work. Unlike Ready()'s default
+	// actionable-work view, explicit Type selectors can opt infrastructure
+	// beads such as formula steps into this dependency-aware filter.
+	Ready bool `toml:"ready,omitempty"`
 	// Parent selects one parent bead ID.
 	Parent string `toml:"parent,omitempty"`
 	// Metadata selects beads whose metadata contains every key/value pair.
@@ -418,6 +422,7 @@ func (s WorkSelector) IsZero() bool {
 		strings.TrimSpace(s.Label) == "" &&
 		strings.TrimSpace(s.Assignee) == "" &&
 		!s.Unassigned &&
+		!s.Ready &&
 		strings.TrimSpace(s.Parent) == "" &&
 		len(s.Metadata) == 0 &&
 		strings.TrimSpace(s.Tier) == "" &&
@@ -436,6 +441,7 @@ type normalizedWorkSelector struct {
 	label       string
 	assignee    string
 	unassigned  bool
+	ready       bool
 	parent      string
 	metadata    string
 	tier        string
@@ -450,6 +456,7 @@ func (s WorkSelector) normalized() normalizedWorkSelector {
 		label:       strings.TrimSpace(s.Label),
 		assignee:    strings.TrimSpace(s.Assignee),
 		unassigned:  s.Unassigned,
+		ready:       s.Ready,
 		parent:      strings.TrimSpace(s.Parent),
 		metadata:    normalizedMetadataSelector(s.Metadata),
 		tier:        strings.TrimSpace(s.Tier),

@@ -2346,6 +2346,10 @@
           "type": "boolean",
           "description": "Unassigned selects beads with an empty assignee."
         },
+        "ready": {
+          "type": "boolean",
+          "description": "Ready filters to currently unblocked work. Unlike Ready()'s default\nactionable-work view, explicit Type selectors can opt infrastructure\nbeads such as formula steps into this dependency-aware filter."
+        },
         "parent": {
           "type": "string",
           "description": "Parent selects one parent bead ID."

@@ -1988,6 +1988,7 @@ name = "worker"
 [agent.work_selector]
 type = "step"
 unassigned = true
+ready = true
 sort = "created_desc"
 
 [agent.work_selector.metadata]
@@ -1996,6 +1997,7 @@ sort = "created_desc"
 [agent.scale_check_query]
 type = "step"
 unassigned = true
+ready = true
 sort = "created_desc"
 
 [agent.scale_check_query.metadata]
@@ -2012,8 +2014,8 @@ sort = "created_desc"
 		t.Fatalf("agents = %d, want 1", len(cfg.Agents))
 	}
 	worker := cfg.Agents[0]
-	if worker.WorkSelector.Type != "step" || !worker.WorkSelector.Unassigned || worker.WorkSelector.Sort != "created_desc" {
-		t.Fatalf("work_selector = %+v, want parsed step/unassigned/created_desc", worker.WorkSelector)
+	if worker.WorkSelector.Type != "step" || !worker.WorkSelector.Unassigned || !worker.WorkSelector.Ready || worker.WorkSelector.Sort != "created_desc" {
+		t.Fatalf("work_selector = %+v, want parsed step/unassigned/ready/created_desc", worker.WorkSelector)
 	}
 	if got := worker.WorkSelector.Metadata["gc.routed_to"]; got != "{{.Rig}}/worker" {
 		t.Fatalf("work_selector metadata = %q", got)

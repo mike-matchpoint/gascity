@@ -229,8 +229,11 @@ func workSelectorCountForController(store beads.Store, selector config.WorkSelec
 			return 0, err
 		}
 	}
-	items = workselect.ApplyPostFilters(items, compiled)
-	return len(items), err
+	filtered, filterErr := workselect.ApplyStorePostFilters(store, items, compiled)
+	if filterErr != nil {
+		return 0, filterErr
+	}
+	return len(filtered), err
 }
 
 func parseWorkMetadata(values []string) (map[string]string, error) {
