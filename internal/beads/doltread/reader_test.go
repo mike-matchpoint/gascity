@@ -12,10 +12,14 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 )
 
-func TestValidateSupportedRejectsClosedAndRawStatuses(t *testing.T) {
+func TestValidateSupportedRejectsBroadHistoryAndRawStatuses(t *testing.T) {
 	for _, query := range []beads.ListQuery{
 		{IncludeClosed: true},
 		{Status: "closed"},
+		{Status: "closed", Limit: 1},
+		{IncludeClosed: true, Label: "order-run:digest"},
+		{IncludeClosed: true, ExcludeType: "epic", Limit: 1},
+		{IncludeClosed: true, Type: "session"},
 		{Status: "blocked"},
 	} {
 		if err := validateSupported(query); !errors.Is(err, beads.ErrIndexedListUnsupported) {
@@ -27,6 +31,10 @@ func TestValidateSupportedRejectsClosedAndRawStatuses(t *testing.T) {
 		{},
 		{Status: "open"},
 		{Status: "in_progress"},
+		{IncludeClosed: true, Label: "order-run:digest", Limit: 1},
+		{Status: "closed", Label: "order-tracking", Limit: 5},
+		{IncludeClosed: true, Metadata: map[string]string{"configured_named_identity": "gastown.deacon"}},
+		{Status: "closed", Metadata: map[string]string{"session_name": "vgc-lyr"}},
 	} {
 		if err := validateSupported(query); err != nil {
 			t.Fatalf("validateSupported(%+v) = %v, want nil", query, err)
@@ -130,6 +138,24 @@ func TestBuildListSQLStatusSemantics(t *testing.T) {
 	}
 	if !reflect.DeepEqual(args, []any{"in_progress"}) {
 		t.Fatalf("in_progress args = %#v, want [in_progress]", args)
+	}
+
+	sqlText, args = buildListSQL(beads.ListQuery{Status: "closed", Label: "order-tracking", Limit: 5}, tierIssues, true)
+	if !strings.Contains(sqlText, "b.status = ?") {
+		t.Fatalf("closed SQL = %s, want raw status equality", sqlText)
+	}
+	if !reflect.DeepEqual(args, []any{"closed", "order-tracking", 5}) {
+		t.Fatalf("closed args = %#v, want [closed order-tracking 5]", args)
+	}
+
+	sqlText, args = buildListSQL(beads.ListQuery{IncludeClosed: true, Label: "order-run:digest", Limit: 1}, tierIssues, true)
+	if strings.Contains(sqlText, "b.status <> 'closed'") ||
+		strings.Contains(sqlText, "b.status NOT IN") ||
+		strings.Contains(sqlText, "b.status = ?") {
+		t.Fatalf("include-closed SQL has active status predicate:\n%s", sqlText)
+	}
+	if !reflect.DeepEqual(args, []any{"order-run:digest", 1}) {
+		t.Fatalf("include-closed args = %#v, want [order-run:digest 1]", args)
 	}
 }
 
