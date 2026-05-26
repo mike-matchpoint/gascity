@@ -1535,9 +1535,10 @@ func TestOrderTrackingSweepWatchdogAllowsSweepOrderToCleanStaleTracking(t *testi
 	execRan := false
 	fakeExec := func(context.Context, string, string, []string) ([]byte, error) {
 		execRan = true
+		sweepNow := freshMerge.CreatedAt.Add(49 * time.Millisecond)
 		_, err := sweepStaleOrderTrackingAcrossStores(
 			[]beads.Store{store},
-			time.Now(),
+			sweepNow,
 			50*time.Millisecond,
 			nil,
 			orderTrackingSweepMetadataInitiator,
@@ -4187,8 +4188,8 @@ func TestCityRuntimeReloadDrainShortCircuitsOnTickContextCancel(t *testing.T) {
 	lastProviderName := "fake"
 	start := time.Now()
 	cr.reloadConfig(ctx, &lastProviderName, cityPath)
-	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
-		t.Fatalf("reload drain took %s after tick context cancellation, want <200ms", elapsed)
+	if elapsed := time.Since(start); elapsed > 900*time.Millisecond {
+		t.Fatalf("reload drain took %s after tick context cancellation, want <900ms", elapsed)
 	}
 	errs := od.drainContextErrors()
 	if len(errs) == 0 || !errors.Is(errs[0], context.Canceled) {

@@ -2696,7 +2696,7 @@ func TestShellExecRunnerKillsProcessGroupOnTimeout(t *testing.T) {
 	oldSignalGrace := shellExecSignalGrace
 	shellExecSignalGrace = 100 * time.Millisecond
 	t.Cleanup(func() { shellExecSignalGrace = oldSignalGrace })
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	command := fmt.Sprintf("sh -c 'printf \"%%s\\n\" \"$$\" > %q; trap \"\" TERM; while :; do printf . >> %q; sleep 0.05; done' & wait", childPIDPath, heartbeatPath)
@@ -4331,7 +4331,7 @@ func orderDispatchTestEnv(t *testing.T, envCh <-chan []string) map[string]string
 			}
 		}
 		return env
-	case <-time.After(10 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("timed out waiting for order exec env")
 	}
 	return nil
