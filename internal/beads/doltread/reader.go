@@ -74,9 +74,9 @@ func (r *Reader) Close() error {
 	return r.db.Close()
 }
 
-// ListIndexed returns supported active rows with label and dependency
-// enrichment. Closed/history/full-text query shapes are intentionally
-// unsupported and must fall back to Beads CLI.
+// ListIndexed returns supported rows with label and dependency enrichment.
+// Broad closed/history/full-text query shapes are intentionally unsupported and
+// must fall back to Beads CLI.
 func (r *Reader) ListIndexed(ctx context.Context, query beads.ListQuery) (beads.IndexedListResult, error) {
 	if r == nil || r.db == nil {
 		return beads.IndexedListResult{}, fmt.Errorf("indexed dolt reader unavailable")
@@ -94,11 +94,12 @@ func (r *Reader) ListIndexed(ctx context.Context, query beads.ListQuery) (beads.
 		wispsQ := query
 		wispsQ.TierMode = beads.TierWisps
 
-		issues, err := r.listTier(ctx, issuesQ, tierIssues, false)
+		applyTierLimit := query.Limit > 0
+		issues, err := r.listTier(ctx, issuesQ, tierIssues, applyTierLimit)
 		if err != nil {
 			return issues, err
 		}
-		wisps, err := r.listTier(ctx, wispsQ, tierWisps, false)
+		wisps, err := r.listTier(ctx, wispsQ, tierWisps, applyTierLimit)
 		if err != nil {
 			return wisps, err
 		}
@@ -109,15 +110,31 @@ func (r *Reader) ListIndexed(ctx context.Context, query beads.ListQuery) (beads.
 }
 
 func validateSupported(query beads.ListQuery) error {
-	if query.IncludeClosed || query.Status == "closed" {
-		return fmt.Errorf("%w: closed/history reads", beads.ErrIndexedListUnsupported)
-	}
 	switch query.Status {
-	case "", "open", "in_progress":
-		return nil
+	case "", "open", "in_progress", "closed":
 	default:
 		return fmt.Errorf("%w: raw status %q", beads.ErrIndexedListUnsupported, query.Status)
 	}
+	if query.IncludeClosed || query.Status == "closed" {
+		if !isBoundedHistoryQuery(query) {
+			return fmt.Errorf("%w: broad closed/history reads", beads.ErrIndexedListUnsupported)
+		}
+	}
+	return nil
+}
+
+func isBoundedHistoryQuery(query beads.ListQuery) bool {
+	if len(query.Metadata) > 0 {
+		return true
+	}
+	if query.Limit <= 0 {
+		return false
+	}
+	return query.Label != "" ||
+		query.Type != "" ||
+		query.Assignee != "" ||
+		query.ParentID != "" ||
+		!query.CreatedBefore.IsZero()
 }
 
 type tierSpec struct {
@@ -190,13 +207,16 @@ func buildListSQL(query beads.ListQuery, tier tierSpec, applyLimit bool) (string
 	where := []string{}
 	args := []any{}
 
-	switch query.Status {
-	case "open":
+	switch {
+	case query.Status == "closed":
+		where = append(where, "b.status = ?")
+		args = append(args, "closed")
+	case query.Status == "open":
 		where = append(where, "b.status NOT IN ('closed', 'in_progress')")
-	case "in_progress":
+	case query.Status == "in_progress":
 		where = append(where, "b.status = ?")
 		args = append(args, "in_progress")
-	default:
+	case !query.IncludeClosed:
 		where = append(where, "b.status <> 'closed'")
 	}
 	if query.Type != "" {
@@ -233,6 +253,9 @@ func buildListSQL(query beads.ListQuery, tier tierSpec, applyLimit bool) (string
 			where = append(where, "JSON_UNQUOTE(JSON_EXTRACT(b.metadata, ?)) = ?")
 			args = append(args, metadataJSONPath(key), query.Metadata[key])
 		}
+	}
+	if len(where) == 0 {
+		where = append(where, "1=1")
 	}
 
 	order := "DESC"
