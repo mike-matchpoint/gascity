@@ -1389,16 +1389,26 @@ func TestBdStoreCloseAllWhitespaceCloseReason(t *testing.T) {
 // --- List ---
 
 type fakeIndexedListReader struct {
-	result beads.IndexedListResult
-	err    error
-	calls  int
-	query  beads.ListQuery
+	result     beads.IndexedListResult
+	err        error
+	calls      int
+	query      beads.ListQuery
+	count      int
+	countErr   error
+	countCalls int
+	countQuery beads.ListQuery
 }
 
 func (r *fakeIndexedListReader) ListIndexed(_ context.Context, query beads.ListQuery) (beads.IndexedListResult, error) {
 	r.calls++
 	r.query = query
 	return r.result, r.err
+}
+
+func (r *fakeIndexedListReader) CountIndexed(_ context.Context, query beads.ListQuery) (int, error) {
+	r.countCalls++
+	r.countQuery = query
+	return r.count, r.countErr
 }
 
 func TestBdStoreList(t *testing.T) {
@@ -1423,6 +1433,33 @@ func TestBdStoreList(t *testing.T) {
 	}
 	if got[0].Status != "open" {
 		t.Errorf("got[0].Status = %q, want %q", got[0].Status, "open")
+	}
+}
+
+func TestBdStoreCountIndexedUsesAttachedReaderWithoutCLI(t *testing.T) {
+	var runnerCalls int
+	runner := func(_, _ string, _ ...string) ([]byte, error) {
+		runnerCalls++
+		return nil, fmt.Errorf("runner should not be called")
+	}
+	indexed := &fakeIndexedListReader{count: 42}
+	s := beads.NewBdStore("/city", runner).WithIndexedReader(indexed)
+
+	got, err := s.CountIndexed(context.Background(), beads.ListQuery{AllowScan: true, IncludeClosed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 42 {
+		t.Fatalf("CountIndexed = %d, want 42", got)
+	}
+	if runnerCalls != 0 {
+		t.Fatalf("runner called %d times, want 0", runnerCalls)
+	}
+	if indexed.countCalls != 1 {
+		t.Fatalf("indexed count calls = %d, want 1", indexed.countCalls)
+	}
+	if !indexed.countQuery.IncludeClosed {
+		t.Fatalf("indexed count query IncludeClosed = false, want true")
 	}
 }
 

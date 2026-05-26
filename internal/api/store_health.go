@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/beads"
@@ -12,6 +13,12 @@ import (
 // and bead row count, so expired snapshots are refreshed in the background
 // instead of blocking every operator status poll.
 const storeHealthCacheTTL = 30 * time.Second
+
+const storeHealthRowCountTimeout = 3 * time.Second
+
+type indexedRowCounter interface {
+	CountIndexed(context.Context, beads.ListQuery) (int, error)
+}
 
 // cachedStoreHealth returns the memoized StoreHealth block, refreshing
 // when the TTL has elapsed. Safe for concurrent callers.
@@ -109,7 +116,17 @@ func countBeadStoreRows(store beads.Store) int {
 	if store == nil {
 		return 0
 	}
-	list, err := store.List(beads.ListQuery{AllowScan: true, IncludeClosed: true})
+	query := beads.ListQuery{AllowScan: true, IncludeClosed: true}
+	if counter, ok := store.(indexedRowCounter); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), storeHealthRowCountTimeout)
+		defer cancel()
+		count, err := counter.CountIndexed(ctx, query)
+		if err == nil {
+			return count
+		}
+		return 0
+	}
+	list, err := store.List(query)
 	if err != nil {
 		return 0
 	}
