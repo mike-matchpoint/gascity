@@ -58,6 +58,7 @@ func newWorkCmd(stdout, stderr io.Writer) *cobra.Command {
 			return nil
 		},
 	}
+	nextCmd.Flags().BoolVar(&nextOpts.JSON, "json", false, "print JSON")
 
 	claimOpts := &workCommandOptions{}
 	claimCmd := &cobra.Command{
@@ -72,6 +73,7 @@ func newWorkCmd(stdout, stderr io.Writer) *cobra.Command {
 		},
 	}
 	claimCmd.Flags().StringVar(&claimOpts.Assignee, "assignee", "", "claim assignee (defaults to session identity)")
+	claimCmd.Flags().BoolVar(&claimOpts.JSON, "json", false, "print JSON")
 	claimCmd.Flags().StringArrayVar(&claimOpts.SetMetadata, "set-metadata", nil, "metadata key=value to set atomically with the claim")
 
 	cmd.AddCommand(countCmd, nextCmd, claimCmd)

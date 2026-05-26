@@ -3603,6 +3603,7 @@ gc work claim [flags]
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--assignee` | string |  | claim assignee (defaults to session identity) |
+| `--json` | bool |  | print JSON |
 | `--set-metadata` | stringArray |  | metadata key=value to set atomically with the claim |
 
 ## gc work count
@@ -3622,5 +3623,9 @@ gc work count [flags]
 Print the next work item matching an agent's typed selector
 
 ```
-gc work next
+gc work next [flags]
 ```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--json` | bool |  | print JSON |
