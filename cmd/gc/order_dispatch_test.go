@@ -1349,7 +1349,7 @@ func TestOrderDispatchDeepLastRunHistoryDoesNotDefer(t *testing.T) {
 			t.Fatalf("deep last-run history deferred order: %+v", event)
 		}
 	}
-	tick, ok := rec.eventByType(events.OrderDispatchTick)
+	tick, ok := rec.orderDispatchTickEvent()
 	if !ok {
 		t.Fatal("missing order dispatch tick event")
 	}
@@ -1524,7 +1524,7 @@ func TestOrderDispatchSnapshotManyOrdersDoesNotExhaustSharedStoreBudget(t *testi
 			t.Fatalf("%s did not run; ran=%v", order.Name, ran)
 		}
 	}
-	tick, ok := rec.eventByType(events.OrderDispatchTick)
+	tick, ok := rec.orderDispatchTickEvent()
 	if !ok {
 		t.Fatal("missing order dispatch tick event")
 	}
@@ -1538,6 +1538,12 @@ func TestOrderDispatchSnapshotManyOrdersDoesNotExhaustSharedStoreBudget(t *testi
 }
 
 func TestCreateOrderTrackingBeadBoundedClosesLateCreateAfterTimeout(t *testing.T) {
+	oldBudget := orderDispatchTrackingWriteBudget
+	orderDispatchTrackingWriteBudget = 50 * time.Millisecond
+	t.Cleanup(func() {
+		orderDispatchTrackingWriteBudget = oldBudget
+	})
+
 	base := beads.NewMemStore()
 	store := delayedOrderTrackingCreateStore{
 		Store: base,
@@ -1574,6 +1580,71 @@ func TestCreateOrderTrackingBeadBoundedClosesLateCreateAfterTimeout(t *testing.T
 	}
 }
 
+func TestOrderDispatchStopsTickAfterTrackingWriteTimeout(t *testing.T) {
+	oldBudget := orderDispatchTrackingWriteBudget
+	orderDispatchTrackingWriteBudget = 50 * time.Millisecond
+	t.Cleanup(func() {
+		orderDispatchTrackingWriteBudget = oldBudget
+	})
+
+	base := beads.NewMemStore()
+	store := delayedOrderTrackingCreateStore{
+		Store: base,
+		delay: orderDispatchTrackingWriteBudget + 100*time.Millisecond,
+	}
+	var rec memRecorder
+	ran := make(map[string]bool)
+	fakeExec := func(_ context.Context, command, _ string, _ []string) ([]byte, error) {
+		ran[command] = true
+		return []byte("ok\n"), nil
+	}
+	aa := []orders.Order{
+		{Name: "aaa-first", Trigger: "cooldown", Interval: "1s", Exec: "aaa-first"},
+		{Name: "zzz-second", Trigger: "cooldown", Interval: "1s", Exec: "zzz-second"},
+	}
+	ad := buildOrderDispatcherFromListExec(aa, store, nil, fakeExec, &rec)
+	if ad == nil {
+		t.Fatal("expected non-nil dispatcher")
+	}
+
+	ad.dispatch(context.Background(), t.TempDir(), time.Now().Add(time.Hour))
+	ad.drain(context.Background())
+
+	if ran["aaa-first"] || ran["zzz-second"] {
+		t.Fatalf("exec ran after tracking write timeout: ran=%v", ran)
+	}
+	event, ok := rec.orderDispatchTickEvent()
+	if !ok {
+		t.Fatal("missing order dispatch tick event")
+	}
+	var payload events.OrderDispatchTickPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatalf("decode tick payload: %v; raw=%s", err, event.Payload)
+	}
+	if payload.DispatchesCreated != 0 || payload.OrdersDeferred != 1 || payload.TrackingWriteFails != 1 {
+		t.Fatalf("tick payload = %+v, want one tracking write deferral and no dispatches", payload)
+	}
+	if got := payload.DeferReasons["tracking_write"]; got != 1 {
+		t.Fatalf("tracking_write defer reason = %d, want 1; payload=%+v", got, payload)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		first := trackingBeads(t, base, "order-run:aaa-first")
+		second := trackingBeads(t, base, "order-run:zzz-second")
+		if len(first) == 1 && first[0].Status == "closed" && len(second) == 0 {
+			if got := first[0].Metadata["close_reason"]; got != abandonedOrderTrackingCloseReason {
+				t.Fatalf("close_reason = %q, want %q", got, abandonedOrderTrackingCloseReason)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("tracking beads after timeout: first=%#v second=%#v", first, second)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
 func TestOrderDispatchRecordsTickTelemetry(t *testing.T) {
 	store := beads.NewMemStore()
 	var rec memRecorder
@@ -1594,7 +1665,7 @@ func TestOrderDispatchRecordsTickTelemetry(t *testing.T) {
 	ad.dispatch(context.Background(), t.TempDir(), time.Now().Add(5*time.Second))
 	ad.drain(context.Background())
 
-	event, ok := rec.eventByType(events.OrderDispatchTick)
+	event, ok := rec.orderDispatchTickEvent()
 	if !ok {
 		t.Fatalf("missing %s event; events=%#v", events.OrderDispatchTick, rec.snapshot())
 	}
@@ -5802,11 +5873,11 @@ func (r *memRecorder) hasSubject(subject string) bool {
 	return false
 }
 
-func (r *memRecorder) eventByType(typ string) (events.Event, bool) {
+func (r *memRecorder) orderDispatchTickEvent() (events.Event, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, e := range r.events {
-		if e.Type == typ {
+		if e.Type == events.OrderDispatchTick {
 			return e, true
 		}
 	}

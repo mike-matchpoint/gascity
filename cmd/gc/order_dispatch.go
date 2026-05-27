@@ -46,7 +46,6 @@ const (
 	orderTrackingCloseVerifyRetryDelay     = 25 * time.Millisecond
 	orderDispatchSnapshotBudget            = 12 * time.Second
 	orderDispatchSingleReadBudget          = 500 * time.Millisecond
-	orderDispatchTrackingWriteBudget       = time.Second
 	orderDispatchOpenReadLimit             = 1000
 	orderDispatchLastRunReadLimit          = 1
 	orderDispatchEventCursorReadLimit      = 200
@@ -76,6 +75,8 @@ const (
 	completedOrderTrackingCloseReason = "order dispatch completed: tracking bead lifecycle finished"
 	abandonedOrderTrackingCloseReason = "order dispatch abandoned: tracking create finished after timeout"
 )
+
+var orderDispatchTrackingWriteBudget = 15 * time.Second
 
 func orderRunLabel(scopedName string) string {
 	return "order-run:" + scopedName
@@ -581,9 +582,10 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 			if createErr != nil {
 				logDispatchError(m.stderr, "gc: order dispatch: creating trigger env failure tracking bead for %s: %v", scoped, createErr)
 				stats.recordTrackingWriteFailure()
-			} else {
-				m.rememberLastRun(scoped, candidate.gateStoreKeys, trackingBead.CreatedAt)
+				stats.recordDeferred("tracking_write")
+				return
 			}
+			m.rememberLastRun(scoped, candidate.gateStoreKeys, trackingBead.CreatedAt)
 			stats.recordDeferred("trigger_env")
 			m.rec.Record(events.Event{
 				Type:    events.OrderFailed,
@@ -615,7 +617,7 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 			logDispatchError(m.stderr, "gc: order dispatch: creating tracking bead for %s: %v", scoped, err)
 			stats.recordTrackingWriteFailure()
 			stats.recordDeferred("tracking_write")
-			continue
+			return
 		}
 		m.rememberLastRun(scoped, candidate.gateStoreKeys, trackingBead.CreatedAt)
 		stats.dispatchesCreated++
