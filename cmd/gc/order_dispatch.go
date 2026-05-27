@@ -44,8 +44,7 @@ const (
 	orderTrackingWatchdogMetadataInitiator = "controller-watchdog"
 	orderTrackingCloseVerifyAttempts       = 3
 	orderTrackingCloseVerifyRetryDelay     = 25 * time.Millisecond
-	orderDispatchSnapshotBudget            = 4 * time.Second
-	orderDispatchStoreReadBudget           = 1500 * time.Millisecond
+	orderDispatchSnapshotBudget            = 12 * time.Second
 	orderDispatchSingleReadBudget          = 500 * time.Millisecond
 	orderDispatchTrackingWriteBudget       = time.Second
 	orderDispatchOpenReadLimit             = 1000
@@ -670,9 +669,7 @@ func buildOrderDispatchSnapshots(ctx context.Context, inputs map[string]*orderDi
 		if input == nil || input.store == nil {
 			continue
 		}
-		storeCtx, cancel := context.WithTimeout(ctx, orderDispatchStoreReadBudget)
-		result.byStore[key] = buildOrderDispatchStoreSnapshot(storeCtx, input, now)
-		cancel()
+		result.byStore[key] = buildOrderDispatchStoreSnapshot(ctx, input, now)
 	}
 	return result
 }
@@ -691,6 +688,7 @@ func buildOrderDispatchStoreSnapshot(ctx context.Context, input *orderDispatchSn
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	snapshot.captureOpenTracking(ctx, input.store, names)
 	for _, name := range names {
 		if err := ctx.Err(); err != nil {
 			snapshot.addDegradation(name, "snapshot deadline", err)
@@ -701,20 +699,45 @@ func buildOrderDispatchStoreSnapshot(ctx context.Context, input *orderDispatchSn
 	return snapshot
 }
 
-func (s *orderDispatchStoreSnapshot) captureOrder(ctx context.Context, store beads.Store, scopedName string, needsLastRun, needsCursor bool) {
-	tracking, err := orderDispatchRuntimeList(ctx, store, beads.ListQuery{
-		Label: scopedOrderTrackingLabel(scopedName),
-		Limit: 1,
-	}, "order.dispatch.scoped-tracking")
-	if err != nil {
-		s.addDegradation(scopedName, "scoped order-tracking", err)
+func (s *orderDispatchStoreSnapshot) captureOpenTracking(ctx context.Context, store beads.Store, names []string) {
+	if len(names) == 0 {
 		return
 	}
-	for _, b := range tracking {
-		if b.Status != "closed" {
-			s.openByOrder[scopedName] = true
+	tracking, err := orderDispatchRuntimeList(ctx, store, beads.ListQuery{
+		Label: labelOrderTracking,
+		Limit: orderDispatchOpenReadLimit,
+	}, "order.dispatch.open-tracking")
+	if err != nil {
+		for _, name := range names {
+			s.addDegradation(name, "open order-tracking", err)
+		}
+		return
+	}
+	if len(tracking) >= orderDispatchOpenReadLimit {
+		err := fmt.Errorf("open order-tracking read hit cap %d", orderDispatchOpenReadLimit)
+		for _, name := range names {
+			s.addDegradation(name, "open order-tracking", err)
 		}
 	}
+	known := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		known[name] = struct{}{}
+	}
+	for _, b := range tracking {
+		if b.Status == "closed" {
+			continue
+		}
+		name, ok := orderNameFromTrackingBead(b)
+		if !ok {
+			continue
+		}
+		if _, ok := known[name]; ok {
+			s.openByOrder[name] = true
+		}
+	}
+}
+
+func (s *orderDispatchStoreSnapshot) captureOrder(ctx context.Context, store beads.Store, scopedName string, needsLastRun, needsCursor bool) {
 	if s.openByOrder[scopedName] {
 		return
 	}
@@ -733,6 +756,9 @@ func (s *orderDispatchStoreSnapshot) captureOrder(ctx context.Context, store bea
 		s.addDegradation(scopedName, "checking open work", fmt.Errorf("open work read hit cap %d", orderDispatchOpenReadLimit))
 	}
 	for _, b := range openWork {
+		if needsLastRun && b.CreatedAt.After(s.lastRunByOrder[scopedName]) {
+			s.lastRunByOrder[scopedName] = b.CreatedAt
+		}
 		if b.Status == "closed" {
 			continue
 		}

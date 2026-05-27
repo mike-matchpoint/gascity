@@ -90,6 +90,12 @@ type slowOrderDispatchListStore struct {
 	delay     time.Duration
 }
 
+type delayedOrderDispatchListStore struct {
+	beads.Store
+
+	delay time.Duration
+}
+
 type rowCapRuntimeListStore struct {
 	beads.Store
 }
@@ -236,6 +242,13 @@ func (s *countingListStore) List(query beads.ListQuery) ([]beads.Bead, error) {
 
 func (s slowOrderDispatchListStore) List(query beads.ListQuery) ([]beads.Bead, error) {
 	if query.Label == s.slowLabel {
+		time.Sleep(s.delay)
+	}
+	return s.Store.List(query)
+}
+
+func (s delayedOrderDispatchListStore) List(query beads.ListQuery) ([]beads.Bead, error) {
+	if s.delay > 0 {
 		time.Sleep(s.delay)
 	}
 	return s.Store.List(query)
@@ -1456,6 +1469,58 @@ func TestOrderDispatchSnapshotSlowListDefersOneOrderWithoutBlockingUnrelated(t *
 	}
 	if !rec.hasSubject("aaa-slow") {
 		t.Fatal("degraded slow order did not record a deferral/failure event")
+	}
+}
+
+func TestOrderDispatchSnapshotManyOrdersDoesNotExhaustSharedStoreBudget(t *testing.T) {
+	store := delayedOrderDispatchListStore{
+		Store: beads.NewMemStore(),
+		delay: 50 * time.Millisecond,
+	}
+	rec := &memRecorder{}
+	ran := make(map[string]bool)
+	fakeExec := func(_ context.Context, command, _ string, _ []string) ([]byte, error) {
+		ran[command] = true
+		return nil, nil
+	}
+	var aa []orders.Order
+	for i := 0; i < 24; i++ {
+		name := fmt.Sprintf("order-%02d", i)
+		aa = append(aa, orders.Order{
+			Name:     name,
+			Trigger:  "cooldown",
+			Interval: "1s",
+			Exec:     name,
+		})
+	}
+	ad := buildOrderDispatcherFromListExec(aa, store, nil, fakeExec, rec)
+	if ad == nil {
+		t.Fatal("expected non-nil dispatcher")
+	}
+
+	start := time.Now()
+	ad.dispatch(context.Background(), t.TempDir(), time.Now().Add(time.Hour))
+	elapsed := time.Since(start)
+	ad.drain(context.Background())
+
+	if elapsed >= 5*time.Second {
+		t.Fatalf("dispatch elapsed = %v, want under 5s for bounded snapshot", elapsed)
+	}
+	for _, order := range aa {
+		if !ran[order.Exec] {
+			t.Fatalf("%s did not run; ran=%v", order.Name, ran)
+		}
+	}
+	tick, ok := rec.eventByType(events.OrderDispatchTick)
+	if !ok {
+		t.Fatal("missing order dispatch tick event")
+	}
+	var payload events.OrderDispatchTickPayload
+	if err := json.Unmarshal(tick.Payload, &payload); err != nil {
+		t.Fatalf("decode tick payload: %v", err)
+	}
+	if payload.OrdersDeferred != 0 {
+		t.Fatalf("OrdersDeferred = %d, want 0; payload=%+v", payload.OrdersDeferred, payload)
 	}
 }
 
@@ -6912,8 +6977,8 @@ func TestOrderDispatchCachesOpenWorkGateWithinDispatch(t *testing.T) {
 	if !ran {
 		t.Fatal("expected order to dispatch")
 	}
-	if got := store.counts[scopedOrderTrackingLabel("cache-test")]; got != 1 {
-		t.Fatalf("scoped tracking label queries = %d, want 1 cached open-work check", got)
+	if got := store.counts[labelOrderTracking]; got != 1 {
+		t.Fatalf("open tracking label queries = %d, want 1 shared open-work check", got)
 	}
 }
 
