@@ -316,6 +316,16 @@ type orderDispatchStoreSnapshot struct {
 	degraded       map[string][]error
 }
 
+type orderDispatchTickStats struct {
+	startedAt             time.Time
+	ordersConsidered      int
+	storesTouched         map[string]struct{}
+	dispatchesCreated     int
+	ordersDeferred        int
+	deferReasons          map[string]int
+	trackingWriteFailures int
+}
+
 // buildOrderDispatcher scans formula layers for orders and returns a
 // dispatcher. Returns nil if no auto-dispatchable orders are found.
 // Scans both city-level and per-rig orders. Rig orders get their Rig
@@ -425,6 +435,12 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	stats := &orderDispatchTickStats{
+		startedAt:     time.Now(),
+		storesTouched: make(map[string]struct{}),
+		deferReasons:  make(map[string]int),
+	}
+	defer m.recordOrderDispatchTick(stats)
 
 	stores := make(map[string]beads.Store)
 	var candidates []orderDispatchCandidate
@@ -435,10 +451,12 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 		if m.orderRigSuspended(a) {
 			continue
 		}
+		stats.ordersConsidered++
 
 		target, err := resolveOrderStoreTarget(cityPath, m.cfg, a)
 		if err != nil {
 			logDispatchError(m.stderr, "gc: order dispatch: resolving target for %s: %v", a.ScopedName(), err)
+			stats.recordDeferred("resolve_target")
 			continue
 		}
 
@@ -448,14 +466,17 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 			store, err = m.storeFn(target)
 			if err != nil {
 				logDispatchError(m.stderr, "gc: order dispatch: opening %s store for %s: %v", target.ScopeKind, a.ScopedName(), err)
+				stats.recordDeferred("open_store")
 				continue
 			}
 			stores[storeKey] = store
 		}
+		stats.touchStore(storeKey)
 
 		storesForGate := []beads.Store{store}
 		legacyStore, legacyOK := m.legacyCityStoreForTarget(cityPath, target, stores)
 		if !legacyOK {
+			stats.recordDeferred("legacy_store")
 			continue
 		}
 		if legacyStore != nil {
@@ -463,7 +484,9 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 		}
 		storeKeysForGate := []string{storeKey}
 		if legacyStore != nil {
-			storeKeysForGate = append(storeKeysForGate, orderStoreTargetKey(legacyOrderCityTarget(cityPath, m.cfg)))
+			legacyKey := orderStoreTargetKey(legacyOrderCityTarget(cityPath, m.cfg))
+			storeKeysForGate = append(storeKeysForGate, legacyKey)
+			stats.touchStore(legacyKey)
 		}
 		scoped := a.ScopedName()
 		for idx, gateStore := range storesForGate {
@@ -515,7 +538,7 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 		a := candidate.order
 		scoped := a.ScopedName()
 		if err := snapshots.degradation(scoped, candidate.gateStoreKeys); err != nil {
-			m.recordOrderDispatchDeferred(scoped, fmt.Errorf("snapshot degraded: %w", err))
+			m.recordOrderDispatchDeferred(scoped, fmt.Errorf("snapshot degraded: %w", err), stats)
 			continue
 		}
 		if snapshots.hasOpenWork(scoped, candidate.gateStoreKeys) {
@@ -551,9 +574,11 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 			})
 			if createErr != nil {
 				logDispatchError(m.stderr, "gc: order dispatch: creating trigger env failure tracking bead for %s: %v", scoped, createErr)
+				stats.recordTrackingWriteFailure()
 			} else {
 				m.rememberLastRun(scoped, candidate.gateStoreKeys, trackingBead.CreatedAt)
 			}
+			stats.recordDeferred("trigger_env")
 			m.rec.Record(events.Event{
 				Type:    events.OrderFailed,
 				Actor:   "controller",
@@ -564,7 +589,7 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 		}
 		result := orders.CheckTriggerWithOptions(a, now, lastRunFn, m.ep, cursorFn, triggerOpts)
 		if err := snapshots.degradation(scoped, candidate.gateStoreKeys); err != nil {
-			m.recordOrderDispatchDeferred(scoped, fmt.Errorf("snapshot degraded after trigger evaluation: %w", err))
+			m.recordOrderDispatchDeferred(scoped, fmt.Errorf("snapshot degraded after trigger evaluation: %w", err), stats)
 			continue
 		}
 		if orderTriggerUsesLastRun(a) && !result.LastRun.IsZero() {
@@ -582,9 +607,12 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 		})
 		if err != nil {
 			logDispatchError(m.stderr, "gc: order dispatch: creating tracking bead for %s: %v", scoped, err)
+			stats.recordTrackingWriteFailure()
+			stats.recordDeferred("tracking_write")
 			continue
 		}
 		m.rememberLastRun(scoped, candidate.gateStoreKeys, trackingBead.CreatedAt)
+		stats.dispatchesCreated++
 
 		// Fire with timeout; inflight tracks the spawned goroutine so
 		// drain can wait for tracking-bead outcome persistence before
@@ -593,6 +621,37 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 		m.addInflight()
 		m.launchDispatchOne(ctx, candidate.store, candidate.target, orderToDispatch, cityPath, trackingBead.ID)
 	}
+}
+
+func (s *orderDispatchTickStats) touchStore(key string) {
+	if s == nil || key == "" {
+		return
+	}
+	if s.storesTouched == nil {
+		s.storesTouched = make(map[string]struct{})
+	}
+	s.storesTouched[key] = struct{}{}
+}
+
+func (s *orderDispatchTickStats) recordDeferred(reason string) {
+	if s == nil {
+		return
+	}
+	s.ordersDeferred++
+	if reason == "" {
+		reason = "error"
+	}
+	if s.deferReasons == nil {
+		s.deferReasons = make(map[string]int)
+	}
+	s.deferReasons[reason]++
+}
+
+func (s *orderDispatchTickStats) recordTrackingWriteFailure() {
+	if s == nil {
+		return
+	}
+	s.trackingWriteFailures++
 }
 
 func buildOrderDispatchSnapshots(ctx context.Context, inputs map[string]*orderDispatchSnapshotInput, now time.Time) orderDispatchSnapshots {
@@ -887,8 +946,11 @@ func (m *memoryOrderDispatcher) cachedLastRunOnly(orderName string, storeKeys []
 	return last, ok
 }
 
-func (m *memoryOrderDispatcher) recordOrderDispatchDeferred(scoped string, err error) {
+func (m *memoryOrderDispatcher) recordOrderDispatchDeferred(scoped string, err error, stats *orderDispatchTickStats) {
 	logDispatchError(m.stderr, "gc: order dispatch: deferring %s: %v", scoped, err)
+	if stats != nil {
+		stats.recordDeferred("snapshot_degraded")
+	}
 	if m.rec != nil {
 		m.rec.Record(events.Event{
 			Type:    events.OrderFailed,
@@ -897,6 +959,40 @@ func (m *memoryOrderDispatcher) recordOrderDispatchDeferred(scoped string, err e
 			Message: fmt.Sprintf("deferred order dispatch: %v", err),
 		})
 	}
+}
+
+func (m *memoryOrderDispatcher) recordOrderDispatchTick(stats *orderDispatchTickStats) {
+	if m.rec == nil || stats == nil {
+		return
+	}
+	deferReasons := make(map[string]int, len(stats.deferReasons))
+	for reason, count := range stats.deferReasons {
+		deferReasons[reason] = count
+	}
+	if len(deferReasons) == 0 {
+		deferReasons = nil
+	}
+	payload, err := json.Marshal(events.OrderDispatchTickPayload{
+		StartedAt:          stats.startedAt.UTC().Format(time.RFC3339Nano),
+		DurationSeconds:    time.Since(stats.startedAt).Seconds(),
+		OrdersConsidered:   stats.ordersConsidered,
+		StoresTouched:      len(stats.storesTouched),
+		DispatchesCreated:  stats.dispatchesCreated,
+		OrdersDeferred:     stats.ordersDeferred,
+		DeferReasons:       deferReasons,
+		TrackingWriteFails: stats.trackingWriteFailures,
+		InFlight:           m.currentInflight(),
+	})
+	if err != nil {
+		logDispatchError(m.stderr, "gc: order dispatch: encoding tick telemetry: %v", err)
+		return
+	}
+	m.rec.Record(events.Event{
+		Type:    events.OrderDispatchTick,
+		Actor:   "controller",
+		Subject: m.cityName,
+		Payload: payload,
+	})
 }
 
 func createOrderTrackingBeadBounded(ctx context.Context, store beads.Store, bead beads.Bead) (beads.Bead, error) {
@@ -975,6 +1071,12 @@ func (m *memoryOrderDispatcher) doneInflight() {
 		m.inflightDone = nil
 	}
 	m.inflightMu.Unlock()
+}
+
+func (m *memoryOrderDispatcher) currentInflight() int {
+	m.inflightMu.Lock()
+	defer m.inflightMu.Unlock()
+	return m.inflightN
 }
 
 // drain blocks until all in-flight dispatchOne goroutines complete or ctx

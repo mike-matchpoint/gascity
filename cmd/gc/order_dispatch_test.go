@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1384,6 +1385,49 @@ func TestOrderDispatchSnapshotSlowListDefersOneOrderWithoutBlockingUnrelated(t *
 	}
 }
 
+func TestOrderDispatchRecordsTickTelemetry(t *testing.T) {
+	store := beads.NewMemStore()
+	var rec memRecorder
+	fakeExec := func(_ context.Context, _, _ string, _ []string) ([]byte, error) {
+		return []byte("ok\n"), nil
+	}
+	aa := []orders.Order{{
+		Name:     "tick-order",
+		Trigger:  "cooldown",
+		Interval: "1s",
+		Exec:     "echo ok",
+	}}
+	ad := buildOrderDispatcherFromListExec(aa, store, nil, fakeExec, &rec)
+	if ad == nil {
+		t.Fatal("expected non-nil dispatcher")
+	}
+
+	ad.dispatch(context.Background(), t.TempDir(), time.Now().Add(5*time.Second))
+	ad.drain(context.Background())
+
+	event, ok := rec.eventByType(events.OrderDispatchTick)
+	if !ok {
+		t.Fatalf("missing %s event; events=%#v", events.OrderDispatchTick, rec.snapshot())
+	}
+	var payload events.OrderDispatchTickPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatalf("decode tick payload: %v; raw=%s", err, event.Payload)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, payload.StartedAt); err != nil {
+		t.Fatalf("StartedAt = %q: %v", payload.StartedAt, err)
+	}
+	if payload.OrdersConsidered != 1 || payload.StoresTouched != 1 || payload.DispatchesCreated != 1 {
+		t.Fatalf("tick payload counts = considered:%d stores:%d dispatched:%d; payload=%+v",
+			payload.OrdersConsidered, payload.StoresTouched, payload.DispatchesCreated, payload)
+	}
+	if payload.OrdersDeferred != 0 || payload.TrackingWriteFails != 0 || len(payload.DeferReasons) != 0 {
+		t.Fatalf("unexpected deferral in tick payload: %+v", payload)
+	}
+	if payload.DurationSeconds < 0 {
+		t.Fatalf("DurationSeconds = %f, want non-negative", payload.DurationSeconds)
+	}
+}
+
 func TestOrderDispatchOpenCrossOrderDependencyDoesNotSuppressDifferentOrder(t *testing.T) {
 	store := beads.NewMemStore()
 	wo20, err := store.Create(beads.Bead{
@@ -1789,17 +1833,20 @@ dolt.auto-start: false
 	if !rec.hasType(events.OrderFailed) {
 		t.Fatal("missing order.failed event for trigger env failure")
 	}
-	rec.mu.Lock()
-	eventsSnapshot := append([]events.Event(nil), rec.events...)
-	rec.mu.Unlock()
-	if len(eventsSnapshot) != 1 {
-		t.Fatalf("recorded events = %#v, want one order.failed event", eventsSnapshot)
+	var failures []events.Event
+	for _, event := range rec.snapshot() {
+		if event.Type == events.OrderFailed {
+			failures = append(failures, event)
+		}
 	}
-	if eventsSnapshot[0].Subject != "pg-condition" {
-		t.Fatalf("order.failed subject = %q, want pg-condition", eventsSnapshot[0].Subject)
+	if len(failures) != 1 {
+		t.Fatalf("recorded order.failed events = %#v, want one; all events=%#v", failures, rec.snapshot())
 	}
-	if !strings.Contains(eventsSnapshot[0].Message, "building trigger env") {
-		t.Fatalf("order.failed message = %q, want trigger env context", eventsSnapshot[0].Message)
+	if failures[0].Subject != "pg-condition" {
+		t.Fatalf("order.failed subject = %q, want pg-condition", failures[0].Subject)
+	}
+	if !strings.Contains(failures[0].Message, "building trigger env") {
+		t.Fatalf("order.failed message = %q, want trigger env context", failures[0].Message)
 	}
 	all := trackingBeads(t, store, "order-run:pg-condition")
 	if len(all) != 1 {
@@ -1814,11 +1861,8 @@ dolt.auto-start: false
 	mad.dispatch(context.Background(), cityDir, now.Add(10*time.Second))
 	mad.drain(context.Background())
 
-	rec.mu.Lock()
-	eventsSnapshot = append([]events.Event(nil), rec.events...)
-	rec.mu.Unlock()
 	failedEvents := 0
-	for _, event := range eventsSnapshot {
+	for _, event := range rec.snapshot() {
 		if event.Type == events.OrderFailed && event.Subject == "pg-condition" {
 			failedEvents++
 		}
@@ -5567,6 +5611,25 @@ func (r *memRecorder) hasSubject(subject string) bool {
 		}
 	}
 	return false
+}
+
+func (r *memRecorder) eventByType(typ string) (events.Event, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, e := range r.events {
+		if e.Type == typ {
+			return e, true
+		}
+	}
+	return events.Event{}, false
+}
+
+func (r *memRecorder) snapshot() []events.Event {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]events.Event, len(r.events))
+	copy(out, r.events)
+	return out
 }
 
 // --- dedup / tracking bead lifecycle tests ---

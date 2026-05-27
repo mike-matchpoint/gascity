@@ -10,6 +10,7 @@ import (
 	"github.com/gastownhall/gascity/internal/api"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/doctor"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/session"
 	"github.com/gastownhall/gascity/internal/worker"
@@ -79,11 +80,12 @@ type StatusRigJSON struct {
 
 // StatusSummaryJSON is the agent count summary in JSON output.
 type StatusSummaryJSON struct {
-	TotalAgents       int          `json:"total_agents"`
-	RunningAgents     int          `json:"running_agents"`
-	ActiveSessions    int          `json:"active_sessions,omitempty"`
-	SuspendedSessions int          `json:"suspended_sessions,omitempty"`
-	StoreHealth       *StoreHealth `json:"store_health,omitempty"`
+	TotalAgents       int                           `json:"total_agents"`
+	RunningAgents     int                           `json:"running_agents"`
+	ActiveSessions    int                           `json:"active_sessions,omitempty"`
+	SuspendedSessions int                           `json:"suspended_sessions,omitempty"`
+	StoreHealth       *StoreHealth                  `json:"store_health,omitempty"`
+	DoltContention    *doctor.DoltContentionSummary `json:"dolt_contention,omitempty"`
 }
 
 // StoreHealth is the JSON shape of the Dolt bead store health block
@@ -309,6 +311,7 @@ func snapshotFromStatusView(cityPath string, v api.StatusView) cityStatusSnapsho
 			LastGCStatus: v.StoreHealth.LastGCStatus,
 		}
 	}
+	snapshot.Summary.DoltContention = buildCityDoltContentionSummary(cityPath)
 	return snapshot
 }
 

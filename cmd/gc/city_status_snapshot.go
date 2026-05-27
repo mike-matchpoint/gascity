@@ -167,6 +167,7 @@ func collectCityStatusSnapshotFromStoreSnapshot(
 	registerStatusProviderACPRoutes(sp, statusSnapshot, snapshot.CityName, cfg)
 	if snapshot.Controller.Running && cityPath != "" {
 		snapshot.Summary.StoreHealth = buildCityStoreHealth(cityPath, store, stderr)
+		snapshot.Summary.DoltContention = buildCityDoltContentionSummary(cityPath)
 	}
 	if cfg == nil {
 		return snapshot
@@ -439,6 +440,9 @@ func cityStatusJSONFromSnapshot(snapshot cityStatusSnapshot, summary StatusSumma
 	if snapshot.Summary.TotalAgents > 0 && snapshot.Summary.RunningAgents == 0 {
 		signals = append(signals, "no_agents_running")
 	}
+	if snapshot.Summary.DoltContention != nil && !snapshot.Summary.DoltContention.Healthy() {
+		signals = append(signals, "dolt_contention")
+	}
 	degraded := len(signals) > 0
 	running := snapshot.Controller.Running
 	return StatusJSON{
@@ -514,4 +518,5 @@ func renderCityStatusText(snapshot cityStatusSnapshot, dops drainOps, stdout io.
 	}
 
 	renderStoreHealthBlock(stdout, snapshot.Summary.StoreHealth)
+	renderDoltContentionBlock(stdout, snapshot.Summary.DoltContention)
 }

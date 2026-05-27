@@ -50,6 +50,7 @@ dolt-server
 dolt-noms-size
 dolt-config
 dolt-version
+dolt-contention
 events-log
 events-log-size
 bd-backup-size

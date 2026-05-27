@@ -34,3 +34,23 @@ type StoreMaintenanceFailedPayload struct {
 
 // IsEventPayload marks StoreMaintenanceFailedPayload as an events.Payload variant.
 func (StoreMaintenanceFailedPayload) IsEventPayload() {}
+
+// OrderDispatchTickPayload summarizes one controller order-dispatch tick.
+type OrderDispatchTickPayload struct {
+	StartedAt          string         `json:"started_at"`
+	DurationSeconds    float64        `json:"duration_s"`
+	OrdersConsidered   int            `json:"orders_considered"`
+	StoresTouched      int            `json:"stores_touched"`
+	DispatchesCreated  int            `json:"dispatches_created"`
+	OrdersDeferred     int            `json:"orders_deferred"`
+	DeferReasons       map[string]int `json:"defer_reasons,omitempty"`
+	TrackingWriteFails int            `json:"tracking_write_failures,omitempty"`
+	InFlight           int            `json:"in_flight,omitempty"`
+}
+
+// IsEventPayload marks OrderDispatchTickPayload as an events.Payload variant.
+func (OrderDispatchTickPayload) IsEventPayload() {}
+
+func init() {
+	RegisterPayload(OrderDispatchTick, OrderDispatchTickPayload{})
+}

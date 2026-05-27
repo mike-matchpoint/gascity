@@ -2057,6 +2057,9 @@
             "$ref": "#/components/schemas/NoPayload"
           },
           {
+            "$ref": "#/components/schemas/OrderDispatchTickPayload"
+          },
+          {
             "$ref": "#/components/schemas/OutboundEventPayload"
           },
           {
@@ -4180,6 +4183,58 @@
           "scoped_name",
           "due",
           "reason"
+        ],
+        "type": "object"
+      },
+      "OrderDispatchTickPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "defer_reasons": {
+            "additionalProperties": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": "object"
+          },
+          "dispatches_created": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "duration_s": {
+            "format": "double",
+            "type": "number"
+          },
+          "in_flight": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "orders_considered": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "orders_deferred": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "stores_touched": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "tracking_write_failures": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "started_at",
+          "duration_s",
+          "orders_considered",
+          "stores_touched",
+          "dispatches_created",
+          "orders_deferred"
         ],
         "type": "object"
       },
@@ -7333,6 +7388,7 @@
             "mail.replied": "#/components/schemas/TypedEventStreamEnvelopeMailReplied",
             "mail.sent": "#/components/schemas/TypedEventStreamEnvelopeMailSent",
             "order.completed": "#/components/schemas/TypedEventStreamEnvelopeOrderCompleted",
+            "order.dispatch.tick": "#/components/schemas/TypedEventStreamEnvelopeOrderDispatchTick",
             "order.failed": "#/components/schemas/TypedEventStreamEnvelopeOrderFailed",
             "order.fired": "#/components/schemas/TypedEventStreamEnvelopeOrderFired",
             "project.identity.stamped": "#/components/schemas/TypedEventStreamEnvelopeProjectIdentityStamped",
@@ -7449,6 +7505,9 @@
           },
           {
             "$ref": "#/components/schemas/TypedEventStreamEnvelopeOrderCompleted"
+          },
+          {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelopeOrderDispatchTick"
           },
           {
             "$ref": "#/components/schemas/TypedEventStreamEnvelopeOrderFailed"
@@ -8061,6 +8120,7 @@
                 "order.fired",
                 "order.completed",
                 "order.failed",
+                "order.dispatch.tick",
                 "provider.swapped",
                 "worker.operation",
                 "project.identity.stamped",
@@ -8848,6 +8908,48 @@
           "payload"
         ],
         "title": "TypedEventStreamEnvelope order.completed",
+        "type": "object"
+      },
+      "TypedEventStreamEnvelopeOrderDispatchTick": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/OrderDispatchTickPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "order.dispatch.tick",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload"
+        ],
+        "title": "TypedEventStreamEnvelope order.dispatch.tick",
         "type": "object"
       },
       "TypedEventStreamEnvelopeOrderFailed": {
@@ -9975,6 +10077,7 @@
             "mail.replied": "#/components/schemas/TypedTaggedEventStreamEnvelopeMailReplied",
             "mail.sent": "#/components/schemas/TypedTaggedEventStreamEnvelopeMailSent",
             "order.completed": "#/components/schemas/TypedTaggedEventStreamEnvelopeOrderCompleted",
+            "order.dispatch.tick": "#/components/schemas/TypedTaggedEventStreamEnvelopeOrderDispatchTick",
             "order.failed": "#/components/schemas/TypedTaggedEventStreamEnvelopeOrderFailed",
             "order.fired": "#/components/schemas/TypedTaggedEventStreamEnvelopeOrderFired",
             "project.identity.stamped": "#/components/schemas/TypedTaggedEventStreamEnvelopeProjectIdentityStamped",
@@ -10091,6 +10194,9 @@
           },
           {
             "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeOrderCompleted"
+          },
+          {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeOrderDispatchTick"
           },
           {
             "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeOrderFailed"
@@ -10750,6 +10856,7 @@
                 "order.fired",
                 "order.completed",
                 "order.failed",
+                "order.dispatch.tick",
                 "provider.swapped",
                 "worker.operation",
                 "project.identity.stamped",
@@ -11610,6 +11717,52 @@
           "city"
         ],
         "title": "TypedTaggedEventStreamEnvelope order.completed",
+        "type": "object"
+      },
+      "TypedTaggedEventStreamEnvelopeOrderDispatchTick": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/OrderDispatchTickPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "order.dispatch.tick",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload",
+          "city"
+        ],
+        "title": "TypedTaggedEventStreamEnvelope order.dispatch.tick",
         "type": "object"
       },
       "TypedTaggedEventStreamEnvelopeOrderFailed": {

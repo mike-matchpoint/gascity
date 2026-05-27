@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -163,6 +164,42 @@ func TestCityStatusTextIncludesStoreHealthBlockWhenSupervisorAlive(t *testing.T)
 	}
 	if !strings.Contains(stdout.String(), "Store health:") {
 		t.Fatalf("stdout missing Store health block:\n%s", stdout.String())
+	}
+}
+
+func TestCityStatusIncludesDoltContentionSummaryWhenSupervisorAlive(t *testing.T) {
+	cityPath := registerCityForSnapshot(t)
+	stubSupervisorAlive(t)
+	stubStoreHealthEvents(t, events.NewFake())
+	logDir := filepath.Join(cityPath, ".gc", "runtime", "packs", "dolt")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(logDir, "dolt.log"), []byte(`time="2026-05-27T10:00:00-07:00" level=warning msg="error running query" connectionDb=hq error="backup 'backup_export' not found"`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := beads.NewMemStore()
+	oldOpen := openCityStoreAtForStatus
+	openCityStoreAtForStatus = func(string) (beads.Store, error) { return store, nil }
+	t.Cleanup(func() { openCityStoreAtForStatus = oldOpen })
+
+	cfg := &config.City{Workspace: config.Workspace{Name: "bright-lights"}}
+	var stdout, stderr bytes.Buffer
+	code := doCityStatusJSON(runtime.NewFake(), cfg, cityPath, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr: %s", code, stderr.String())
+	}
+
+	var got StatusJSON
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("Unmarshal: %v; stdout: %s", err, stdout.String())
+	}
+	if got.Summary.DoltContention == nil || got.Summary.DoltContention.BackupExportWarnings != 1 {
+		t.Fatalf("DoltContention = %+v; stdout: %s", got.Summary.DoltContention, stdout.String())
+	}
+	if !containsString(got.Health.Signals, "dolt_contention") {
+		t.Fatalf("health signals = %#v, want dolt_contention", got.Health.Signals)
 	}
 }
 
