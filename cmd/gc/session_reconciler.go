@@ -28,12 +28,79 @@ import (
 	"github.com/gastownhall/gascity/internal/telemetry"
 )
 
-const maxIdleSleepProbesPerTick = 3
+const (
+	maxIdleSleepProbesPerTick = 3
+
+	namedSessionPatrolWispNudgeSource        = "patrol-wisp"
+	namedSessionPatrolWispNudgeMessage       = "Patrol wisp is ready. Run gc hook to continue the assigned patrol iteration."
+	namedSessionPatrolWispNudgeRefMetadata   = "last_patrol_wisp_nudge_ref"
+	namedSessionPatrolWispNudgeEpochMetadata = "last_patrol_wisp_nudge_epoch"
+	namedSessionPatrolWispNudgeAtMetadata    = "last_patrol_wisp_nudge_at"
+)
 
 type wakeTarget struct {
 	session *beads.Bead
 	tp      TemplateParams
 	alive   bool
+}
+
+func maybeQueueNamedSessionPatrolWispNudge(
+	cityPath string,
+	store beads.Store,
+	sp runtime.Provider,
+	cfg *config.City,
+	target wakeTarget,
+	source NamedSessionWispDemandSource,
+	now time.Time,
+	stderr io.Writer,
+) {
+	if cityPath == "" || store == nil || sp == nil || target.session == nil {
+		return
+	}
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	refID := source.ReferenceID()
+	if refID == "" {
+		return
+	}
+	targetNudge := resolveNudgeTargetFromSessionBead(cityPath, cfg, *target.session)
+	continuationEpoch := strings.TrimSpace(targetNudge.continuationEpoch)
+	if strings.TrimSpace(target.session.Metadata[namedSessionPatrolWispNudgeRefMetadata]) == refID &&
+		strings.TrimSpace(target.session.Metadata[namedSessionPatrolWispNudgeEpochMetadata]) == continuationEpoch {
+		return
+	}
+	item := newQueuedNudgeWithOptions(
+		targetNudge.agentKey(),
+		namedSessionPatrolWispNudgeMessage,
+		namedSessionPatrolWispNudgeSource,
+		now,
+		queuedNudgeOptions{
+			SessionID:         targetNudge.sessionID,
+			ContinuationEpoch: targetNudge.continuationEpoch,
+			Reference:         &nudgeReference{Kind: namedSessionPatrolWispNudgeSource, ID: refID},
+		},
+	)
+	if err := enqueueQueuedNudgeWithStore(cityPath, store, item); err != nil {
+		fmt.Fprintf(stderr, "session reconciler: queueing patrol-wisp nudge for %s from %s: %v\n", targetNudge.agentKey(), refID, err) //nolint:errcheck
+		return
+	}
+	batch := map[string]string{
+		namedSessionPatrolWispNudgeRefMetadata:   refID,
+		namedSessionPatrolWispNudgeEpochMetadata: continuationEpoch,
+		namedSessionPatrolWispNudgeAtMetadata:    now.UTC().Format(time.RFC3339),
+	}
+	if err := store.SetMetadataBatch(target.session.ID, batch); err != nil {
+		fmt.Fprintf(stderr, "session reconciler: stamping patrol-wisp nudge for %s from %s: %v\n", targetNudge.agentKey(), refID, err) //nolint:errcheck
+		return
+	}
+	if target.session.Metadata == nil {
+		target.session.Metadata = make(map[string]string, len(batch))
+	}
+	for key, value := range batch {
+		target.session.Metadata[key] = value
+	}
+	maybeStartNudgePoller(targetNudge)
 }
 
 func lifecycleTimerBlocker(metadata map[string]string, now time.Time) string {
@@ -704,7 +771,7 @@ func reconcileSessionBeadsAtPath(
 ) int {
 	return reconcileSessionBeadsAtPathWithNamedDemand(
 		ctx, cityPath, sessions, desiredState, configuredNames, cfg, sp, store, dops, assignedWorkBeads, rigStores, readyWaitSet, dt,
-		poolDesired, nil, storeQueryPartial, workSet, cityName, it, clk, rec, startupTimeout, driftDrainTimeout, stdout, stderr,
+		poolDesired, nil, nil, storeQueryPartial, workSet, cityName, it, clk, rec, startupTimeout, driftDrainTimeout, stdout, stderr,
 	)
 }
 
@@ -724,6 +791,7 @@ func reconcileSessionBeadsAtPathWithNamedDemand(
 	dt *drainTracker,
 	poolDesired map[string]int,
 	namedSessionDemand map[string]bool,
+	namedSessionWispDemand map[string]NamedSessionWispDemandSource,
 	storeQueryPartial bool,
 	workSet map[string]bool,
 	cityName string,
@@ -736,7 +804,7 @@ func reconcileSessionBeadsAtPathWithNamedDemand(
 ) int {
 	return reconcileSessionBeadsTracedWithNamedDemand(
 		ctx, cityPath, sessions, desiredState, configuredNames, cfg, sp, store, dops, assignedWorkBeads, rigStores, readyWaitSet, dt,
-		poolDesired, namedSessionDemand, storeQueryPartial, workSet, cityName, it, clk, rec, startupTimeout, driftDrainTimeout, stdout, stderr, nil,
+		poolDesired, namedSessionDemand, namedSessionWispDemand, storeQueryPartial, workSet, cityName, it, clk, rec, startupTimeout, driftDrainTimeout, stdout, stderr, nil,
 	)
 }
 
@@ -769,7 +837,7 @@ func reconcileSessionBeadsTraced(
 ) int {
 	return reconcileSessionBeadsTracedWithNamedDemand(
 		ctx, cityPath, sessions, desiredState, configuredNames, cfg, sp, store, dops, assignedWorkBeads, rigStores, readyWaitSet, dt,
-		poolDesired, nil, storeQueryPartial, workSet, cityName, it, clk, rec, startupTimeout, driftDrainTimeout, stdout, stderr, trace,
+		poolDesired, nil, nil, storeQueryPartial, workSet, cityName, it, clk, rec, startupTimeout, driftDrainTimeout, stdout, stderr, trace,
 		startOptions...,
 	)
 }
@@ -790,6 +858,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 	dt *drainTracker,
 	poolDesired map[string]int,
 	namedSessionDemand map[string]bool,
+	namedSessionWispDemand map[string]NamedSessionWispDemandSource,
 	storeQueryPartial bool,
 	workSet map[string]bool,
 	cityName string,
@@ -2071,6 +2140,15 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			if target.session.Metadata["sleep_intent"] == "idle-stop-pending" {
 				_ = store.SetMetadata(target.session.ID, "sleep_intent", "")
 				target.session.Metadata["sleep_intent"] = ""
+			}
+			if decision.Reason == "named-demand" && len(namedSessionWispDemand) > 0 {
+				identity := namedSessionIdentity(*target.session)
+				if identity == "" {
+					identity = strings.TrimSpace(target.tp.ConfiguredNamedIdentity)
+				}
+				if source, ok := namedSessionWispDemand[identity]; ok {
+					maybeQueueNamedSessionPatrolWispNudge(cityPath, store, sp, cfg, target, source, clk.Now(), stderr)
+				}
 			}
 		}
 
