@@ -4777,6 +4777,15 @@ func TestBuildDesiredState_OnDemandNamedSession_PatrolWispMaterializesNamedSessi
 	if err != nil {
 		t.Fatalf("create patrol wisp: %v", err)
 	}
+	inProgress := "in_progress"
+	assignee := "riga/refinery"
+	if err := rigStore.Update(wisp.ID, beads.UpdateOpts{Status: &inProgress, Assignee: &assignee}); err != nil {
+		t.Fatalf("mark patrol wisp in progress: %v", err)
+	}
+	wisp, err = rigStore.Get(wisp.ID)
+	if err != nil {
+		t.Fatalf("get patrol wisp: %v", err)
+	}
 	cfg := &config.City{
 		Workspace: config.Workspace{Name: "test-city"},
 		Rigs:      []config.Rig{{Name: "riga", Path: rigPath}},
@@ -4800,6 +4809,16 @@ func TestBuildDesiredState_OnDemandNamedSession_PatrolWispMaterializesNamedSessi
 	)
 	if !dsResult.NamedSessionDemand["riga/refinery"] {
 		t.Fatal("NamedSessionDemand[riga/refinery] = false for assigned patrol wisp")
+	}
+	source, ok := dsResult.NamedSessionWispDemand["riga/refinery"]
+	if !ok {
+		t.Fatal("NamedSessionWispDemand[riga/refinery] missing for assigned patrol wisp")
+	}
+	if source.WispID != wisp.ID || source.StoreRef != "riga" || source.Status != "in_progress" {
+		t.Fatalf("NamedSessionWispDemand[riga/refinery] = %+v, want wisp=%s store=riga status=in_progress", source, wisp.ID)
+	}
+	if got := source.ReferenceID(); got != "rig:riga:"+wisp.ID {
+		t.Fatalf("NamedSessionWispDemand reference = %q, want %q", got, "rig:riga:"+wisp.ID)
 	}
 	var refineryEntries []TemplateParams
 	for _, tp := range dsResult.State {
@@ -5066,7 +5085,7 @@ func TestBuildDesiredState_OnDemandNamedSession_PatrolWispProbeDoesNotUseHydrate
 	if calls != 0 {
 		t.Fatalf("bd runner calls = %d, want 0 for patrol-wisp hot probe", calls)
 	}
-	if demand["refinery"] {
+	if _, ok := demand["refinery"]; ok {
 		t.Fatal("wisp demand[refinery] = true from degraded/unproven patrol-wisp read")
 	}
 	if !partial {

@@ -2036,6 +2036,7 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 		cr.dops,
 		awakeAssignedWorkBeads, rigStores, readyWaitSet, cr.sessionDrains, poolDesired,
 		result.NamedSessionDemand,
+		result.NamedSessionWispDemand,
 		result.snapshotQueryPartial(),
 		workSet, cityName,
 		cr.it, clock.Real{}, cr.rec, cr.cfg.Session.StartupTimeoutDuration(),
@@ -2496,6 +2497,7 @@ func (cr *CityRuntime) controlDispatcherTick(ctx context.Context) {
 		cr.sessionDrains,
 		poolDesired,
 		wfcResult.NamedSessionDemand,
+		wfcResult.NamedSessionWispDemand,
 		false, // storeQueryPartial: config-change path doesn't query work beads
 		nil,   // workSet: not computed for config-change reconcile
 		cr.cityName,

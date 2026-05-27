@@ -53,6 +53,11 @@ type DesiredStateResult struct {
 	// direct assignee demand (Assignee == identity). The reconciler merges this
 	// into poolDesired so that on-demand named sessions remain config-eligible.
 	NamedSessionDemand map[string]bool
+	// NamedSessionWispDemand records the patrol wisp that produced
+	// NamedSessionDemand for an on-demand named session. The reconciler uses
+	// this only to re-fire an already-live idle named session; generic assigned
+	// work, pool demand, and order dispatch must not consume it.
+	NamedSessionWispDemand map[string]NamedSessionWispDemandSource
 	// StoreQueryPartial is true when one or more bead store work queries
 	// failed. When set, the reconciler must NOT drain sessions based on the
 	// incomplete desired state — a transient failure would cause running
@@ -64,6 +69,26 @@ type DesiredStateResult struct {
 	// orphaned.
 	SessionQueryPartial bool
 	BeaconTime          time.Time
+}
+
+type NamedSessionWispDemandSource struct {
+	WispID    string
+	StoreRef  string
+	Status    string
+	CreatedAt time.Time
+}
+
+func (s NamedSessionWispDemandSource) ReferenceID() string {
+	if strings.TrimSpace(s.WispID) == "" {
+		return ""
+	}
+	storeRef := strings.TrimSpace(s.StoreRef)
+	if storeRef == "" {
+		storeRef = "city"
+	} else {
+		storeRef = "rig:" + storeRef
+	}
+	return storeRef + ":" + strings.TrimSpace(s.WispID)
 }
 
 func (r DesiredStateResult) snapshotQueryPartial() bool {
@@ -587,6 +612,7 @@ func buildDesiredStateWithSessionBeads(
 			break
 		}
 	}
+	var namedWispDemand map[string]NamedSessionWispDemandSource
 	if store != nil && len(namedSpecs) > 0 {
 		wispDemand, wispPartial := namedSessionPatrolWispWakeDemand(cityPath, cfg, store, rigStores, namedSpecs, namedWorkReady, stderr)
 		if wispPartial {
@@ -595,6 +621,7 @@ func buildDesiredStateWithSessionBeads(
 		for identity := range wispDemand {
 			namedWorkReady[identity] = true
 		}
+		namedWispDemand = wispDemand
 	}
 	if len(assignedWorkBeads) > 0 {
 		fmt.Fprintf(stderr, "namedWorkReady: %d assigned beads, %d named specs, ready=%v\n", len(assignedWorkBeads), len(namedSpecs), namedWorkReady) //nolint:errcheck
@@ -660,6 +687,7 @@ func buildDesiredStateWithSessionBeads(
 		AssignedWorkStores:              assignedWorkStores,
 		AssignedWorkStoreRefs:           assignedWorkStoreRefs,
 		NamedSessionDemand:              namedWorkReady,
+		NamedSessionWispDemand:          namedWispDemand,
 		StoreQueryPartial:               storePartial,
 		BeaconTime:                      beaconTime,
 	}
@@ -874,7 +902,7 @@ func namedSessionPatrolWispWakeDemand(
 	namedSpecs map[string]namedSessionSpec,
 	alreadyReady map[string]bool,
 	stderr io.Writer,
-) (map[string]bool, bool) {
+) (map[string]NamedSessionWispDemandSource, bool) {
 	if cfg == nil || cityStore == nil || len(namedSpecs) == 0 {
 		return nil, false
 	}
@@ -885,7 +913,7 @@ func namedSessionPatrolWispWakeDemand(
 	sort.Strings(identities)
 
 	var partial bool
-	demand := make(map[string]bool)
+	demand := make(map[string]NamedSessionWispDemandSource)
 	probeCtx, cancel := context.WithTimeout(context.Background(), namedSessionWispWakeTotalBudget)
 	defer cancel()
 	readPolicy := beads.RuntimeReadPolicy(beads.ReadClassHotDegradedOK, "controller.named-session.wisp-wake")
@@ -929,10 +957,15 @@ func namedSessionPatrolWispWakeDemand(
 					continue
 				}
 				fmt.Fprintf(stderr, "namedWispWake: %s matched by wisp %s (store=%s status=%s)\n", identity, row.ID, storeRef, row.Status) //nolint:errcheck
-				demand[identity] = true
+				demand[identity] = NamedSessionWispDemandSource{
+					WispID:    row.ID,
+					StoreRef:  storeRef,
+					Status:    row.Status,
+					CreatedAt: row.CreatedAt,
+				}
 				break
 			}
-			if demand[identity] {
+			if _, ok := demand[identity]; ok {
 				break
 			}
 		}
