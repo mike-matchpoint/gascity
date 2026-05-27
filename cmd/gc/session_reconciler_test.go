@@ -3340,6 +3340,13 @@ func TestReconcileSessionBeads_OnDemandNamedSessionWakesFromRoutedSingletonTempl
 func TestReconcileSessionBeads_OnDemandNamedSessionQueuesPatrolWispNudgeForLiveSession(t *testing.T) {
 	env := newReconcilerTestEnv()
 	cityPath := t.TempDir()
+	t.Setenv("GC_BEADS", "file")
+	if err := ensureScopedFileStoreLayout(cityPath); err != nil {
+		t.Fatalf("ensure scoped file store layout: %v", err)
+	}
+	if err := ensurePersistedScopeLocalFileStore(cityPath); err != nil {
+		t.Fatalf("ensure persisted scoped file store: %v", err)
+	}
 	env.cfg = &config.City{
 		Workspace: config.Workspace{Name: "test-city"},
 		Daemon:    config.DaemonConfig{NudgeDispatcher: "supervisor"},
@@ -3455,6 +3462,40 @@ func TestReconcileSessionBeads_OnDemandNamedSessionQueuesPatrolWispNudgeForLiveS
 	}
 	if pending[0].Reference == nil || pending[0].Reference.ID != "rig:rig-a:wisp-1" {
 		t.Fatalf("delivered same-wisp re-fire reference = %+v, want rig:rig-a:wisp-1", pending[0].Reference)
+	}
+
+	reloaded, err = env.store.Get(session.ID)
+	if err != nil {
+		t.Fatalf("Get(session) before newer wisp demand: %v", err)
+	}
+	newerWispDemand := map[string]NamedSessionWispDemandSource{
+		"primary": {WispID: "wisp-2", StoreRef: "rig-a", Status: "in_progress"},
+	}
+	reconcileSessionBeadsAtPathWithNamedDemand(
+		context.Background(), cityPath, []beads.Bead{reloaded}, env.desiredState, cfgNames, env.cfg, env.sp,
+		env.store, nil, nil, nil, nil, env.dt, nil,
+		map[string]bool{"primary": true}, newerWispDemand, false, nil, env.cfg.EffectiveCityName(),
+		nil, env.clk, env.rec, 0, 0, &env.stdout, &env.stderr,
+	)
+	pending, inFlight, dead, err = listQueuedNudges(cityPath, "primary", env.clk.Now())
+	if err != nil {
+		t.Fatalf("listQueuedNudges after newer patrol-wisp demand: %v", err)
+	}
+	if len(pending) != 1 || len(inFlight) != 0 {
+		t.Fatalf("newer patrol-wisp demand queue sizes pending=%d in_flight=%d dead=%d, want 1/0/*", len(pending), len(inFlight), len(dead))
+	}
+	if pending[0].Reference == nil || pending[0].Reference.ID != "rig:rig-a:wisp-2" {
+		t.Fatalf("newer patrol-wisp demand reference = %+v, want rig:rig-a:wisp-2", pending[0].Reference)
+	}
+	for _, stale := range append(append([]queuedNudge{}, pending...), inFlight...) {
+		if stale.Reference != nil && stale.Reference.ID == "rig:rig-a:wisp-1" {
+			t.Fatalf("stale patrol-wisp nudge remained deliverable: %+v", stale)
+		}
+	}
+	for _, terminal := range dead {
+		if terminal.Reference != nil && terminal.Reference.ID == "rig:rig-a:wisp-1" && terminal.LastError != "superseded" {
+			t.Fatalf("terminal stale patrol-wisp nudge = %+v, want superseded", terminal)
+		}
 	}
 }
 
