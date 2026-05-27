@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -811,7 +812,7 @@ func collectAssignedWorkBeadsWithStores(
 				appendInProgressWorkUnique(cfg, &result, &resultStores, &resultStoreRefs, inProgress, seen, source.store, source.ref)
 			} else {
 				errs = append(errs, fmt.Errorf("List(in_progress): %w", err))
-				if beads.IsPartialResult(err) && len(inProgress) > 0 {
+				if (beads.IsPartialResult(err) || beads.IsDegradedRead(err)) && len(inProgress) > 0 {
 					appendInProgressWorkUnique(cfg, &result, &resultStores, &resultStoreRefs, inProgress, seen, source.store, source.ref)
 				}
 			}
@@ -1470,16 +1471,9 @@ func sortedStringSet(values map[string]struct{}) []string {
 }
 
 func listForControllerDemand(store beads.Store, query beads.ListQuery) ([]beads.Bead, error) {
-	if _, ok := store.(interface {
-		CachedList(beads.ListQuery) ([]beads.Bead, bool)
-	}); ok {
-		cacheQuery := query
-		cacheQuery.Live = false
-		return store.List(cacheQuery)
-	}
-	liveQuery := query
-	liveQuery.Live = true
-	return store.List(liveQuery)
+	query.Live = false
+	return beads.RuntimeList(context.Background(), store, query,
+		beads.RuntimeReadPolicy(beads.ReadClassHotDegradedOK, "controller.demand.list"))
 }
 
 func readyForControllerDemand(store beads.Store) ([]beads.Bead, error) {
@@ -1493,7 +1487,8 @@ func readyForControllerDemand(store beads.Store) ([]beads.Bead, error) {
 			return ready, nil
 		}
 	}
-	return beads.ReadyLive(store)
+	return beads.RuntimeReady(context.Background(), store, beads.ReadyQuery{},
+		beads.RuntimeReadPolicy(beads.ReadClassHotDegradedOK, "controller.demand.ready"))
 }
 
 func readyForControllerDemandQuery(store beads.Store, query beads.ReadyQuery) ([]beads.Bead, error) {
@@ -1504,7 +1499,8 @@ func readyForControllerDemandQuery(store beads.Store, query beads.ReadyQuery) ([
 			return filterReadyForControllerDemand(ready, query), nil
 		}
 	}
-	return store.Ready(query)
+	return beads.RuntimeReady(context.Background(), store, query,
+		beads.RuntimeReadPolicy(beads.ReadClassHotDegradedOK, "controller.demand.ready"))
 }
 
 func filterReadyForControllerDemand(ready []beads.Bead, query beads.ReadyQuery) []beads.Bead {

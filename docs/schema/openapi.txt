@@ -12846,6 +12846,9 @@
           "Parent": {
             "type": "string"
           },
+          "Ready": {
+            "type": "boolean"
+          },
           "Sort": {
             "type": "string"
           },
@@ -12869,6 +12872,7 @@
           "Label",
           "Assignee",
           "Unassigned",
+          "Ready",
           "Parent",
           "Metadata",
           "Tier",

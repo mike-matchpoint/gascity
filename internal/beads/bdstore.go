@@ -242,6 +242,47 @@ func (s *BdStore) CountIndexed(ctx context.Context, query ListQuery) (int, error
 	return counter.CountIndexed(ctx, query)
 }
 
+// RuntimeList serves hot runtime reads through the indexed reader only. It
+// deliberately does not fall through to bd list/query when indexed coverage is
+// unavailable.
+func (s *BdStore) RuntimeList(ctx context.Context, query ListQuery, policy ReadPolicy) ([]Bead, error) {
+	policy = normalizeReadPolicy(policy)
+	if policy.AllowFallback {
+		return s.List(query)
+	}
+	if !query.HasFilter() && !query.AllowScan {
+		return nil, fmt.Errorf("runtime list: %w", ErrQueryRequiresScan)
+	}
+	if policy.MaxRows > 0 && query.Limit <= 0 {
+		query.Limit = policy.MaxRows
+	}
+	readCtx, cancel := contextWithReadPolicy(ctx, policy)
+	defer cancel()
+	result, err := s.ListIndexed(readCtx, query)
+	if err != nil {
+		return result.Beads, degradedRead(policy, "list", "indexed", "", err)
+	}
+	if !result.DependencyCoverage {
+		return result.Beads, degradedRead(policy, "list", "indexed", "dependency-incomplete", ErrIndexedListUnsupported)
+	}
+	if !result.LabelsCoverage {
+		return result.Beads, degradedRead(policy, "list", "indexed", "labels-incomplete", ErrIndexedListUnsupported)
+	}
+	items := applyListQuery(result.Beads, query)
+	return enforceRuntimeRowCap(items, policy, "list", "indexed")
+}
+
+// RuntimeReady has no safe direct BdStore implementation because bd ready is a
+// hydrated CLI command and indexed ready requires complete active-state
+// coverage. Controller hot paths should use CachingStore.RuntimeReady.
+func (s *BdStore) RuntimeReady(_ context.Context, query ReadyQuery, policy ReadPolicy) ([]Bead, error) {
+	policy = normalizeReadPolicy(policy)
+	if policy.AllowFallback {
+		return readyWithQuery(s, query)
+	}
+	return nil, degradedRead(policy, "ready", "indexed", "", ErrIndexedListUnsupported)
+}
+
 // IDPrefix returns the bead ID prefix owned by this store, without trailing "-".
 func (s *BdStore) IDPrefix() string {
 	if s == nil {

@@ -457,7 +457,7 @@ func TestReconcileSessionBeads_UsesAssignedWorkSnapshotForTaskWorkDir(t *testing
 	}
 }
 
-func TestReconcileSessionBeads_FallsBackToLiveTaskWorkDirWithoutAssignedWorkSnapshot(t *testing.T) {
+func TestReconcileSessionBeads_UsesRuntimeTaskWorkDirWithoutAssignedWorkSnapshot(t *testing.T) {
 	env, store, session, workDir := newReconcilerTaskWorkDirTest(t)
 	woken := reconcileSessionBeadsWithTaskWorkDirSnapshot(t, env, session, nil, false)
 	if woken != 1 {
@@ -470,12 +470,12 @@ func TestReconcileSessionBeads_FallsBackToLiveTaskWorkDirWithoutAssignedWorkSnap
 	if startCfg.WorkDir != workDir {
 		t.Fatalf("started WorkDir = %q, want %q", startCfg.WorkDir, workDir)
 	}
-	if store.liveInProgressAssigneeLists == 0 {
-		t.Fatal("live in-progress assignee List calls = 0, want live fallback without assigned-work snapshot")
+	if store.liveInProgressAssigneeLists != 0 {
+		t.Fatalf("live in-progress assignee List calls = %d, want 0 without live fallback", store.liveInProgressAssigneeLists)
 	}
 }
 
-func TestReconcileSessionBeads_FallsBackToLiveTaskWorkDirWhenAssignedWorkSnapshotPartial(t *testing.T) {
+func TestReconcileSessionBeads_UsesRuntimeTaskWorkDirWhenAssignedWorkSnapshotPartial(t *testing.T) {
 	env, store, session, workDir := newReconcilerTaskWorkDirTest(t)
 	woken := reconcileSessionBeadsWithTaskWorkDirSnapshot(t, env, session, nil, true)
 	if woken != 1 {
@@ -488,12 +488,12 @@ func TestReconcileSessionBeads_FallsBackToLiveTaskWorkDirWhenAssignedWorkSnapsho
 	if startCfg.WorkDir != workDir {
 		t.Fatalf("started WorkDir = %q, want %q", startCfg.WorkDir, workDir)
 	}
-	if store.liveInProgressAssigneeLists == 0 {
-		t.Fatal("live in-progress assignee List calls = 0, want live fallback when assigned-work snapshot is partial")
+	if store.liveInProgressAssigneeLists != 0 {
+		t.Fatalf("live in-progress assignee List calls = %d, want 0 when assigned-work snapshot is partial", store.liveInProgressAssigneeLists)
 	}
 }
 
-func TestReconcileSessionBeads_FallsBackToLiveTaskWorkDirWhenAssignedWorkSnapshotMisses(t *testing.T) {
+func TestReconcileSessionBeads_UsesRuntimeTaskWorkDirWhenAssignedWorkSnapshotMisses(t *testing.T) {
 	env, store, session, workDir := newReconcilerTaskWorkDirTest(t)
 	unrelatedWorkDir := t.TempDir()
 	unrelatedTask := createInProgressTaskWithWorkDir(t, env.store, "other-worker", unrelatedWorkDir)
@@ -508,8 +508,8 @@ func TestReconcileSessionBeads_FallsBackToLiveTaskWorkDirWhenAssignedWorkSnapsho
 	if startCfg.WorkDir != workDir {
 		t.Fatalf("started WorkDir = %q, want %q", startCfg.WorkDir, workDir)
 	}
-	if store.liveInProgressAssigneeLists == 0 {
-		t.Fatal("live in-progress assignee List calls = 0, want live fallback when assigned-work snapshot misses")
+	if store.liveInProgressAssigneeLists != 0 {
+		t.Fatalf("live in-progress assignee List calls = %d, want 0 when assigned-work snapshot misses", store.liveInProgressAssigneeLists)
 	}
 }
 

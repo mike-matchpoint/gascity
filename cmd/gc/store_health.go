@@ -67,7 +67,8 @@ func liveRowCount(store beads.Store) int {
 		}
 		return 0
 	}
-	list, err := store.List(query)
+	list, err := beads.RuntimeList(context.Background(), store, query,
+		beads.RuntimeReadPolicy(beads.ReadClassHotDegradedOK, "status.store-health.rows"))
 	if err != nil {
 		return 0
 	}

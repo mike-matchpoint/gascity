@@ -2393,7 +2393,8 @@ func firstOpenAssignedWorkBeadInStoreByIdentifiers(store beads.Store, identifier
 				continue
 			}
 			seen[key] = struct{}{}
-			items, err := store.List(beads.ListQuery{Assignee: assignee, Status: status, Live: true})
+			items, err := beads.RuntimeList(context.Background(), store, beads.ListQuery{Assignee: assignee, Status: status},
+				beads.RuntimeReadPolicy(beads.ReadClassHotAuthoritative, "session.reconcile.assigned-work"))
 			if err != nil {
 				return beads.Bead{}, false, err
 			}
@@ -2519,7 +2520,8 @@ func collectSessionAssignedWorkIDs(cityPath string, cfg *config.City, store bead
 				if assignee == "" {
 					continue
 				}
-				items, err := s.List(beads.ListQuery{Assignee: assignee, Status: status, Live: true})
+				items, err := beads.RuntimeList(context.Background(), s, beads.ListQuery{Assignee: assignee, Status: status},
+					beads.RuntimeReadPolicy(beads.ReadClassHotDegradedOK, "session.stranded.assigned-work"))
 				if err != nil {
 					return err
 				}
@@ -2600,7 +2602,8 @@ func sessionHasOpenAssignedWorkInStoreByIdentifiers(store beads.Store, identifie
 				continue
 			}
 			seen[key] = struct{}{}
-			items, err := store.List(beads.ListQuery{Assignee: assignee, Status: status, Live: true})
+			items, err := beads.RuntimeList(context.Background(), store, beads.ListQuery{Assignee: assignee, Status: status},
+				beads.RuntimeReadPolicy(beads.ReadClassHotAuthoritative, "session.reconcile.assigned-work"))
 			if err != nil {
 				return false, err
 			}
@@ -3165,12 +3168,11 @@ func resolveTaskWorkDir(store beads.Store, assignees ...string) string {
 			continue
 		}
 		seen[assignee] = true
-		assigned, err := store.List(beads.ListQuery{
+		assigned, err := beads.RuntimeList(context.Background(), store, beads.ListQuery{
 			Assignee: assignee,
 			Status:   "in_progress",
-			Live:     true,
 			Sort:     beads.SortCreatedDesc,
-		})
+		}, beads.RuntimeReadPolicy(beads.ReadClassHotDegradedOK, "session.reconcile.task-workdir"))
 		if err != nil {
 			continue
 		}

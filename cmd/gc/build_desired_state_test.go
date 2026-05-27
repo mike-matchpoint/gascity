@@ -224,6 +224,24 @@ func (s *partialAssignedWorkStore) List(query beads.ListQuery) ([]beads.Bead, er
 	return rows, nil
 }
 
+func (s *partialAssignedWorkStore) RuntimeList(_ context.Context, query beads.ListQuery, policy beads.ReadPolicy) ([]beads.Bead, error) {
+	rows, err := s.MemStore.List(query)
+	if err != nil {
+		return nil, err
+	}
+	if s.partialInProgress && query.Status == "in_progress" {
+		return rows, &beads.DegradedReadError{
+			Class:     policy.Class,
+			Caller:    policy.Caller,
+			Operation: "list",
+			Route:     "indexed",
+			Coverage:  "partial-test",
+			Err:       errors.New("skipped corrupt in-progress bead"),
+		}
+	}
+	return rows, nil
+}
+
 func (s *partialAssignedWorkStore) Ready(query ...beads.ReadyQuery) ([]beads.Bead, error) {
 	rows, err := s.MemStore.Ready(query...)
 	if err != nil {
@@ -323,7 +341,7 @@ func TestCollectAssignedWorkBeadsUsesCachedInProgressReadModel(t *testing.T) {
 	}
 }
 
-func TestCollectAssignedWorkBeadsFallsBackLiveWhenCachedInProgressDirty(t *testing.T) {
+func TestCollectAssignedWorkBeadsDegradesWhenReadyCacheDirty(t *testing.T) {
 	backing := &demandRefreshFailStore{Store: beads.NewMemStore()}
 	work, err := backing.Create(beads.Bead{
 		Title: "handoff becomes active",
@@ -345,14 +363,14 @@ func TestCollectAssignedWorkBeadsFallsBackLiveWhenCachedInProgressDirty(t *testi
 	}
 
 	got, partial := collectAssignedWorkBeads(&config.City{}, cache)
-	if partial {
-		t.Fatal("collectAssignedWorkBeads reported partial with successful live fallback")
+	if !partial {
+		t.Fatal("collectAssignedWorkBeads partial = false, want degraded ready state")
 	}
-	if len(got) != 1 || got[0].ID != work.ID || got[0].Status != "in_progress" || got[0].Assignee != "repo/refinery" {
-		t.Fatalf("collectAssignedWorkBeads returned %#v, want live in-progress %s", got, work.ID)
+	if len(got) != 0 {
+		t.Fatalf("collectAssignedWorkBeads returned %#v, want no unproven dirty-cache work", got)
 	}
-	if backing.liveInProgressLists != 1 {
-		t.Fatalf("live in_progress list calls = %d, want dirty cache fallback", backing.liveInProgressLists)
+	if backing.liveInProgressLists != 0 {
+		t.Fatalf("live in_progress list calls = %d, want no controller hot fallback", backing.liveInProgressLists)
 	}
 }
 
@@ -634,7 +652,7 @@ func TestDefaultScaleCheckCountsHonorsCachedWriteThroughDependencies(t *testing.
 	}
 }
 
-func TestDefaultScaleCheckCountsFallsBackWhenCachedEventDepsUnknown(t *testing.T) {
+func TestDefaultScaleCheckCountsDegradesWhenCachedEventDepsUnknown(t *testing.T) {
 	backing := &readyStaticStore{
 		Store: beads.NewMemStore(),
 		ready: []beads.Bead{{
@@ -658,14 +676,14 @@ func TestDefaultScaleCheckCountsFallsBackWhenCachedEventDepsUnknown(t *testing.T
 		storeKey: "rig:gascity",
 		store:    cache,
 	}})
-	if len(errs) != 0 {
-		t.Fatalf("defaultScaleCheckCounts errs = %v", errs)
+	if len(errs) == 0 {
+		t.Fatal("defaultScaleCheckCounts errs = nil, want degraded ready error")
 	}
-	if got := counts["gascity/workflows.codex-max"]; got != 1 {
-		t.Fatalf("defaultScaleCheckCounts = %d, want live ready fallback count only", got)
+	if got := counts["gascity/workflows.codex-max"]; got != 0 {
+		t.Fatalf("defaultScaleCheckCounts = %d, want no unproven ready demand", got)
 	}
-	if backing.readyCalls != 1 {
-		t.Fatalf("backing Ready calls = %d, want one live ready fallback", backing.readyCalls)
+	if backing.readyCalls != 0 {
+		t.Fatalf("backing Ready calls = %d, want no controller hot fallback", backing.readyCalls)
 	}
 }
 

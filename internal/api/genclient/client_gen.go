@@ -4396,6 +4396,7 @@ type WorkSelector struct {
 	Label       string            `json:"Label"`
 	Metadata    map[string]string `json:"Metadata"`
 	Parent      string            `json:"Parent"`
+	Ready       bool              `json:"Ready"`
 	Sort        string            `json:"Sort"`
 	Status      string            `json:"Status"`
 	Tier        string            `json:"Tier"`

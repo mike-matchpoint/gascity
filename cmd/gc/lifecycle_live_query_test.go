@@ -144,7 +144,7 @@ func TestCollectAssignedWorkBeads_UsesExplicitDepEventsForCachedReady(t *testing
 	})
 }
 
-func TestSessionHasOpenAssignedWorkInStore_UsesLiveOpenOwnership(t *testing.T) {
+func TestSessionHasOpenAssignedWorkInStore_UsesRuntimeCachedOwnershipWithoutLiveFallback(t *testing.T) {
 	t.Parallel()
 
 	backing := beads.NewMemStore()
@@ -173,8 +173,8 @@ func TestSessionHasOpenAssignedWorkInStore_UsesLiveOpenOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sessionHasOpenAssignedWorkInStore: %v", err)
 	}
-	if hasAssignedWork {
-		t.Fatal("sessionHasOpenAssignedWorkInStore() = true, want false after external open-work reassignment")
+	if !hasAssignedWork {
+		t.Fatal("sessionHasOpenAssignedWorkInStore() = false, want conservative cached ownership without live fallback")
 	}
 }
 

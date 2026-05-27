@@ -229,6 +229,19 @@ func workSelectorCountForController(store beads.Store, selector config.WorkSelec
 	if err != nil {
 		return 0, err
 	}
+	if compiled.Ready {
+		ready, readyErr := readyForControllerDemand(store)
+		if readyErr != nil {
+			return 0, readyErr
+		}
+		matching := make([]beads.Bead, 0, len(ready))
+		for _, item := range ready {
+			if compiled.Query.Matches(item) {
+				matching = append(matching, item)
+			}
+		}
+		return len(workselect.ApplyPostFilters(matching, compiled)), nil
+	}
 	items, err := listForControllerDemand(store, compiled.Query)
 	if err != nil {
 		if !beads.IsPartialResult(err) || len(items) == 0 {
