@@ -74,6 +74,7 @@ const (
 	staleOrderWispCloseReason     = "order-tracking sweep: stale order wisp subtree exceeded retention window"
 
 	completedOrderTrackingCloseReason = "order dispatch completed: tracking bead lifecycle finished"
+	abandonedOrderTrackingCloseReason = "order dispatch abandoned: tracking create finished after timeout"
 )
 
 func orderRunLabel(scopedName string) string {
@@ -324,6 +325,11 @@ type orderDispatchTickStats struct {
 	ordersDeferred        int
 	deferReasons          map[string]int
 	trackingWriteFailures int
+}
+
+type orderTrackingCreateResult struct {
+	bead beads.Bead
+	err  error
 }
 
 // buildOrderDispatcher scans formula layers for orders and returns a
@@ -1028,21 +1034,32 @@ func createOrderTrackingBeadBounded(ctx context.Context, store beads.Store, bead
 	}
 	writeCtx, cancel := context.WithTimeout(ctx, orderDispatchTrackingWriteBudget)
 	defer cancel()
-	type createResult struct {
-		bead beads.Bead
-		err  error
-	}
-	done := make(chan createResult, 1)
+	done := make(chan orderTrackingCreateResult, 1)
 	go func() {
 		created, err := store.Create(bead)
-		done <- createResult{bead: created, err: err}
+		done <- orderTrackingCreateResult{bead: created, err: err}
 	}()
 	select {
 	case result := <-done:
 		return result.bead, result.err
 	case <-writeCtx.Done():
+		go closeLateCreatedOrderTrackingBead(store, done)
 		return beads.Bead{}, writeCtx.Err()
 	}
+}
+
+func closeLateCreatedOrderTrackingBead(store beads.Store, done <-chan orderTrackingCreateResult) {
+	result := <-done
+	if result.err != nil || result.bead.ID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), orderDispatchTrackingWriteBudget)
+	defer cancel()
+	_, _ = closeAndVerifyOrderTrackingBeads(ctx, store, []string{result.bead.ID}, map[string]string{
+		"close_reason":            abandonedOrderTrackingCloseReason,
+		"order_tracking_cleanup":  "late-create-timeout",
+		"order_tracking_sweep_by": "controller-timeout-cleanup",
+	})
 }
 
 // launchDispatchOne spawns dispatchOne with a context that cancels when

@@ -96,6 +96,12 @@ type delayedOrderDispatchListStore struct {
 	delay time.Duration
 }
 
+type delayedOrderTrackingCreateStore struct {
+	beads.Store
+
+	delay time.Duration
+}
+
 type rowCapRuntimeListStore struct {
 	beads.Store
 }
@@ -252,6 +258,13 @@ func (s delayedOrderDispatchListStore) List(query beads.ListQuery) ([]beads.Bead
 		time.Sleep(s.delay)
 	}
 	return s.Store.List(query)
+}
+
+func (s delayedOrderTrackingCreateStore) Create(b beads.Bead) (beads.Bead, error) {
+	if s.delay > 0 {
+		time.Sleep(s.delay)
+	}
+	return s.Store.Create(b)
 }
 
 func (s rowCapRuntimeListStore) RuntimeList(_ context.Context, query beads.ListQuery, policy beads.ReadPolicy) ([]beads.Bead, error) {
@@ -1521,6 +1534,43 @@ func TestOrderDispatchSnapshotManyOrdersDoesNotExhaustSharedStoreBudget(t *testi
 	}
 	if payload.OrdersDeferred != 0 {
 		t.Fatalf("OrdersDeferred = %d, want 0; payload=%+v", payload.OrdersDeferred, payload)
+	}
+}
+
+func TestCreateOrderTrackingBeadBoundedClosesLateCreateAfterTimeout(t *testing.T) {
+	base := beads.NewMemStore()
+	store := delayedOrderTrackingCreateStore{
+		Store: base,
+		delay: orderDispatchTrackingWriteBudget + 100*time.Millisecond,
+	}
+
+	_, err := createOrderTrackingBeadBounded(context.Background(), store, beads.Bead{
+		Title:  "order:late-create",
+		Labels: orderTrackingLabels("late-create"),
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("createOrderTrackingBeadBounded err = %v, want context deadline exceeded", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		rows, listErr := base.List(beads.ListQuery{
+			Label:         scopedOrderTrackingLabel("late-create"),
+			IncludeClosed: true,
+		})
+		if listErr != nil {
+			t.Fatal(listErr)
+		}
+		if len(rows) == 1 && rows[0].Status == "closed" {
+			if got := rows[0].Metadata["close_reason"]; got != abandonedOrderTrackingCloseReason {
+				t.Fatalf("close_reason = %q, want %q", got, abandonedOrderTrackingCloseReason)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("late-created tracking bead was not closed: %#v", rows)
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
 }
 
