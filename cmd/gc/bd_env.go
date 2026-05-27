@@ -165,7 +165,7 @@ func controlBdStoreForRig(rigDir, cityPath string, cfg *config.City, knownPrefix
 }
 
 func attachIndexedDoltReader(store *beads.BdStore, cityPath, scopeRoot string) *beads.BdStore {
-	if store == nil || strings.TrimSpace(os.Getenv("GC_BD_INDEX_READS")) != "1" {
+	if store == nil {
 		return store
 	}
 	target, err := contract.ResolveDoltConnectionTarget(fsys.OSFS{}, cityPath, scopeRoot)

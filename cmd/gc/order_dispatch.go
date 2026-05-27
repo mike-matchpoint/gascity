@@ -1728,7 +1728,7 @@ func storeHasOpenDescendants(store beads.Store, parentID string, includeWisps bo
 // closed. This is non-fatal: dispatch proceeds even if the sweep fails.
 func sweepOrphanedOrderTracking(store beads.Store) (int, error) {
 	// ListByLabel without IncludeClosed returns only open beads.
-	all, err := store.ListByLabel(labelOrderTracking, 0)
+	all, err := store.ListByLabel(labelOrderTracking, 0, beads.WithBothTiers)
 	if err != nil {
 		return 0, fmt.Errorf("listing order-tracking beads: %w", err)
 	}
@@ -1892,15 +1892,15 @@ func sweepStaleOrderTrackingWithOptions(store beads.Store, now time.Time, staleA
 
 func listOrderTrackingCandidates(store beads.Store, onlyOrders map[string]struct{}) ([]beads.Bead, error) {
 	if len(onlyOrders) == 0 {
-		return store.ListByLabel(labelOrderTracking, 0)
+		return store.ListByLabel(labelOrderTracking, 0, beads.WithBothTiers)
 	}
 	seen := make(map[string]struct{})
 	var out []beads.Bead
 	var errs []error
 	for orderName := range onlyOrders {
 		for _, query := range []beads.ListQuery{
-			{Label: scopedOrderTrackingLabel(orderName)},
-			{Label: orderRunLabel(orderName)},
+			{Label: scopedOrderTrackingLabel(orderName), TierMode: beads.TierBoth},
+			{Label: orderRunLabel(orderName), TierMode: beads.TierBoth},
 		} {
 			items, err := store.List(query)
 			if err != nil {
