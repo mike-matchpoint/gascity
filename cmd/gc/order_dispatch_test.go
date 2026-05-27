@@ -26,9 +26,9 @@ import (
 
 func trackingBeads(t *testing.T, store beads.Store, label string) []beads.Bead {
 	t.Helper()
-	// Tracking beads dispatched by the production order dispatcher live in
-	// the ephemeral (wisps) tier; seeded test beads typically live in the
-	// issues tier. Query both so tests covering either path stay green.
+	// Some tests seed legacy wisp-tier tracking beads to exercise explicit
+	// recovery paths. Query both tiers here so assertions can inspect those
+	// fixtures without changing production hot-path queries.
 	all, err := store.ListByLabel(label, 0, beads.IncludeClosed, beads.WithBothTiers)
 	if err != nil {
 		t.Fatalf("ListByLabel(%q): %v", label, err)
@@ -1760,9 +1760,8 @@ func TestOrderDispatchTriggerEnvFailureTrackingSuppressesNonConditionBeforeEvalu
 		t.Run(tt.name, func(t *testing.T) {
 			baseStore := beads.NewMemStore()
 			if _, err := baseStore.Create(beads.Bead{
-				Title:     "order:" + tt.order.Name,
-				Labels:    []string{"order-run:" + tt.order.Name, labelOrderTracking, labelTriggerEnvFailed},
-				Ephemeral: true,
+				Title:  "order:" + tt.order.Name,
+				Labels: []string{"order-run:" + tt.order.Name, labelOrderTracking, labelTriggerEnvFailed},
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -2988,12 +2987,11 @@ func TestOrderRigSuspendedFallsBackToOrderRigOnPoolResolutionError(t *testing.T)
 func TestSweepOrphanedOrderTracking_ClosesOpenTrackingBeads(t *testing.T) {
 	store := beads.NewMemStore()
 
-	// Create some open ephemeral tracking beads (simulating goroutines killed on restart).
+	// Create some open tracking beads (simulating goroutines killed on restart).
 	for _, name := range []string{"dolt-health", "gate-sweep", "beads-health"} {
 		_, err := store.Create(beads.Bead{
-			Title:     "order:" + name,
-			Labels:    []string{"order-run:" + name, labelOrderTracking},
-			Ephemeral: true,
+			Title:  "order:" + name,
+			Labels: []string{"order-run:" + name, labelOrderTracking},
 		})
 		if err != nil {
 			t.Fatalf("Create(%s): %v", name, err)
@@ -3009,9 +3007,8 @@ func TestSweepOrphanedOrderTracking_ClosesOpenTrackingBeads(t *testing.T) {
 
 	// Create one that's already closed (should be left alone).
 	b, err := store.Create(beads.Bead{
-		Title:     "order:old-sweep",
-		Labels:    []string{"order-run:old-sweep", labelOrderTracking},
-		Ephemeral: true,
+		Title:  "order:old-sweep",
+		Labels: []string{"order-run:old-sweep", labelOrderTracking},
 	})
 	if err != nil {
 		t.Fatalf("Create(old-sweep): %v", err)
@@ -3037,7 +3034,7 @@ func TestSweepOrphanedOrderTracking_ClosesOpenTrackingBeads(t *testing.T) {
 		t.Fatalf("closed = %d, want 4", closed)
 	}
 
-	// Verify the open tracking beads in both tiers are now closed.
+	// Verify the open tracking beads are now closed.
 	all := trackingBeads(t, store, labelOrderTracking)
 	for _, b := range all {
 		if b.Status != "closed" {
@@ -3102,13 +3099,12 @@ func TestSweepStaleOrderTracking_ClosesOnlyOldOpenTrackingBeads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create(old): %v", err)
 	}
-	oldEphemeral, err := store.Create(beads.Bead{
-		Title:     "order:old-sweep-wisp-tier",
-		Labels:    []string{"order-run:old-sweep-wisp-tier", labelOrderTracking},
-		Ephemeral: true,
+	oldSecond, err := store.Create(beads.Bead{
+		Title:  "order:old-sweep-second",
+		Labels: []string{"order-run:old-sweep-second", labelOrderTracking},
 	})
 	if err != nil {
-		t.Fatalf("Create(old ephemeral): %v", err)
+		t.Fatalf("Create(old second): %v", err)
 	}
 	oldWork, err := store.Create(beads.Bead{
 		Title:  "real work",
@@ -3128,7 +3124,7 @@ func TestSweepStaleOrderTracking_ClosesOnlyOldOpenTrackingBeads(t *testing.T) {
 		t.Fatalf("Create(fresh): %v", err)
 	}
 
-	const expectedClosedTrackingBeads = 2 // issues-tier legacy bead + wisps-tier tracking bead
+	const expectedClosedTrackingBeads = 2
 	closed, err := sweepStaleOrderTracking(store, time.Now(), 100*time.Millisecond, nil, orderTrackingSweepMetadataInitiator)
 	if err != nil {
 		t.Fatalf("sweepStaleOrderTracking: %v", err)
@@ -3144,12 +3140,12 @@ func TestSweepStaleOrderTracking_ClosesOnlyOldOpenTrackingBeads(t *testing.T) {
 	if gotOld.Status != "closed" {
 		t.Fatalf("old tracking status = %s, want closed", gotOld.Status)
 	}
-	gotOldEphemeral, err := store.Get(oldEphemeral.ID)
+	gotOldSecond, err := store.Get(oldSecond.ID)
 	if err != nil {
-		t.Fatalf("Get(old ephemeral): %v", err)
+		t.Fatalf("Get(old second): %v", err)
 	}
-	if gotOldEphemeral.Status != "closed" {
-		t.Fatalf("old ephemeral tracking status = %s, want closed", gotOldEphemeral.Status)
+	if gotOldSecond.Status != "closed" {
+		t.Fatalf("old second tracking status = %s, want closed", gotOldSecond.Status)
 	}
 	gotFresh, err := store.Get(fresh.ID)
 	if err != nil {
@@ -3180,9 +3176,8 @@ func (s *noopCloseAllStore) CloseAll(_ []string, _ map[string]string) (int, erro
 func TestCloseOrderTrackingBeadErrorsWhenVerificationStillOpen(t *testing.T) {
 	base := beads.NewMemStore()
 	tracking, err := base.Create(beads.Bead{
-		Title:     "order:stuck",
-		Labels:    []string{"order-run:stuck", labelOrderTracking},
-		Ephemeral: true,
+		Title:  "order:stuck",
+		Labels: []string{"order-run:stuck", labelOrderTracking},
 	})
 	if err != nil {
 		t.Fatalf("Create(tracking): %v", err)
@@ -3219,9 +3214,8 @@ func (s *flakyCloseAllStore) CloseAll(ids []string, metadata map[string]string) 
 func TestCloseOrderTrackingBeadRetriesTransientCloseConflict(t *testing.T) {
 	base := beads.NewMemStore()
 	tracking, err := base.Create(beads.Bead{
-		Title:     "order:retry",
-		Labels:    []string{"order-run:retry", labelOrderTracking},
-		Ephemeral: true,
+		Title:  "order:retry",
+		Labels: []string{"order-run:retry", labelOrderTracking},
 	})
 	if err != nil {
 		t.Fatalf("Create(tracking): %v", err)
@@ -3281,9 +3275,8 @@ func TestSweepStaleOrderTrackingAcrossStoresClosesRigStoreAndUnblocksDispatch(t 
 		},
 	}
 	stale, err := rigStore.Create(beads.Bead{
-		Title:     "order:rig-digest:rig:frontend",
-		Labels:    []string{"order-run:rig-digest:rig:frontend", labelOrderTracking},
-		Ephemeral: true,
+		Title:  "order:rig-digest:rig:frontend",
+		Labels: []string{"order-run:rig-digest:rig:frontend", labelOrderTracking},
 	})
 	if err != nil {
 		t.Fatalf("Create(stale): %v", err)
@@ -3337,17 +3330,15 @@ func TestSweepStaleOrderTrackingAcrossStoresContinuesAfterStoreError(t *testing.
 	cityStore := beads.NewMemStore()
 	rigStore := beads.NewMemStore()
 	cityStale, err := cityStore.Create(beads.Bead{
-		Title:     "order:cleanup",
-		Labels:    []string{"order-run:cleanup", labelOrderTracking},
-		Ephemeral: true,
+		Title:  "order:cleanup",
+		Labels: []string{"order-run:cleanup", labelOrderTracking},
 	})
 	if err != nil {
 		t.Fatalf("Create(city stale): %v", err)
 	}
 	rigStale, err := rigStore.Create(beads.Bead{
-		Title:     "order:cleanup:rig:frontend",
-		Labels:    []string{"order-run:cleanup:rig:frontend", labelOrderTracking},
-		Ephemeral: true,
+		Title:  "order:cleanup:rig:frontend",
+		Labels: []string{"order-run:cleanup:rig:frontend", labelOrderTracking},
 	})
 	if err != nil {
 		t.Fatalf("Create(rig stale): %v", err)
@@ -3391,18 +3382,16 @@ func TestSweepStaleOrderTrackingAcrossStoresContinuesAfterStoreError(t *testing.
 func TestSweepStaleOrderTrackingClosesTriggerEnvFailedBeadsAndUnblocksDispatch(t *testing.T) {
 	store := beads.NewMemStore()
 	failed, err := store.Create(beads.Bead{
-		Title:     "order:pg-cooldown",
-		Labels:    []string{"order-run:pg-cooldown", labelOrderTracking, labelTriggerEnvFailed},
-		Ephemeral: true,
+		Title:  "order:pg-cooldown",
+		Labels: []string{"order-run:pg-cooldown", labelOrderTracking, labelTriggerEnvFailed},
 	})
 	if err != nil {
 		t.Fatalf("Create(trigger-env failed): %v", err)
 	}
 	time.Sleep(2 * time.Millisecond)
 	normal, err := store.Create(beads.Bead{
-		Title:     "order:pg-cooldown",
-		Labels:    []string{"order-run:pg-cooldown", labelOrderTracking},
-		Ephemeral: true,
+		Title:  "order:pg-cooldown",
+		Labels: []string{"order-run:pg-cooldown", labelOrderTracking},
 	})
 	if err != nil {
 		t.Fatalf("Create(normal tracking): %v", err)
@@ -3457,9 +3446,8 @@ func TestSweepStaleOrderTrackingClosesTriggerEnvFailedBeadsAndUnblocksDispatch(t
 func TestCloseAndVerifyOrderTrackingBeadsStopsRetryOnContextCancel(t *testing.T) {
 	base := beads.NewMemStore()
 	tracking, err := base.Create(beads.Bead{
-		Title:     "order:canceled",
-		Labels:    []string{"order-run:canceled", labelOrderTracking},
-		Ephemeral: true,
+		Title:  "order:canceled",
+		Labels: []string{"order-run:canceled", labelOrderTracking},
 	})
 	if err != nil {
 		t.Fatalf("Create(tracking): %v", err)
@@ -3504,9 +3492,8 @@ func (s failBroadOrderTrackingListStore) ListByLabel(label string, limit int, op
 func TestSweepStaleOrderTrackingWithOrderFilterAvoidsBroadTrackingScan(t *testing.T) {
 	base := beads.NewMemStore()
 	tracking, err := base.Create(beads.Bead{
-		Title:     "order:digest",
-		Labels:    orderTrackingLabels("digest"),
-		Ephemeral: true,
+		Title:  "order:digest",
+		Labels: orderTrackingLabels("digest"),
 	})
 	if err != nil {
 		t.Fatalf("Create(tracking): %v", err)
@@ -3988,9 +3975,8 @@ func TestStartupSweepPreservesTriggerEnvFailureMarker(t *testing.T) {
 	store := beads.NewMemStore()
 
 	marker, err := store.Create(beads.Bead{
-		Title:     "order:pg-cooldown",
-		Labels:    []string{"order-run:pg-cooldown", labelOrderTracking, labelTriggerEnvFailed},
-		Ephemeral: true,
+		Title:  "order:pg-cooldown",
+		Labels: []string{"order-run:pg-cooldown", labelOrderTracking, labelTriggerEnvFailed},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -6516,10 +6502,11 @@ func TestLockedStderrWrapsNonNil(t *testing.T) {
 	}
 }
 
-// TestOrderDispatchTrackingBeadIsEphemeral asserts the dispatcher routes the
-// tracking bead to the wisps tier (Ephemeral=true), so each cooldown cycle
-// does not produce a full Dolt commit on the permanent issues tier.
-func TestOrderDispatchTrackingBeadIsEphemeral(t *testing.T) {
+// TestOrderDispatchTrackingBeadUsesIssuesTier asserts the dispatcher keeps
+// tracking beads on the issues tier. This protects the controller hot path
+// from wisp-tier reads while the order-tracking wisp visibility regression is
+// being unwound.
+func TestOrderDispatchTrackingBeadUsesIssuesTier(t *testing.T) {
 	store := beads.NewMemStore()
 
 	aa := []orders.Order{{
@@ -6549,33 +6536,34 @@ func TestOrderDispatchTrackingBeadIsEphemeral(t *testing.T) {
 	if tb == nil {
 		t.Fatal("no tracking bead found")
 	}
-	if !tb.Ephemeral {
-		t.Errorf("tracking bead Ephemeral = false, want true")
+	if tb.Ephemeral {
+		t.Errorf("tracking bead Ephemeral = true, want false")
 	}
-	// Tracking bead must NOT be visible to issues-tier-only queries —
-	// that is the whole point of routing it to the wisps tier.
 	issuesOnly, err := store.ListByLabel("order-run:wisp-order", 0, beads.IncludeClosed)
 	if err != nil {
 		t.Fatal(err)
 	}
+	foundTracking := false
 	for _, b := range issuesOnly {
 		if strings.HasPrefix(b.Title, "order:") {
-			t.Errorf("ephemeral tracking bead leaked into issues-tier query: %+v", b)
+			foundTracking = true
+			if b.Ephemeral {
+				t.Errorf("issues-tier tracking bead is marked ephemeral: %+v", b)
+			}
 		}
+	}
+	if !foundTracking {
+		t.Fatal("tracking bead missing from issues-tier query")
 	}
 }
 
-// TestOrderDispatchSingleFlightLockSeesEphemeralTracker is the regression
-// guard for the single-flight lock (`hasOpenWorkInStoresStrict`) after the
-// tracking bead moved to the wisps tier. If the lock query were not
-// tier-aware, the dispatcher would re-fire the same cooldown order on the
-// next tick.
-func TestOrderDispatchSingleFlightLockSeesEphemeralTracker(t *testing.T) {
+// TestOrderDispatchSingleFlightLockUsesIssuesTierTracker guards against
+// reintroducing wisp-tier reads in the single-flight lock.
+func TestOrderDispatchSingleFlightLockUsesIssuesTierTracker(t *testing.T) {
 	store := beads.NewMemStore()
 	if _, err := store.Create(beads.Bead{
-		Title:     "order:double-fire",
-		Labels:    []string{"order-run:double-fire", labelOrderTracking},
-		Ephemeral: true,
+		Title:  "order:double-fire",
+		Labels: orderTrackingLabels("double-fire"),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -6586,7 +6574,37 @@ func TestOrderDispatchSingleFlightLockSeesEphemeralTracker(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !hasOpen {
-		t.Fatal("single-flight lock missed ephemeral tracking bead — would dispatch again")
+		t.Fatal("single-flight lock missed issues-tier tracking bead")
+	}
+}
+
+type failWispTierListStore struct {
+	beads.Store
+}
+
+func (s failWispTierListStore) List(q beads.ListQuery) ([]beads.Bead, error) {
+	if q.TierMode != beads.TierIssues {
+		return nil, fmt.Errorf("unexpected wisp-tier order scan: %+v", q)
+	}
+	return s.Store.List(q)
+}
+
+func TestOrderDispatchSingleFlightLockDoesNotReadWispTier(t *testing.T) {
+	base := beads.NewMemStore()
+	if _, err := base.Create(beads.Bead{
+		Title:  "order:double-fire",
+		Labels: orderTrackingLabels("double-fire"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m := &memoryOrderDispatcher{}
+	hasOpen, err := m.hasOpenWorkStrict(failWispTierListStore{Store: base}, "double-fire")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasOpen {
+		t.Fatal("single-flight lock missed issues-tier tracking bead")
 	}
 }
 
@@ -6605,9 +6623,8 @@ func (s failLabelListStore) List(q beads.ListQuery) ([]beads.Bead, error) {
 func TestOrderDispatchSingleFlightLockUsesScopedTrackingLabel(t *testing.T) {
 	base := beads.NewMemStore()
 	if _, err := base.Create(beads.Bead{
-		Title:     "order:double-fire",
-		Labels:    orderTrackingLabels("double-fire"),
-		Ephemeral: true,
+		Title:  "order:double-fire",
+		Labels: orderTrackingLabels("double-fire"),
 	}); err != nil {
 		t.Fatal(err)
 	}
