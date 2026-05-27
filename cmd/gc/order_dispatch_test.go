@@ -90,6 +90,10 @@ type slowOrderDispatchListStore struct {
 	delay     time.Duration
 }
 
+type rowCapRuntimeListStore struct {
+	beads.Store
+}
+
 func TestScanOrderSetSnapshotFSTracksAddChangeRemove(t *testing.T) {
 	fs := fsys.NewFake()
 	fs.Dirs["/city/orders"] = true
@@ -235,6 +239,17 @@ func (s slowOrderDispatchListStore) List(query beads.ListQuery) ([]beads.Bead, e
 		time.Sleep(s.delay)
 	}
 	return s.Store.List(query)
+}
+
+func (s rowCapRuntimeListStore) RuntimeList(_ context.Context, query beads.ListQuery, policy beads.ReadPolicy) ([]beads.Bead, error) {
+	rows, err := s.List(query)
+	if err != nil {
+		return rows, err
+	}
+	if policy.MaxRows > 0 && len(rows) >= policy.MaxRows {
+		return rows, fmt.Errorf("runtime read returned %d rows at cap %d", len(rows), policy.MaxRows)
+	}
+	return rows, nil
 }
 
 func (s *countingListStore) reset() {
@@ -1264,7 +1279,7 @@ func TestOrderDispatchCachesLastRunBetweenDispatches(t *testing.T) {
 
 func TestOrderDispatchDeepLastRunHistoryDoesNotDefer(t *testing.T) {
 	baseStore := &createdAtOverrideStore{Store: beads.NewMemStore()}
-	store := &countingListStore{Store: baseStore}
+	store := &rowCapRuntimeListStore{Store: baseStore}
 	now := time.Date(2026, 5, 27, 20, 0, 0, 0, time.UTC)
 	for i := 250; i >= 1; i-- {
 		created, err := store.Create(beads.Bead{

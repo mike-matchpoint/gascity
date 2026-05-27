@@ -865,7 +865,7 @@ func orderDispatchRuntimeList(ctx context.Context, store beads.Store, query bead
 	policy := beads.RuntimeReadPolicy(beads.ReadClassHotAuthoritative, caller)
 	policy.Timeout = orderDispatchSingleReadBudget
 	if query.Limit > 0 {
-		policy.MaxRows = query.Limit
+		policy.MaxRows = query.Limit + 1
 	}
 	type listResult struct {
 		rows []beads.Bead
