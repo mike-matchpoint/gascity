@@ -292,6 +292,51 @@ func TestCollectAssignedWorkBeadsUsesCachedInProgressReadModel(t *testing.T) {
 	}
 }
 
+func TestCollectAssignedWorkBeadsIncludesInProgressAssignedWisps(t *testing.T) {
+	store := beads.NewMemStore()
+	refineryWisp, err := store.Create(beads.Bead{
+		Title:     "refinery patrol",
+		Type:      "molecule",
+		Status:    "in_progress",
+		Assignee:  "repo/refinery",
+		Ephemeral: true,
+	})
+	if err != nil {
+		t.Fatalf("create refinery wisp: %v", err)
+	}
+	deaconWisp, err := store.Create(beads.Bead{
+		Title:     "deacon patrol",
+		Type:      "molecule",
+		Status:    "in_progress",
+		Assignee:  "deacon",
+		Ephemeral: true,
+	})
+	if err != nil {
+		t.Fatalf("create deacon wisp: %v", err)
+	}
+	status := "in_progress"
+	if err := store.Update(refineryWisp.ID, beads.UpdateOpts{Status: &status}); err != nil {
+		t.Fatalf("set refinery wisp in_progress: %v", err)
+	}
+	if err := store.Update(deaconWisp.ID, beads.UpdateOpts{Status: &status}); err != nil {
+		t.Fatalf("set deacon wisp in_progress: %v", err)
+	}
+
+	got, partial := collectAssignedWorkBeads(&config.City{}, store)
+	if partial {
+		t.Fatal("collectAssignedWorkBeads reported partial results")
+	}
+	gotIDs := map[string]bool{}
+	for _, b := range got {
+		gotIDs[b.ID] = true
+	}
+	for _, want := range []string{refineryWisp.ID, deaconWisp.ID} {
+		if !gotIDs[want] {
+			t.Fatalf("collectAssignedWorkBeads IDs = %v, want assigned in-progress wisp %s", gotIDs, want)
+		}
+	}
+}
+
 func TestCollectAssignedWorkBeadsFallsBackLiveWhenCachedInProgressDirty(t *testing.T) {
 	backing := &demandRefreshFailStore{Store: beads.NewMemStore()}
 	work, err := backing.Create(beads.Bead{
