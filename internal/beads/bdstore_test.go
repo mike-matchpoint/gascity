@@ -1072,6 +1072,27 @@ func TestBdStoreCloseCLIError(t *testing.T) {
 	}
 }
 
+func TestBdStoreGetMapsTopLevelCloseReasonToMetadata(t *testing.T) {
+	const reason = "runtime close reason persistence verification"
+	runner := fakeRunner(map[string]struct {
+		out []byte
+		err error
+	}{
+		`bd show --json bd-abc-123`: {
+			out: []byte(`[{"id":"bd-abc-123","title":"test","status":"closed","issue_type":"task","created_at":"2025-01-15T10:30:00Z","close_reason":"` + reason + `"}]`),
+		},
+	})
+
+	s := beads.NewBdStore("/city", runner)
+	got, err := s.Get("bd-abc-123")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Metadata["close_reason"] != reason {
+		t.Fatalf("Metadata[close_reason] = %q, want %q", got.Metadata["close_reason"], reason)
+	}
+}
+
 func TestBdStoreCloseAllReturnsMetadataWriteFailure(t *testing.T) {
 	metadataErr := errors.New("metadata write failed")
 	runner := fakeRunner(map[string]struct {
@@ -1231,8 +1252,9 @@ func TestBdStoreCloseAllFallbackForwardsCloseReason(t *testing.T) {
 // of any `close` invocation into the provided slice and returns canned
 // closed-status JSON for every bead in the batch. update calls (from
 // SetMetadataBatch) succeed with empty output. Used by the
-// CloseAll-close-reason-forwarding tests below to assert the exact
-// shape of the bd close argv.
+// CloseAll-close-reason-forwarding tests below to assert the exact shape of the
+// bd close argv. Tests that need to assert metadata write calls use custom
+// runners instead.
 func captureCloseAllRunner(closeArgs *[]string, ids ...string) beads.CommandRunner {
 	closedJSON := []byte(`[`)
 	for i, id := range ids {
@@ -1257,14 +1279,11 @@ func captureCloseAllRunner(closeArgs *[]string, ids ...string) beads.CommandRunn
 	}
 }
 
-// TestBdStoreCloseAllForwardsCloseReason verifies that when the metadata
-// map passed to CloseAll contains a close_reason value, BdStore forwards
-// it as the --reason argument to bd close. This is required for cities
-// running with validation.on-close=error, where bd rejects close calls
-// without an explicit reason of >=20 characters. Mirrors the per-bead
-// BdStore.Close pattern for the batch path: CloseAll uses the shared
-// metadata map's close_reason because callers stamp the same metadata
-// on every bead in the batch.
+// TestBdStoreCloseAllForwardsCloseReason verifies that when the metadata map
+// passed to CloseAll contains a close_reason value, BdStore forwards it as the
+// --reason argument to bd close. This is required for cities running with
+// validation.on-close=error, where bd rejects close calls without an explicit
+// reason of >=20 characters.
 func TestBdStoreCloseAllForwardsCloseReason(t *testing.T) {
 	const reason = "order-tracking sweep: stale beyond watchdog window"
 	var closeArgs []string
@@ -1290,6 +1309,69 @@ func TestBdStoreCloseAllForwardsCloseReason(t *testing.T) {
 		if closeArgs[i] != want[i] {
 			t.Errorf("close args[%d] = %q, want %q\nfull args: %v", i, closeArgs[i], want[i], closeArgs)
 		}
+	}
+}
+
+func TestBdStoreCloseAllSkipsRedundantCloseReasonMetadataUpdate(t *testing.T) {
+	const reason = "order-tracking sweep: stale beyond watchdog window"
+	var closeArgs []string
+	runner := func(_, _ string, args ...string) ([]byte, error) {
+		switch args[0] {
+		case "update":
+			return nil, fmt.Errorf("unexpected metadata update: %v", args)
+		case "close":
+			closeArgs = append([]string(nil), args...)
+			return []byte(`[{"id":"bd-1","title":"t","status":"closed","issue_type":"task","created_at":"2025-01-15T10:30:00Z","close_reason":"` + reason + `"}]`), nil
+		default:
+			return nil, fmt.Errorf("unexpected command: %v", args)
+		}
+	}
+
+	s := beads.NewBdStore("/city", runner)
+	if _, err := s.CloseAll([]string{"bd-1"}, map[string]string{
+		"close_reason": reason,
+	}); err != nil {
+		t.Fatalf("CloseAll: %v", err)
+	}
+
+	want := []string{"close", "--force", "--json", "--reason", reason, "bd-1"}
+	if got := fmt.Sprint(closeArgs); got != fmt.Sprint(want) {
+		t.Fatalf("close args = %v, want %v", closeArgs, want)
+	}
+}
+
+func TestBdStoreCloseAllPreStampsOnlyNonReasonMetadata(t *testing.T) {
+	const reason = "order-tracking sweep: stale beyond watchdog window"
+	var updateArgs []string
+	var closeArgs []string
+	runner := func(_, _ string, args ...string) ([]byte, error) {
+		switch args[0] {
+		case "update":
+			updateArgs = append([]string(nil), args...)
+			return []byte(`[]`), nil
+		case "close":
+			closeArgs = append([]string(nil), args...)
+			return []byte(`[{"id":"bd-1","title":"t","status":"closed","issue_type":"task","created_at":"2025-01-15T10:30:00Z","close_reason":"` + reason + `","metadata":{"order_tracking_sweep":"late-create-timeout"}}]`), nil
+		default:
+			return nil, fmt.Errorf("unexpected command: %v", args)
+		}
+	}
+
+	s := beads.NewBdStore("/city", runner)
+	if _, err := s.CloseAll([]string{"bd-1"}, map[string]string{
+		"close_reason":         reason,
+		"order_tracking_sweep": "late-create-timeout",
+	}); err != nil {
+		t.Fatalf("CloseAll: %v", err)
+	}
+
+	wantUpdate := []string{"update", "--json", "bd-1", "--set-metadata", "order_tracking_sweep=late-create-timeout"}
+	if got := fmt.Sprint(updateArgs); got != fmt.Sprint(wantUpdate) {
+		t.Fatalf("update args = %v, want %v", updateArgs, wantUpdate)
+	}
+	wantClose := []string{"close", "--force", "--json", "--reason", reason, "bd-1"}
+	if got := fmt.Sprint(closeArgs); got != fmt.Sprint(wantClose) {
+		t.Fatalf("close args = %v, want %v", closeArgs, wantClose)
 	}
 }
 

@@ -497,6 +497,7 @@ type bdIssue struct {
 	Description  string       `json:"description"`
 	Labels       []string     `json:"labels"`
 	Metadata     StringMap    `json:"metadata,omitempty"`
+	CloseReason  string       `json:"close_reason,omitempty"`
 	Dependencies []bdIssueDep `json:"dependencies,omitempty"`
 	Ephemeral    bool         `json:"ephemeral,omitempty"`
 }
@@ -607,6 +608,16 @@ func (b *bdIssue) toBead() Bead {
 			}
 		}
 	}
+	metadata := maps.Clone(b.Metadata)
+	if reason := strings.TrimSpace(b.CloseReason); reason != "" {
+		if metadata == nil {
+			metadata = make(map[string]string, 1)
+		}
+		if strings.TrimSpace(metadata["close_reason"]) == "" {
+			metadata["close_reason"] = reason
+		}
+	}
+
 	return Bead{
 		ID:           b.ID,
 		Title:        b.Title,
@@ -621,7 +632,7 @@ func (b *bdIssue) toBead() Bead {
 		Needs:        b.Needs,
 		Description:  b.Description,
 		Labels:       b.Labels,
-		Metadata:     b.Metadata,
+		Metadata:     metadata,
 		Dependencies: deps,
 		Ephemeral:    b.Ephemeral,
 	}
@@ -1320,29 +1331,30 @@ func (s *BdStore) Ping() error {
 	return nil
 }
 
-// CloseAll closes multiple beads in batch and sets metadata on each.
+// CloseAll closes multiple beads in batch and sets non-reason metadata on each.
 // Idempotent: closing an already-closed bead returns nil.
 //
-// Forwards metadata["close_reason"] as the --reason argument to bd close,
-// so callers can satisfy validators like validation.on-close=error (which
-// rejects close calls without an explicit --reason of >=20 characters).
-// Whitespace is trimmed; an empty or whitespace-only value is treated as
-// absent and no --reason flag is added, preserving backward compatibility
-// for callers that don't pre-stamp a reason. The same map is also written
-// via SetMetadataBatch on each bead before close, so the reason is persisted
-// in the bead's metadata as well as forwarded to bd. If batch close falls
-// back to per-id closes, the same shared reason is forwarded to every
-// fallback close.
+// Forwards metadata["close_reason"] as the --reason argument to bd close, so
+// callers can satisfy validators like validation.on-close=error (which rejects
+// close calls without an explicit --reason of >=20 characters). Whitespace is
+// trimmed; an empty or whitespace-only value is treated as absent and no
+// --reason flag is added, preserving backward compatibility for callers that
+// don't pre-stamp a reason. Non-reason metadata is still written before close,
+// since some stores prevent metadata writes on closed beads. bd persists
+// --reason as the close reason itself, and BdStore maps that field back to
+// Bead.Metadata["close_reason"] on reads.
 func (s *BdStore) CloseAll(ids []string, metadata map[string]string) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
 
-	// Set metadata on all beads first (before closing, since some stores
-	// prevent metadata writes on closed beads).
+	preCloseMetadata := metadataExcludingCloseReason(metadata)
+
+	// Set non-reason metadata on all beads first (before closing, since some
+	// stores prevent metadata writes on closed beads).
 	for _, id := range ids {
-		if len(metadata) > 0 {
-			if err := s.SetMetadataBatch(id, metadata); err != nil {
+		if len(preCloseMetadata) > 0 {
+			if err := s.SetMetadataBatch(id, preCloseMetadata); err != nil {
 				return 0, err
 			}
 		}
@@ -1369,6 +1381,23 @@ func (s *BdStore) CloseAll(ids []string, metadata map[string]string) (int, error
 		return closed, nil
 	}
 	return len(ids), nil
+}
+
+func metadataExcludingCloseReason(metadata map[string]string) map[string]string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(metadata)-1)
+	for key, value := range metadata {
+		if key == "close_reason" {
+			continue
+		}
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // Close sets a bead's status to closed via bd close. If the bead already has
