@@ -4868,6 +4868,76 @@ func TestBuildDesiredState_OnDemandNamedSession_PatrolWispMaterializesNamedSessi
 	}
 }
 
+func TestBuildDesiredState_OnDemandNamedSession_PatrolWispDemandSelectsNewestCandidate(t *testing.T) {
+	cityPath := t.TempDir()
+	store := beads.NewMemStore()
+	oldWisp, err := store.Create(beads.Bead{
+		Title:     "mol-refinery-patrol",
+		Assignee:  "refinery",
+		Ref:       "mol-refinery-patrol",
+		Ephemeral: true,
+		Metadata: map[string]string{
+			"formula": "mol-refinery-patrol",
+			"gc.kind": "wisp",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create old patrol wisp: %v", err)
+	}
+	inProgress := "in_progress"
+	if err := store.Update(oldWisp.ID, beads.UpdateOpts{Status: &inProgress}); err != nil {
+		t.Fatalf("mark old patrol wisp in progress: %v", err)
+	}
+	time.Sleep(time.Millisecond)
+	newWisp, err := store.Create(beads.Bead{
+		Title:     "mol-refinery-patrol",
+		Assignee:  "refinery",
+		Ref:       "mol-refinery-patrol",
+		Ephemeral: true,
+		Metadata: map[string]string{
+			"formula": "mol-refinery-patrol",
+			"gc.kind": "wisp",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create new patrol wisp: %v", err)
+	}
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Agents: []config.Agent{{
+			Name:              "refinery",
+			StartCommand:      "true",
+			MaxActiveSessions: intPtr(1),
+			WorkQuery:         "printf ''",
+		}},
+		NamedSessions: []config.NamedSession{{
+			Template: "refinery",
+			Mode:     "on_demand",
+		}},
+	}
+
+	spec, ok := findNamedSessionSpec(cfg, "test-city", "refinery")
+	if !ok {
+		t.Fatal("named session spec not found")
+	}
+	demand, partial := namedSessionPatrolWispWakeDemand(
+		cityPath, cfg, store, nil,
+		map[string]namedSessionSpec{"refinery": spec},
+		nil,
+		io.Discard,
+	)
+	if partial {
+		t.Fatal("partial = true, want false")
+	}
+	source, ok := demand["refinery"]
+	if !ok {
+		t.Fatal("wisp demand[refinery] missing")
+	}
+	if source.WispID != newWisp.ID || source.Status != "open" {
+		t.Fatalf("selected source = %+v, want newest open wisp %s over old in_progress %s", source, newWisp.ID, oldWisp.ID)
+	}
+}
+
 func TestBuildDesiredState_OnDemandNamedSession_PatrolWispProbeChecksBoundedPageAndTitle(t *testing.T) {
 	cityPath := t.TempDir()
 	store := &demandTierRecordingStore{MemStore: beads.NewMemStore()}

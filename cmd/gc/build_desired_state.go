@@ -957,6 +957,8 @@ func namedSessionPatrolWispWakeDemand(
 			fmt.Fprintf(stderr, "namedWispWake: %s reachable store %q unavailable\n", identity, storeRef) //nolint:errcheck
 			continue
 		}
+		var selected NamedSessionWispDemandSource
+		var selectedOK bool
 		for _, status := range []string{"in_progress", "open"} {
 			if err := probeCtx.Err(); err != nil {
 				partial = true
@@ -979,24 +981,40 @@ func namedSessionPatrolWispWakeDemand(
 				if !isPatrolWispWakeCandidate(row) {
 					continue
 				}
-				fmt.Fprintf(stderr, "namedWispWake: %s matched by wisp %s (store=%s status=%s)\n", identity, row.ID, storeRef, row.Status) //nolint:errcheck
-				demand[identity] = NamedSessionWispDemandSource{
+				candidate := NamedSessionWispDemandSource{
 					WispID:    row.ID,
 					StoreRef:  storeRef,
 					Status:    row.Status,
 					CreatedAt: row.CreatedAt,
 				}
-				break
+				if namedSessionWispDemandSourceNewer(candidate, selected, selectedOK) {
+					selected = candidate
+					selectedOK = true
+				}
 			}
-			if _, ok := demand[identity]; ok {
-				break
-			}
+		}
+		if selectedOK {
+			fmt.Fprintf(stderr, "namedWispWake: %s matched by wisp %s (store=%s status=%s)\n", identity, selected.WispID, selected.StoreRef, selected.Status) //nolint:errcheck
+			demand[identity] = selected
 		}
 	}
 	if len(demand) == 0 {
 		return nil, partial
 	}
 	return demand, partial
+}
+
+func namedSessionWispDemandSourceNewer(candidate, current NamedSessionWispDemandSource, currentOK bool) bool {
+	if !currentOK {
+		return true
+	}
+	if candidate.CreatedAt.After(current.CreatedAt) {
+		return true
+	}
+	if candidate.CreatedAt.Equal(current.CreatedAt) {
+		return candidate.ReferenceID() > current.ReferenceID()
+	}
+	return false
 }
 
 func namedSessionWispWakeStore(
