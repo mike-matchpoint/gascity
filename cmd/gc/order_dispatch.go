@@ -49,7 +49,8 @@ const (
 	orderDispatchSingleReadBudget          = 500 * time.Millisecond
 	orderDispatchTrackingWriteBudget       = time.Second
 	orderDispatchOpenReadLimit             = 1000
-	orderDispatchHistoryReadLimit          = 200
+	orderDispatchLastRunReadLimit          = 1
+	orderDispatchEventCursorReadLimit      = 200
 	orderDispatchDescendantMaxDepth        = 4
 	orderDispatchDescendantMaxRows         = 500
 
@@ -762,7 +763,7 @@ func (s *orderDispatchStoreSnapshot) captureOrder(ctx context.Context, store bea
 	if needsLastRun {
 		history, err := orderDispatchRuntimeList(ctx, store, beads.ListQuery{
 			Label:         orderRunLabel(scopedName),
-			Limit:         orderDispatchHistoryReadLimit,
+			Limit:         orderDispatchLastRunReadLimit,
 			IncludeClosed: true,
 			Sort:          beads.SortCreatedDesc,
 			TierMode:      beads.TierBoth,
@@ -770,9 +771,6 @@ func (s *orderDispatchStoreSnapshot) captureOrder(ctx context.Context, store bea
 		if err != nil {
 			s.addDegradation(scopedName, "order-run history", err)
 			return
-		}
-		if len(history) >= orderDispatchHistoryReadLimit {
-			s.addDegradation(scopedName, "order-run history", fmt.Errorf("history read hit cap %d", orderDispatchHistoryReadLimit))
 		}
 		for _, b := range history {
 			if b.CreatedAt.After(s.lastRunByOrder[scopedName]) {
@@ -786,7 +784,7 @@ func (s *orderDispatchStoreSnapshot) captureOrder(ctx context.Context, store bea
 	}
 	cursorRows, err := orderDispatchRuntimeList(ctx, store, beads.ListQuery{
 		Label:         "order:" + scopedName,
-		Limit:         orderDispatchHistoryReadLimit,
+		Limit:         orderDispatchEventCursorReadLimit,
 		IncludeClosed: true,
 		Sort:          beads.SortCreatedDesc,
 		TierMode:      beads.TierBoth,
@@ -795,8 +793,8 @@ func (s *orderDispatchStoreSnapshot) captureOrder(ctx context.Context, store bea
 		s.addDegradation(scopedName, "event cursor", err)
 		return
 	}
-	if len(cursorRows) >= orderDispatchHistoryReadLimit {
-		s.addDegradation(scopedName, "event cursor", fmt.Errorf("cursor read hit cap %d", orderDispatchHistoryReadLimit))
+	if len(cursorRows) >= orderDispatchEventCursorReadLimit {
+		s.addDegradation(scopedName, "event cursor", fmt.Errorf("cursor read hit cap %d", orderDispatchEventCursorReadLimit))
 	}
 	labelSets := make([][]string, 0, len(cursorRows))
 	for _, b := range cursorRows {

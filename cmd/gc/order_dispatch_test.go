@@ -1262,6 +1262,65 @@ func TestOrderDispatchCachesLastRunBetweenDispatches(t *testing.T) {
 	}
 }
 
+func TestOrderDispatchDeepLastRunHistoryDoesNotDefer(t *testing.T) {
+	baseStore := &createdAtOverrideStore{Store: beads.NewMemStore()}
+	store := &countingListStore{Store: baseStore}
+	now := time.Date(2026, 5, 27, 20, 0, 0, 0, time.UTC)
+	for i := 250; i >= 1; i-- {
+		created, err := store.Create(beads.Bead{
+			Title:     "prior run",
+			Labels:    orderTrackingLabels("history-heavy"),
+			CreatedAt: now.Add(-time.Duration(i) * time.Minute),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.CloseAll([]string{created.ID}, map[string]string{"test": "closed prior run"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var rec memRecorder
+	ran := false
+	fakeExec := func(_ context.Context, _, _ string, _ []string) ([]byte, error) {
+		ran = true
+		return []byte("ok\n"), nil
+	}
+	aa := []orders.Order{{
+		Name:     "history-heavy",
+		Trigger:  "cooldown",
+		Interval: "1h",
+		Exec:     "echo ok",
+	}}
+	ad := buildOrderDispatcherFromListExec(aa, store, nil, fakeExec, &rec)
+	if ad == nil {
+		t.Fatal("expected non-nil dispatcher")
+	}
+
+	ad.dispatch(context.Background(), t.TempDir(), now)
+	ad.drain(context.Background())
+
+	if ran {
+		t.Fatal("order ran despite a recent last-run history entry")
+	}
+	for _, event := range rec.snapshot() {
+		if event.Type == events.OrderFailed && event.Subject == "history-heavy" {
+			t.Fatalf("deep last-run history deferred order: %+v", event)
+		}
+	}
+	tick, ok := rec.eventByType(events.OrderDispatchTick)
+	if !ok {
+		t.Fatal("missing order dispatch tick event")
+	}
+	var payload events.OrderDispatchTickPayload
+	if err := json.Unmarshal(tick.Payload, &payload); err != nil {
+		t.Fatalf("decode tick payload: %v", err)
+	}
+	if payload.OrdersDeferred != 0 {
+		t.Fatalf("OrdersDeferred = %d, want 0; payload=%+v", payload.OrdersDeferred, payload)
+	}
+}
+
 func TestOrderDispatchRefreshesCachedLastRunBeforeDueDispatch(t *testing.T) {
 	baseStore := &createdAtOverrideStore{Store: beads.NewMemStore()}
 	store := &countingListStore{Store: baseStore}
