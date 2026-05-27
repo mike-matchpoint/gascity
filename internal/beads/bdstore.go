@@ -210,8 +210,8 @@ func NewBdStoreWithPrefix(dir string, runner CommandRunner, idPrefix string) *Bd
 	return &BdStore{dir: dir, runner: runner, idPrefix: normalizeIDPrefix(idPrefix)}
 }
 
-// WithIndexedReader attaches a read-only active list accelerator. Unsupported
-// queries and reader failures continue to use the Beads CLI path.
+// WithIndexedReader attaches a read-only active list accelerator.
+// Foreground List calls may fall back to the Beads CLI; RuntimeList does not.
 func (s *BdStore) WithIndexedReader(reader IndexedLister) *BdStore {
 	if s != nil {
 		s.indexedReader = reader

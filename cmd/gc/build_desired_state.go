@@ -93,7 +93,11 @@ type defaultScaleCheckTarget struct {
 	err      error
 }
 
-const namedSessionWispWakeProbeLimit = 25
+const (
+	namedSessionWispWakeProbeLimit  = 25
+	namedSessionWispWakeReadBudget  = 250 * time.Millisecond
+	namedSessionWispWakeTotalBudget = time.Second
+)
 
 var errPoolSessionCreateBudgetExhausted = errors.New("pool session create budget exhausted")
 
@@ -905,7 +909,16 @@ func namedSessionPatrolWispWakeDemand(
 
 	var partial bool
 	demand := make(map[string]bool)
+	probeCtx, cancel := context.WithTimeout(context.Background(), namedSessionWispWakeTotalBudget)
+	defer cancel()
+	readPolicy := beads.RuntimeReadPolicy(beads.ReadClassHotDegradedOK, "controller.named-session.wisp-wake")
+	readPolicy.Timeout = namedSessionWispWakeReadBudget
 	for _, identity := range identities {
+		if err := probeCtx.Err(); err != nil {
+			partial = true
+			log.Printf("namedWispWake: aggregate probe budget exhausted before assignee=%q: %v", identity, err)
+			break
+		}
 		spec := namedSpecs[identity]
 		if spec.Mode != "on_demand" || alreadyReady[identity] {
 			continue
@@ -917,18 +930,22 @@ func namedSessionPatrolWispWakeDemand(
 			continue
 		}
 		for _, status := range []string{"in_progress", "open"} {
-			rows, err := listForControllerDemand(store, beads.ListQuery{
-				Status:   status,
-				Assignee: identity,
-				Limit:    namedSessionWispWakeProbeLimit,
-				TierMode: beads.TierWisps,
-			})
+			if err := probeCtx.Err(); err != nil {
+				partial = true
+				log.Printf("namedWispWake: aggregate probe budget exhausted for assignee=%q status=%s: %v", identity, status, err)
+				break
+			}
+			rows, err := beads.RuntimeList(probeCtx, store, beads.ListQuery{
+				Status:     status,
+				Assignee:   identity,
+				Limit:      namedSessionWispWakeProbeLimit,
+				TierMode:   beads.TierWisps,
+				SkipLabels: true,
+			}, readPolicy)
 			if err != nil {
 				partial = true
-				log.Printf("namedWispWake: List(%s, assignee=%q, wisps): %v", status, identity, err)
-				if !beads.IsPartialResult(err) || len(rows) == 0 {
-					continue
-				}
+				log.Printf("namedWispWake: degraded runtime read status=%s assignee=%q store=%q: %v", status, identity, storeRef, err)
+				continue
 			}
 			for _, row := range rows {
 				if !isPatrolWispWakeCandidate(row) {
@@ -1262,12 +1279,17 @@ func defaultScaleCheckCounts(targets []defaultScaleCheckTarget) (map[string]int,
 	}
 
 	for key, group := range groups {
-		ready, err := readyForControllerDemand(group.store)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("default scale_check %s templates=%s: Ready(): %w", key, strings.Join(sortedStringSet(group.templates), ","), err))
+		// counted dedups across the two demand sources below so a bead
+		// surfaced by both Ready() and the gc.pool_demand list is counted
+		// exactly once per template.
+		counted := make(map[string]struct{})
+
+		ready, readyErr := readyForControllerDemand(group.store)
+		if readyErr != nil {
+			errs = append(errs, fmt.Errorf("default scale_check %s templates=%s: Ready(): %w", key, strings.Join(sortedStringSet(group.templates), ","), readyErr))
 			partialTemplates = markScaleCheckPartialSet(partialTemplates, group.templates)
-			if !beads.IsPartialResult(err) || len(ready) == 0 {
-				continue
+			if !beads.IsPartialResult(readyErr) {
+				ready = nil
 			}
 		}
 		for _, b := range ready {
@@ -1275,9 +1297,56 @@ func defaultScaleCheckCounts(targets []defaultScaleCheckTarget) (map[string]int,
 				continue
 			}
 			template := strings.TrimSpace(b.Metadata["gc.routed_to"])
-			if _, ok := group.templates[template]; ok {
-				counts[template]++
+			if _, ok := group.templates[template]; !ok {
+				continue
 			}
+			if _, dup := counted[b.ID]; dup {
+				continue
+			}
+			counted[b.ID] = struct{}{}
+			counts[template]++
+		}
+
+		// Source 2: explicit pool-demand path. Two writers stamp the wisp
+		// when a.Pool != "" — doOrderRunWithJSON (cmd_order.go, the
+		// gc order run CLI path) and memoryOrderDispatcher.dispatchOne
+		// (order_dispatch.go, the supervisor's in-process cron path).
+		// Both write poolDemandMetadataPair() alongside the routing key,
+		// so cron-fired pool orders surface scale_check demand even when
+		// the wisp lands as a molecule that readyExcludeTypes filters out
+		// (per PR #1154 / issue #1039 — formula steps are not actionable
+		// work, the molecule is the container). The list filter is
+		// metadata-only (open + gc.pool_demand=<sentinel>); the
+		// unassigned + matching-routed_to checks apply below as for the
+		// Ready source.
+		//
+		// RuntimeList uses the bounded hot-read contract. It can use cache or
+		// indexed coverage, but it must not fall through to hydrated CLI listing
+		// from the controller tick.
+		demand, demandErr := beads.RuntimeList(context.Background(), group.store, beads.ListQuery{
+			Status:   "open",
+			Metadata: poolDemandMetadataPair(),
+		}, beads.RuntimeReadPolicy(beads.ReadClassHotDegradedOK, "controller.default-scale.pool-demand"))
+		if demandErr != nil {
+			errs = append(errs, fmt.Errorf("default scale_check %s templates=%s: List(%s): %w", key, strings.Join(sortedStringSet(group.templates), ","), poolDemandMetadataKey, demandErr))
+			partialTemplates = markScaleCheckPartialSet(partialTemplates, group.templates)
+			if !beads.IsPartialResult(demandErr) {
+				demand = nil
+			}
+		}
+		for _, b := range demand {
+			if strings.TrimSpace(b.Assignee) != "" {
+				continue
+			}
+			template := strings.TrimSpace(b.Metadata["gc.routed_to"])
+			if _, ok := group.templates[template]; !ok {
+				continue
+			}
+			if _, dup := counted[b.ID]; dup {
+				continue
+			}
+			counted[b.ID] = struct{}{}
+			counts[template]++
 		}
 	}
 	return counts, partialTemplates, errs
@@ -1478,8 +1547,9 @@ func listForControllerDemand(store beads.Store, query beads.ListQuery) ([]beads.
 
 func readyForControllerDemand(store beads.Store) ([]beads.Bead, error) {
 	// Controller demand reads are intentionally cache-tolerant, not
-	// authoritative lifecycle gates; CachedReady falls back whenever the cache
-	// has dirty or unknown dependency coverage.
+	// authoritative lifecycle gates. CachedReady answers only when the cache
+	// has known dependency coverage; otherwise RuntimeReady reports a degraded
+	// hot read instead of invoking the hydrated ready path from the tick.
 	if cached, ok := store.(interface {
 		CachedReady() ([]beads.Bead, bool)
 	}); ok {

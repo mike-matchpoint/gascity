@@ -137,6 +137,9 @@ func (c *CachingStore) RuntimeList(ctx context.Context, query ListQuery, policy 
 }
 
 func (c *CachingStore) runtimeCachedList(query ListQuery, policy ReadPolicy) ([]Bead, bool) {
+	if policy.Class == ReadClassHotAuthoritative {
+		return nil, false
+	}
 	if query.TierMode != TierIssues || query.Live {
 		return nil, false
 	}
@@ -148,7 +151,7 @@ func (c *CachingStore) runtimeCachedList(query ListQuery, policy ReadPolicy) ([]
 	if c.primePartialErr != nil {
 		return nil, false
 	}
-	if policy.Class == ReadClassHotAuthoritative && len(c.dirty) > 0 {
+	if len(c.dirty) > 0 {
 		return nil, false
 	}
 	if query.IncludesClosed() {
