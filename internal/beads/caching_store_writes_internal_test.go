@@ -14,6 +14,8 @@ type countingBackingStore struct {
 	setMetadataBatchCalls int
 	updateCalls           int
 	closeCalls            int
+	closeAllCalls         int
+	closeAllIDs           []string
 }
 
 func (c *countingBackingStore) SetMetadata(id, key, value string) error {
@@ -34,6 +36,12 @@ func (c *countingBackingStore) Update(id string, opts UpdateOpts) error {
 func (c *countingBackingStore) Close(id string) error {
 	c.closeCalls++
 	return c.Store.Close(id)
+}
+
+func (c *countingBackingStore) CloseAll(ids []string, metadata map[string]string) (int, error) {
+	c.closeAllCalls++
+	c.closeAllIDs = append([]string(nil), ids...)
+	return c.Store.CloseAll(ids, metadata)
 }
 
 type txPreservingBackingStore struct {
@@ -523,6 +531,101 @@ func TestCachingStoreCloseFallsThroughOnCacheMiss(t *testing.T) {
 	if backing.closeCalls != 1 {
 		t.Errorf("backing.Close called %d times; want 1 (cache miss must fall through)",
 			backing.closeCalls)
+	}
+}
+
+// TestCachingStoreCloseAllSkipsBackingWhenAllAlreadyClosed verifies that the
+// batch close path has the same no-op protection as Close. Order dispatch uses
+// CloseAll for tracking beads; retry/sweep paths can see a cached closed bead
+// and must not launch a bd subprocess that can reach Dolt as a no-op commit.
+func TestCachingStoreCloseAllSkipsBackingWhenAllAlreadyClosed(t *testing.T) {
+	t.Parallel()
+
+	backing := &countingBackingStore{Store: NewMemStore()}
+	first, err := backing.Create(Bead{Title: "first"})
+	if err != nil {
+		t.Fatalf("Create first: %v", err)
+	}
+	second, err := backing.Create(Bead{Title: "second"})
+	if err != nil {
+		t.Fatalf("Create second: %v", err)
+	}
+
+	cache := NewCachingStoreForTest(backing, nil)
+	if err := cache.Prime(context.Background()); err != nil {
+		t.Fatalf("Prime: %v", err)
+	}
+
+	if closed, err := cache.CloseAll([]string{first.ID, second.ID}, map[string]string{"phase": "done"}); err != nil || closed != 2 {
+		t.Fatalf("first CloseAll closed=%d err=%v, want 2 nil", closed, err)
+	}
+	if backing.closeAllCalls != 1 {
+		t.Fatalf("backing.CloseAll after first close = %d, want 1", backing.closeAllCalls)
+	}
+	backing.closeAllCalls = 0
+	backing.closeAllIDs = nil
+
+	closed, err := cache.CloseAll([]string{first.ID, second.ID}, map[string]string{"phase": "done"})
+	if err != nil {
+		t.Fatalf("repeat CloseAll: %v", err)
+	}
+	if closed != 0 {
+		t.Fatalf("repeat CloseAll closed = %d, want 0 already-closed mutations", closed)
+	}
+	if backing.closeAllCalls != 0 {
+		t.Errorf("backing.CloseAll called %d times on all-closed batch; want 0", backing.closeAllCalls)
+	}
+	if len(backing.closeAllIDs) != 0 {
+		t.Errorf("backing.CloseAll ids = %v, want none", backing.closeAllIDs)
+	}
+}
+
+// TestCachingStoreCloseAllFiltersAlreadyClosedCachedIDs verifies that a mixed
+// batch still closes open IDs while stripping cached closed IDs before the
+// backing store sees the batch.
+func TestCachingStoreCloseAllFiltersAlreadyClosedCachedIDs(t *testing.T) {
+	t.Parallel()
+
+	backing := &countingBackingStore{Store: NewMemStore()}
+	closedFirst, err := backing.Create(Bead{Title: "closed first"})
+	if err != nil {
+		t.Fatalf("Create closedFirst: %v", err)
+	}
+	openSecond, err := backing.Create(Bead{Title: "open second"})
+	if err != nil {
+		t.Fatalf("Create openSecond: %v", err)
+	}
+
+	cache := NewCachingStoreForTest(backing, nil)
+	if err := cache.Prime(context.Background()); err != nil {
+		t.Fatalf("Prime: %v", err)
+	}
+	if err := cache.Close(closedFirst.ID); err != nil {
+		t.Fatalf("seed Close: %v", err)
+	}
+	backing.closeAllCalls = 0
+	backing.closeAllIDs = nil
+
+	closed, err := cache.CloseAll([]string{closedFirst.ID, openSecond.ID}, map[string]string{"phase": "done"})
+	if err != nil {
+		t.Fatalf("CloseAll mixed: %v", err)
+	}
+	if closed != 1 {
+		t.Fatalf("CloseAll mixed closed = %d, want 1", closed)
+	}
+	if backing.closeAllCalls != 1 {
+		t.Fatalf("backing.CloseAll calls = %d, want 1", backing.closeAllCalls)
+	}
+	if len(backing.closeAllIDs) != 1 || backing.closeAllIDs[0] != openSecond.ID {
+		t.Fatalf("backing.CloseAll ids = %v, want [%s]", backing.closeAllIDs, openSecond.ID)
+	}
+
+	got, err := cache.Get(openSecond.ID)
+	if err != nil {
+		t.Fatalf("Get openSecond: %v", err)
+	}
+	if got.Status != "closed" || got.Metadata["phase"] != "done" {
+		t.Fatalf("openSecond after CloseAll = status %q metadata %v, want closed phase=done", got.Status, got.Metadata)
 	}
 }
 

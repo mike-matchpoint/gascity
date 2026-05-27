@@ -202,6 +202,11 @@ func (c *CachingStore) Reopen(id string) error {
 
 // CloseAll closes multiple beads and sets metadata on each.
 func (c *CachingStore) CloseAll(ids []string, metadata map[string]string) (int, error) {
+	ids = c.closeAllIDsNeedingBacking(ids)
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
 	n, err := c.backing.CloseAll(ids, metadata)
 	if err != nil && n == 0 {
 		return n, err
@@ -253,6 +258,29 @@ func (c *CachingStore) CloseAll(ids []string, metadata map[string]string) (int, 
 	c.mu.Unlock()
 	c.notifyChanges(notifications)
 	return n, errors.Join(err, refreshErr)
+}
+
+func (c *CachingStore) closeAllIDsNeedingBacking(ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.state != cacheLive && c.state != cachePartial {
+		return append([]string(nil), ids...)
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			out = append(out, id)
+			continue
+		}
+		if b, ok := c.beads[id]; ok && b.Status == "closed" {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
 }
 
 // SetMetadata sets a single metadata key-value on a bead.
