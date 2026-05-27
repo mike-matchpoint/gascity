@@ -133,6 +133,119 @@ exit 0
 	}
 }
 
+func TestMaintenanceDoltScriptsRespectActiveMaintenanceLease(t *testing.T) {
+	tests := []struct {
+		name      string
+		script    string
+		operation string
+		env       map[string]string
+	}{
+		{
+			name:      "reaper",
+			script:    filepath.Join("packs", "maintenance", "assets", "scripts", "reaper.sh"),
+			operation: "backup-sync",
+			env:       map[string]string{"GC_REAPER_DRY_RUN": "1"},
+		},
+		{
+			name:      "jsonl export",
+			script:    filepath.Join("packs", "maintenance", "assets", "scripts", "jsonl-export.sh"),
+			operation: "broad-cleanup",
+			env: map[string]string{
+				"GC_JSONL_ARCHIVE_REPO":      "archive",
+				"GC_JSONL_MAX_PUSH_FAILURES": "99",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cityDir := t.TempDir()
+			binDir := t.TempDir()
+			stateDir := t.TempDir()
+			doltLog := filepath.Join(t.TempDir(), "dolt-args.log")
+			gcLog := filepath.Join(t.TempDir(), "gc.log")
+			writeActiveMaintenanceLease(t, cityDir, tt.operation)
+
+			writeMaintenanceDoltStub(t, filepath.Join(binDir, "dolt"))
+			writeExecutable(t, filepath.Join(binDir, "gc"), `#!/bin/sh
+printf '%s\n' "$*" >> "$GC_CALL_LOG"
+exit 0
+`)
+			writeExecutable(t, filepath.Join(binDir, "jq"), "#!/bin/sh\nexit 0\n")
+
+			env := map[string]string{
+				"DOLT_ARGS_LOG":       doltLog,
+				"GC_CALL_LOG":         gcLog,
+				"GC_CITY":             cityDir,
+				"GC_CITY_PATH":        cityDir,
+				"GC_PACK_STATE_DIR":   stateDir,
+				"GC_DOLT_HOST":        "127.0.0.1",
+				"GC_DOLT_PORT":        "3307",
+				"GC_DOLT_USER":        "root",
+				"GC_DOLT_PASSWORD":    "",
+				"GIT_CONFIG_GLOBAL":   filepath.Join(t.TempDir(), "gitconfig"),
+				"GIT_CONFIG_NOSYSTEM": "1",
+				"PATH":                binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+			}
+			for key, value := range tt.env {
+				if key == "GC_JSONL_ARCHIVE_REPO" {
+					value = filepath.Join(cityDir, value)
+				}
+				env[key] = value
+			}
+
+			out, err := runScriptResult(t, filepath.Join(exampleDir(), tt.script), env)
+			if err == nil {
+				t.Fatalf("%s succeeded despite active maintenance lease\n%s", tt.name, out)
+			}
+			exitErr := &exec.ExitError{}
+			if !errors.As(err, &exitErr) || exitErr.ExitCode() != 75 {
+				t.Fatalf("%s exit = %v, want exit 75\n%s", tt.name, err, out)
+			}
+			if !strings.Contains(string(out), "active Dolt maintenance lease") {
+				t.Fatalf("%s output missing active lease diagnostic:\n%s", tt.name, out)
+			}
+			if data, err := os.ReadFile(doltLog); err == nil && len(data) > 0 {
+				t.Fatalf("%s should not issue Dolt calls while another lease is active:\n%s", tt.name, data)
+			}
+		})
+	}
+}
+
+func TestMaintenanceDoltTargetUsesBoundedSQLAndLease(t *testing.T) {
+	targetPath := filepath.Join(exampleDir(), "packs", "maintenance", "assets", "scripts", "dolt-target.sh")
+	data, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatalf("ReadFile(dolt-target.sh): %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"maintenance_lease.sh",
+		"run_bounded \"$DOLT_SQL_TIMEOUT_SECONDS\" dolt",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("dolt-target.sh missing %q:\n%s", want, text)
+		}
+	}
+
+	for _, script := range []string{
+		filepath.Join(exampleDir(), "packs", "maintenance", "assets", "scripts", "reaper.sh"),
+		filepath.Join(exampleDir(), "packs", "maintenance", "assets", "scripts", "jsonl-export.sh"),
+	} {
+		data, err := os.ReadFile(script)
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", script, err)
+		}
+		text := string(data)
+		if !strings.Contains(text, "enter_dolt_maintenance_lease") {
+			t.Fatalf("%s does not acquire the maintenance lease", filepath.Base(script))
+		}
+		if !strings.Contains(text, "backup_export") {
+			t.Fatalf("%s does not exclude legacy backup_export from database enumeration", filepath.Base(script))
+		}
+	}
+}
+
 func TestOrphanSweepPreservesQualifiedRigAssignees(t *testing.T) {
 	cityDir := t.TempDir()
 	binDir := t.TempDir()
@@ -4606,6 +4719,29 @@ func writeCityBeadsMetadata(t *testing.T, cityDir, db string) {
 	metadata := fmt.Sprintf("{\n  \"dolt_database\": %q\n}\n", db)
 	if err := os.WriteFile(filepath.Join(metadataDir, "metadata.json"), []byte(metadata), 0o644); err != nil {
 		t.Fatalf("WriteFile(metadata.json): %v", err)
+	}
+}
+
+func writeActiveMaintenanceLease(t *testing.T, cityDir, operation string) {
+	t.Helper()
+	leaseDir := filepath.Join(cityDir, ".gc", "runtime", "maintenance")
+	if err := os.MkdirAll(leaseDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", leaseDir, err)
+	}
+	expires := time.Now().Add(time.Hour).UTC()
+	body := fmt.Sprintf(`{
+  "owner": "test",
+  "pid": %d,
+  "operation": %q,
+  "city_path": %q,
+  "started_at": %q,
+  "expires_at": %q,
+  "expires_at_epoch": %d,
+  "deadline_seconds": 3600
+}
+`, os.Getpid(), operation, cityDir, time.Now().UTC().Format(time.RFC3339), expires.Format(time.RFC3339), expires.Unix())
+	if err := os.WriteFile(filepath.Join(leaseDir, "dolt-maintenance-lease.json"), []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile(lease): %v", err)
 	}
 }
 

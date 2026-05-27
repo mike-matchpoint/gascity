@@ -19,6 +19,7 @@ if ! command -v jq >/dev/null 2>&1; then
     echo "jsonl-export: jq is required but not found in PATH" >&2
     exit 1
 fi
+enter_dolt_maintenance_lease jsonl-export "${GC_JSONL_LEASE_SECONDS:-1800}" || exit $?
 PACK_STATE_DIR="${GC_PACK_STATE_DIR:-${GC_CITY_RUNTIME_DIR:-$CITY/.gc/runtime}/packs/maintenance}"
 LEGACY_ARCHIVE_REPO="$CITY/.gc/jsonl-archive"
 LEGACY_STATE_FILE="$CITY/.gc/jsonl-export-state.json"
@@ -712,7 +713,7 @@ retry_pending_spike_alert
 
 is_user_database() {
     case "$1" in
-        information_schema|mysql|dolt_cluster|performance_schema|sys|__gc_probe|benchdb|testdb_*|beads_pt*|beads_vr*|doctest_*|doctortest_*)
+        information_schema|mysql|dolt_cluster|performance_schema|sys|__gc_probe|backup_export|benchdb|testdb_*|beads_pt*|beads_vr*|doctest_*|doctortest_*)
             return 1
             ;;
         beads_t*)

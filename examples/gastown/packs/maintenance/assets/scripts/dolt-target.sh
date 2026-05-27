@@ -3,6 +3,24 @@
 
 GC_CITY_PATH="${GC_CITY_PATH:-${GC_CITY:-.}}"
 
+MAINTENANCE_LEASE_SCRIPT="${GC_DOLT_MAINTENANCE_LEASE_SCRIPT:-}"
+if [ -z "$MAINTENANCE_LEASE_SCRIPT" ]; then
+    SYSTEM_LEASE_SCRIPT="${GC_SYSTEM_PACKS_DIR:-$GC_CITY_PATH/.gc/system/packs}/dolt/assets/scripts/maintenance_lease.sh"
+    SOURCE_LEASE_SCRIPT=""
+    if [ -n "${SCRIPT_DIR:-}" ]; then
+        SOURCE_LEASE_SCRIPT=$(CDPATH= cd -- "$SCRIPT_DIR/../../../../../dolt/assets/scripts" 2>/dev/null && pwd || true)
+        if [ -n "$SOURCE_LEASE_SCRIPT" ]; then
+            SOURCE_LEASE_SCRIPT="$SOURCE_LEASE_SCRIPT/maintenance_lease.sh"
+        fi
+    fi
+    if [ -f "$SYSTEM_LEASE_SCRIPT" ]; then
+        MAINTENANCE_LEASE_SCRIPT="$SYSTEM_LEASE_SCRIPT"
+    else
+        MAINTENANCE_LEASE_SCRIPT="$SOURCE_LEASE_SCRIPT"
+    fi
+fi
+. "${MAINTENANCE_LEASE_SCRIPT:?maintenance_lease.sh not resolved}"
+
 read_runtime_state_flag() (
     state_file="$1"
     key="$2"
@@ -174,11 +192,48 @@ esac
 DOLT_HOST="${GC_DOLT_HOST:-127.0.0.1}"
 DOLT_PORT="$GC_DOLT_PORT"
 DOLT_USER="${GC_DOLT_USER:-root}"
+DOLT_SQL_TIMEOUT_SECONDS="${GC_MAINTENANCE_DOLT_SQL_TIMEOUT_SECONDS:-30}"
+
+if command -v gtimeout >/dev/null 2>&1; then
+    TIMEOUT_BIN="gtimeout"
+elif command -v timeout >/dev/null 2>&1; then
+    TIMEOUT_BIN="timeout"
+else
+    TIMEOUT_BIN=""
+fi
+
+run_bounded() {
+    _t="$1"
+    shift
+    if [ -n "$TIMEOUT_BIN" ]; then
+        "$TIMEOUT_BIN" --kill-after=2 "$_t" "$@"
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 - "$_t" "$@" <<'PY'
+import subprocess
+import sys
+
+limit = float(sys.argv[1])
+cmd = sys.argv[2:]
+try:
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=limit)
+except subprocess.TimeoutExpired as exc:
+    sys.stdout.write(exc.stdout or "")
+    sys.stderr.write(exc.stderr or "")
+    sys.exit(124)
+sys.stdout.write(proc.stdout)
+sys.stderr.write(proc.stderr)
+sys.exit(proc.returncode)
+PY
+    else
+        printf 'maintenance: timeout/gtimeout/python3 not found; cannot run bounded Dolt command\n' >&2
+        return 124
+    fi
+}
 
 # Match the Dolt pack commands, which currently use non-TLS SQL connections.
 # If TLS becomes a supported GC_DOLT_* contract, add it in the Dolt pack first.
 dolt_sql() {
-    DOLT_CLI_PASSWORD="${GC_DOLT_PASSWORD:-}" dolt --host "$DOLT_HOST" --port "$DOLT_PORT" --user "$DOLT_USER" --no-tls sql "$@"
+    DOLT_CLI_PASSWORD="${GC_DOLT_PASSWORD:-}" run_bounded "$DOLT_SQL_TIMEOUT_SECONDS" dolt --host "$DOLT_HOST" --port "$DOLT_PORT" --user "$DOLT_USER" --no-tls sql "$@"
 }
 
 # has_wisps_table reports whether $1 contains a `wisps` table. Maintenance

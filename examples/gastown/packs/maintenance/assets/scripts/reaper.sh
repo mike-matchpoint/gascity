@@ -11,6 +11,7 @@ set -euo pipefail
 CITY="${GC_CITY_PATH:-${GC_CITY:-.}}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/dolt-target.sh"
+enter_dolt_maintenance_lease broad-cleanup "${GC_REAPER_LEASE_SECONDS:-1800}" || exit $?
 CITY_ABS="$(cd "$CITY" 2>/dev/null && pwd -P || printf '%s\n' "$CITY")"
 CITY_BEADS_DIR="$CITY_ABS/.beads"
 
@@ -77,7 +78,7 @@ PY
 
 is_user_database() {
     case "$1" in
-        information_schema|mysql|dolt_cluster|performance_schema|sys|__gc_probe|benchdb|testdb_*|beads_pt*|beads_vr*|doctest_*|doctortest_*)
+        information_schema|mysql|dolt_cluster|performance_schema|sys|__gc_probe|backup_export|benchdb|testdb_*|beads_pt*|beads_vr*|doctest_*|doctortest_*)
             return 1
             ;;
         beads_t*)

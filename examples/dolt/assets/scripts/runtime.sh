@@ -35,6 +35,16 @@ DOLT_PROVIDER_STATE_FILE="$DOLT_STATE_DIR/dolt-provider-state.json"
 
 GC_BEADS_BD_SCRIPT="$GC_CITY_PATH/.gc/system/packs/bd/assets/scripts/gc-beads-bd.sh"
 
+MAINTENANCE_LEASE_SCRIPT="${GC_DOLT_MAINTENANCE_LEASE_SCRIPT:-}"
+if [ -z "$MAINTENANCE_LEASE_SCRIPT" ]; then
+  if [ -n "${GC_PACK_DIR:-}" ] && [ -f "$GC_PACK_DIR/assets/scripts/maintenance_lease.sh" ]; then
+    MAINTENANCE_LEASE_SCRIPT="$GC_PACK_DIR/assets/scripts/maintenance_lease.sh"
+  else
+    MAINTENANCE_LEASE_SCRIPT="${GC_SYSTEM_PACKS_DIR:-$GC_CITY_PATH/.gc/system/packs}/dolt/assets/scripts/maintenance_lease.sh"
+  fi
+fi
+. "${MAINTENANCE_LEASE_SCRIPT:?maintenance_lease.sh not resolved}"
+
 read_runtime_state_flag() (
   state_file="$1"
   key="$2"

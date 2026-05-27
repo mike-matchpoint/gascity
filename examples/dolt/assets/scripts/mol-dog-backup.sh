@@ -15,7 +15,7 @@ HOST="${GC_DOLT_HOST:-127.0.0.1}"
 USER="${GC_DOLT_USER:-root}"
 OFFSITE_PATH="${GC_BACKUP_OFFSITE_PATH:-}"
 BACKUP_ARTIFACT_DIR="${GC_BACKUP_ARTIFACT_DIR:-$GC_CITY_PATH/.dolt-backup}"
-SYSTEM_DBS="^(information_schema|mysql|dolt_cluster|__gc_probe|performance_schema|sys)$"
+SYSTEM_DBS="^(information_schema|mysql|dolt_cluster|__gc_probe|performance_schema|sys|backup_export)$"
 MIN_DOLT_BACKUP_VERSION="1.86.2"
 
 dolt_sql() {
@@ -85,6 +85,8 @@ if ! dolt_version_at_least "$DOLT_VERSION" "$MIN_DOLT_BACKUP_VERSION"; then
 fi
 
 # --- Step 2: Sync databases to backup remotes ---
+
+enter_dolt_maintenance_lease backup-sync "${GC_BACKUP_LEASE_SECONDS:-1800}" || exit $?
 
 # If GC_BACKUP_DATABASES is set, use it; otherwise auto-discover DBs that
 # have a named Dolt backup <db>-backup configured.

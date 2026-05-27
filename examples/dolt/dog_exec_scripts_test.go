@@ -1,6 +1,7 @@
 package dolt_test
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -2921,6 +2922,29 @@ exit 0
 	return logPath
 }
 
+func writeDogActiveMaintenanceLease(t *testing.T, cityPath, operation string) {
+	t.Helper()
+	leaseDir := filepath.Join(cityPath, ".gc", "runtime", "maintenance")
+	if err := os.MkdirAll(leaseDir, 0o755); err != nil {
+		t.Fatalf("mkdir lease dir: %v", err)
+	}
+	expires := time.Now().Add(time.Hour).UTC()
+	body := fmt.Sprintf(`{
+  "owner": "test",
+  "pid": %d,
+  "operation": %q,
+  "city_path": %q,
+  "started_at": %q,
+  "expires_at": %q,
+  "expires_at_epoch": %d,
+  "deadline_seconds": 3600
+}
+`, os.Getpid(), operation, cityPath, time.Now().UTC().Format(time.RFC3339), expires.Format(time.RFC3339), expires.Unix())
+	if err := os.WriteFile(filepath.Join(leaseDir, "dolt-maintenance-lease.json"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write active maintenance lease: %v", err)
+	}
+}
+
 func writeBackupFakeRsync(t *testing.T, binDir string) string {
 	t.Helper()
 	logPath := filepath.Join(binDir, "rsync.log")
@@ -3047,6 +3071,38 @@ func TestBackupScriptDiscoversNamedBackupsAndSyncsArtifactsOffsite(t *testing.T)
 	}
 	if strings.Contains(string(rsyncLog), dataDir+"/") {
 		t.Fatalf("rsync must not use live data dir, log:\n%s", rsyncLog)
+	}
+}
+
+func TestBackupScriptRespectActiveMaintenanceLease(t *testing.T) {
+	cityPath := t.TempDir()
+	dataDir := filepath.Join(cityPath, "dolt-data")
+	if err := os.MkdirAll(filepath.Join(dataDir, "prod", ".dolt"), 0o755); err != nil {
+		t.Fatalf("mkdir db: %v", err)
+	}
+	writeDogActiveMaintenanceLease(t, cityPath, "jsonl-export")
+
+	binDir := t.TempDir()
+	_ = writeDogFakeGC(t, binDir)
+	doltLogPath := writeBackupFakeDolt(t, binDir, "1.86.2", 0, "prod")
+
+	out, err := runDogScriptCommand(t, "mol-dog-backup.sh", binDir, cityPath, dataDir, "GC_BACKUP_DATABASES=prod")
+	if err == nil {
+		t.Fatalf("backup script succeeded despite active maintenance lease\n%s", out)
+	}
+	exitErr := &exec.ExitError{}
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 75 {
+		t.Fatalf("backup script exit = %v, want exit 75\n%s", err, out)
+	}
+	if !strings.Contains(out, "active Dolt maintenance lease") {
+		t.Fatalf("backup output missing active lease diagnostic:\n%s", out)
+	}
+	doltLog, err := os.ReadFile(doltLogPath)
+	if err != nil {
+		t.Fatalf("read dolt log: %v", err)
+	}
+	if strings.Contains(string(doltLog), "backup sync") {
+		t.Fatalf("backup sync should not run while another lease is active:\n%s", doltLog)
 	}
 }
 

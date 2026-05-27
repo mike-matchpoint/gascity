@@ -1,14 +1,23 @@
 ---
-title: bd Auto-Backup Cleanup
-description: Reclaim space when bd's `.beads/backup/` directory grows large enough to threaten disk pressure.
+title: bd Legacy Auto-Backup Cleanup
+description: Disable or clean up bd's legacy `.beads/backup/` auto-backup path in managed GasCity workspaces.
 ---
 
 ## Overview
 
-`bd` (the beads CLI) maintains a Dolt-native backup of every workspace it
-touches. The backup writes to `<root>/.beads/backup/` on a hardcoded
-remote named `backup_export`, throttled to one sync per fifteen minutes
-per bd process (`gastownhall/beads`: `cmd/bd/backup_auto.go`).
+When bd auto-backup is enabled, `bd` (the beads CLI) maintains a
+Dolt-native backup of every workspace it touches. The legacy backup writes
+to `<root>/.beads/backup/` on a hardcoded remote named `backup_export`,
+throttled to one sync per fifteen minutes per bd process
+(`gastownhall/beads`: `cmd/bd/backup_auto.go`).
+
+Managed GasCity workspaces should keep this path disabled with
+`bd config set backup.enabled false`. Managed backup coverage is provided
+by the Dolt pack's `mol-dog-backup` job, which syncs database-specific
+`<db>-backup` remotes into `<city>/.dolt-backup/<db>/` through a
+GasCity-owned maintenance lease. A live `backup_export` warning in Dolt
+logs is therefore a contention signal, not proof of healthy backup
+coverage.
 
 The backup remote is **append-only**. There is no retention, rotation,
 or garbage-collection logic in the bd auto-backup path today; the
@@ -40,7 +49,7 @@ multi-hour outage on 2026-05-20/21 (qlandia incident, `qlandia/gc-p831i`):
 
 The gas-city-side amplifier (auto-recover-on-ENOSPC) was fixed in
 [gastownhall/gascity#2347](https://github.com/gastownhall/gascity/pull/2347).
-This doc covers the still-live bd-side root cause.
+This doc covers cleanup and rollback for the legacy bd-side root cause.
 
 ## Inspect
 
@@ -63,27 +72,42 @@ You're looking for:
 
 ## Cleanup options
 
-### Option A — disable bd auto-backup (least invasive)
+### Option A — disable bd auto-backup (managed GasCity policy)
 
-If the only consumer of `.beads/backup/` was the implicit auto-backup,
-turn it off and let `mol-dog-backup` (which writes to `.dolt-backup/`)
-handle backups instead:
+For managed GasCity cities and rigs, turn off the implicit auto-backup and
+let `mol-dog-backup` handle backups through `.dolt-backup/<db>/`:
 
 ```bash
-bd config set backup.enabled false
+for scope in /path/to/city /path/to/managed-rig; do
+  if [ -d "$scope/.beads" ]; then
+    (cd "$scope" && bd config set backup.enabled false && bd config get backup.enabled)
+  fi
+done
 ```
 
-After this, you can `rm -rf .beads/backup/`. Verify next `gc doctor` run
-that `bd-backup-size` reports `no bd backup directory present`.
+Move the legacy backup aside instead of deleting it immediately:
+
+```bash
+stamp=$(date +%Y%m%d-%H%M%S)
+mv /path/to/city/.beads/backup /path/to/city/.beads/backup.disabled-$stamp
+```
+
+Keep the disabled directory until one clean 24-hour cycle has completed
+and `gc doctor` confirms managed `.dolt-backup/` coverage. Verify that
+`bd-backup-size` reports `no bd backup directory present` and that each
+managed database has a `<db>-backup` remote or a populated
+`.dolt-backup/<db>/` artifact directory.
 
 You retain coverage from `mol-dog-backup` writing to `.dolt-backup/`,
 which is run by the dolt pack on a 6h cooldown and is operator-managed
 through gas-city.
 
-### Option B — rotate the backup (preserve coverage)
+### Option B — rotate the legacy backup (emergency rollback only)
 
-Use this when you want to keep auto-backup running but reclaim the
-accumulated bloat.
+Use this only when managed `.dolt-backup/` coverage is missing or corrupt
+and an operator explicitly accepts the temporary contention risk. Re-enable
+the legacy path with a cleanup cutoff, rotate it, and return to Option A
+after managed backup coverage is restored.
 
 > **Risk**: bd auto-backup is non-atomic
 > ([gastownhall/beads#4070](https://github.com/gastownhall/beads/issues/4070)).
@@ -97,10 +121,11 @@ gc stop
 # 2. Capture the existing backup as a safety net.
 mv ~/qlandia/.beads/backup ~/qlandia/.beads/backup.old-$(date +%Y%m%d)
 
-# 3. Trigger bd's auto-backup pipeline while the supervisor remains
+# 3. Re-enable and trigger bd's auto-backup pipeline while the supervisor remains
 #    stopped. Do not use `bd backup sync` here; that syncs the separate
 #    explicit "default" backup remote, not the auto-backup `backup_export`
 #    remote documented above.
+bd config set backup.enabled true
 bd -C ~/qlandia list --status open --limit 1 --json >/tmp/qlandia-bd-autobackup-smoke.json
 
 # 4. Verify the new backup is sane.
@@ -112,6 +137,9 @@ gc start
 
 # 6. After confirming a clean run for ~1 day, delete the safety net.
 rm -rf ~/qlandia/.beads/backup.old-*
+
+# 7. Return to managed policy.
+bd config set backup.enabled false
 ```
 
 ### Option C — operator wipe (when the database has shrunk hard)
@@ -173,8 +201,13 @@ for c in missing:
   5 GB warn, 15 GB error — well before disk pressure breaks Dolt.
 - **Prefer `mol-dog-backup`'s `.dolt-backup/` path** for primary backup
   coverage. It's operator-managed through gas-city, runs on a 6h
-  cooldown rather than per-command, and is the one targeted by
-  retention work in `gastownhall/gascity`.
+  cooldown rather than per-command, is serialized by the
+  `.gc/runtime/maintenance/dolt-maintenance.lock` lease, and is the one
+  targeted by retention work in `gastownhall/gascity`.
+- **Treat `backup_export` in Dolt logs as a runtime contention alarm.**
+  Managed cities should not emit it after migration. If it reappears,
+  inspect `dolt backup -v`, remove the stale remote, verify
+  `backup.enabled=false`, and rerun `gc doctor`.
 - **Watch `gc doctor` for `dolt-noms-size` alongside this check.** Both
   surfaces grow together on busy cities; treating them as a single
   disk-pressure signal works better than reasoning about each in
