@@ -1486,6 +1486,12 @@ func TestOrderDispatchSnapshotSlowListDefersOneOrderWithoutBlockingUnrelated(t *
 }
 
 func TestOrderDispatchSnapshotManyOrdersDoesNotExhaustSharedStoreBudget(t *testing.T) {
+	oldMax := orderDispatchMaxCreatesPerTick
+	orderDispatchMaxCreatesPerTick = 0
+	t.Cleanup(func() {
+		orderDispatchMaxCreatesPerTick = oldMax
+	})
+
 	store := delayedOrderDispatchListStore{
 		Store: beads.NewMemStore(),
 		delay: 50 * time.Millisecond,
@@ -1642,6 +1648,60 @@ func TestOrderDispatchStopsTickAfterTrackingWriteTimeout(t *testing.T) {
 			t.Fatalf("tracking beads after timeout: first=%#v second=%#v", first, second)
 		}
 		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+func TestOrderDispatchLimitsProductionCreatesPerTick(t *testing.T) {
+	oldMax := orderDispatchMaxCreatesPerTick
+	orderDispatchMaxCreatesPerTick = 1
+	t.Cleanup(func() {
+		orderDispatchMaxCreatesPerTick = oldMax
+	})
+
+	store := beads.NewMemStore()
+	var rec memRecorder
+	ran := make(map[string]bool)
+	fakeExec := func(_ context.Context, command, _ string, _ []string) ([]byte, error) {
+		ran[command] = true
+		return []byte("ok\n"), nil
+	}
+	aa := []orders.Order{
+		{Name: "aaa-first", Trigger: "cooldown", Interval: "1s", Exec: "aaa-first"},
+		{Name: "bbb-second", Trigger: "cooldown", Interval: "1s", Exec: "bbb-second"},
+		{Name: "ccc-third", Trigger: "cooldown", Interval: "1s", Exec: "ccc-third"},
+	}
+	ad := buildOrderDispatcherFromListExec(aa, store, nil, fakeExec, &rec)
+	md, ok := ad.(*memoryOrderDispatcher)
+	if !ok {
+		t.Fatalf("dispatcher type = %T, want *memoryOrderDispatcher", ad)
+	}
+	md.cfg = &config.City{}
+
+	ad.dispatch(context.Background(), t.TempDir(), time.Now().Add(time.Hour))
+	ad.drain(context.Background())
+
+	if !ran["aaa-first"] || ran["bbb-second"] || ran["ccc-third"] {
+		t.Fatalf("ran=%v, want only the first due order dispatched", ran)
+	}
+	if got := len(trackingBeads(t, store, "order-run:aaa-first")); got != 1 {
+		t.Fatalf("first order tracking beads = %d, want 1", got)
+	}
+	if got := len(trackingBeads(t, store, "order-run:bbb-second")); got != 0 {
+		t.Fatalf("second order tracking beads = %d, want 0", got)
+	}
+	if got := len(trackingBeads(t, store, "order-run:ccc-third")); got != 0 {
+		t.Fatalf("third order tracking beads = %d, want 0", got)
+	}
+	event, ok := rec.orderDispatchTickEvent()
+	if !ok {
+		t.Fatal("missing order dispatch tick event")
+	}
+	var payload events.OrderDispatchTickPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatalf("decode tick payload: %v; raw=%s", err, event.Payload)
+	}
+	if payload.DispatchesCreated != 1 || payload.OrdersDeferred != 0 || payload.TrackingWriteFails != 0 || len(payload.DeferReasons) != 0 {
+		t.Fatalf("tick payload = %+v, want one dispatch and no deferrals", payload)
 	}
 }
 

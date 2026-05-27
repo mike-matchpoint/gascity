@@ -76,7 +76,10 @@ const (
 	abandonedOrderTrackingCloseReason = "order dispatch abandoned: tracking create finished after timeout"
 )
 
-var orderDispatchTrackingWriteBudget = 15 * time.Second
+var (
+	orderDispatchTrackingWriteBudget = 60 * time.Second
+	orderDispatchMaxCreatesPerTick   = 4
+)
 
 func orderRunLabel(scopedName string) string {
 	return "order-run:" + scopedName
@@ -606,6 +609,9 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 		if !result.Due {
 			continue
 		}
+		if m.dispatchCreateLimitReached(stats) {
+			return
+		}
 
 		// Create tracking bead synchronously BEFORE dispatch goroutine.
 		// This prevents the cooldown trigger from re-firing on the next tick.
@@ -629,6 +635,13 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 		m.addInflight()
 		m.launchDispatchOne(ctx, candidate.store, candidate.target, orderToDispatch, cityPath, trackingBead.ID)
 	}
+}
+
+func (m *memoryOrderDispatcher) dispatchCreateLimitReached(stats *orderDispatchTickStats) bool {
+	if m == nil || m.cfg == nil || stats == nil || orderDispatchMaxCreatesPerTick <= 0 {
+		return false
+	}
+	return stats.dispatchesCreated >= orderDispatchMaxCreatesPerTick
 }
 
 func (s *orderDispatchTickStats) touchStore(key string) {
