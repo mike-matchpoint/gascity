@@ -123,7 +123,7 @@ SESSION_PRUNE_ATTEMPTED=0
 ANOMALIES=""
 
 sanitize_output() {
-    printf '%s' "$1" | tr '\n' ' ' | cut -c1-500
+    printf '%s' "$1" | tr '\n' ' ' | cut -c1-4000
 }
 
 record_anomaly() {
@@ -210,7 +210,7 @@ get_sql_count() {
     if ! output=$(dolt_sql -r csv -q "$query" 2>"$stderr_file"); then
         stderr_output=$(cat "$stderr_file" 2>/dev/null || true)
         rm -f "$stderr_file"
-        record_anomaly "$db" "$label count failed for $db: $(sanitize_output "$output $stderr_output")"
+        record_anomaly "$db" "$label count failed for $db: $(sanitize_output "$stderr_output $output")"
         return 0
     fi
     rm -f "$stderr_file"
@@ -241,7 +241,7 @@ get_sql_rows() {
     if ! output=$(dolt_sql -r csv -q "$query" 2>"$stderr_file"); then
         stderr_output=$(cat "$stderr_file" 2>/dev/null || true)
         rm -f "$stderr_file"
-        record_anomaly "$db" "$label query failed for $db: $(sanitize_output "$output $stderr_output")"
+        record_anomaly "$db" "$label query failed for $db: $(sanitize_output "$stderr_output $output")"
         return 0
     fi
     rm -f "$stderr_file"
@@ -303,7 +303,7 @@ SELECT ROW_COUNT();
     " 2>"$stderr_file"); then
         stderr_output=$(cat "$stderr_file" 2>/dev/null || true)
         rm -f "$stderr_file"
-        record_anomaly "$db" "$label failed for $db: $(sanitize_output "$output $stderr_output")"
+        record_anomaly "$db" "$label failed for $db: $(sanitize_output "$stderr_output $output")"
         return 1
     fi
     stderr_output=$(cat "$stderr_file" 2>/dev/null || true)
@@ -311,7 +311,7 @@ SELECT ROW_COUNT();
 
     rows=$(printf '%s\n' "$output" | tail -1 | tr -d '\r')
     if [ -z "$rows" ] || ! [[ "$rows" =~ ^[0-9]+$ ]]; then
-        record_anomaly "$db" "$label returned non-numeric row count for $db: $(sanitize_output "$output $stderr_output")"
+        record_anomaly "$db" "$label returned non-numeric row count for $db: $(sanitize_output "$stderr_output $output")"
         return 1
     fi
 
