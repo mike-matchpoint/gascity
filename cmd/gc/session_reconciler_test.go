@@ -3428,6 +3428,34 @@ func TestReconcileSessionBeads_OnDemandNamedSessionQueuesPatrolWispNudgeForLiveS
 	if len(pending) != 1 || len(inFlight) != 0 || len(dead) != 0 {
 		t.Fatalf("duplicate tick queue sizes pending=%d in_flight=%d dead=%d, want 1/0/0", len(pending), len(inFlight), len(dead))
 	}
+
+	if err := withNudgeQueueState(cityPath, func(state *nudgeQueueState) error {
+		state.Pending = nil
+		state.InFlight = nil
+		return nil
+	}); err != nil {
+		t.Fatalf("clear delivered queued nudge: %v", err)
+	}
+	reloaded, err = env.store.Get(session.ID)
+	if err != nil {
+		t.Fatalf("Get(session) after ack: %v", err)
+	}
+	reconcileSessionBeadsAtPathWithNamedDemand(
+		context.Background(), cityPath, []beads.Bead{reloaded}, env.desiredState, cfgNames, env.cfg, env.sp,
+		env.store, nil, nil, nil, nil, env.dt, nil,
+		map[string]bool{"primary": true}, wispDemand, false, nil, env.cfg.EffectiveCityName(),
+		nil, env.clk, env.rec, 0, 0, &env.stdout, &env.stderr,
+	)
+	pending, inFlight, dead, err = listQueuedNudges(cityPath, "primary", env.clk.Now())
+	if err != nil {
+		t.Fatalf("listQueuedNudges after delivered same-wisp re-fire: %v", err)
+	}
+	if len(pending) != 1 || len(inFlight) != 0 || len(dead) != 0 {
+		t.Fatalf("delivered same-wisp re-fire queue sizes pending=%d in_flight=%d dead=%d, want 1/0/0", len(pending), len(inFlight), len(dead))
+	}
+	if pending[0].Reference == nil || pending[0].Reference.ID != "rig:rig-a:wisp-1" {
+		t.Fatalf("delivered same-wisp re-fire reference = %+v, want rig:rig-a:wisp-1", pending[0].Reference)
+	}
 }
 
 func reconcileExistingAsleepNamedSessionWithRoutedWork(t *testing.T, cfg *config.City, sessionName, identity, routedTo string) (int, bool) {
