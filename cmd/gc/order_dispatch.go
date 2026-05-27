@@ -44,6 +44,14 @@ const (
 	orderTrackingWatchdogMetadataInitiator = "controller-watchdog"
 	orderTrackingCloseVerifyAttempts       = 3
 	orderTrackingCloseVerifyRetryDelay     = 25 * time.Millisecond
+	orderDispatchSnapshotBudget            = 4 * time.Second
+	orderDispatchStoreReadBudget           = 1500 * time.Millisecond
+	orderDispatchSingleReadBudget          = 500 * time.Millisecond
+	orderDispatchTrackingWriteBudget       = time.Second
+	orderDispatchOpenReadLimit             = 1000
+	orderDispatchHistoryReadLimit          = 200
+	orderDispatchDescendantMaxDepth        = 4
+	orderDispatchDescendantMaxRows         = 500
 
 	// orphanedOrderTrackingCloseReason is the canonical close_reason
 	// stamped on orphan-sweep closes. It satisfies bd's
@@ -278,6 +286,36 @@ type memoryOrderDispatcher struct {
 	inflightDone chan struct{} // closed when inflightN returns to 0; nil when idle
 }
 
+type orderDispatchCandidate struct {
+	order         orders.Order
+	target        execStoreTarget
+	store         beads.Store
+	storeKey      string
+	gateStores    []beads.Store
+	gateStoreKeys []string
+}
+
+type orderDispatchSnapshotInput struct {
+	storeKey     string
+	store        beads.Store
+	orders       map[string]struct{}
+	needsLastRun map[string]bool
+	needsCursor  map[string]bool
+}
+
+type orderDispatchSnapshots struct {
+	byStore map[string]*orderDispatchStoreSnapshot
+}
+
+type orderDispatchStoreSnapshot struct {
+	storeKey       string
+	capturedAt     time.Time
+	lastRunByOrder map[string]time.Time
+	cursorByOrder  map[string]uint64
+	openByOrder    map[string]bool
+	degraded       map[string][]error
+}
+
 // buildOrderDispatcher scans formula layers for orders and returns a
 // dispatcher. Returns nil if no auto-dispatchable orders are found.
 // Scans both city-level and per-rig orders. Rig orders get their Rig
@@ -384,9 +422,13 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 	if m.cfg != nil && citySuspended(m.cfg) {
 		return
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	stores := make(map[string]beads.Store)
-	openWorkCache := make(map[string]orderOpenWorkCacheEntry)
+	var candidates []orderDispatchCandidate
+	snapshotInputs := make(map[string]*orderDispatchSnapshotInput)
 
 	for _, a := range m.aa {
 		// Skip orders targeting suspended rigs.
@@ -424,54 +466,93 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 			storeKeysForGate = append(storeKeysForGate, orderStoreTargetKey(legacyOrderCityTarget(cityPath, m.cfg)))
 		}
 		scoped := a.ScopedName()
-		hasOpenWork, err := m.hasOpenWorkInStoresStrictCached(storesForGate, storeKeysForGate, scoped, openWorkCache)
-		if err != nil {
-			logDispatchError(m.stderr, "gc: order dispatch: checking open work for %s: %v", scoped, err)
+		for idx, gateStore := range storesForGate {
+			if gateStore == nil {
+				continue
+			}
+			key := storeKeysForGate[idx]
+			input := snapshotInputs[key]
+			if input == nil {
+				input = &orderDispatchSnapshotInput{
+					storeKey:     key,
+					store:        gateStore,
+					orders:       make(map[string]struct{}),
+					needsLastRun: make(map[string]bool),
+					needsCursor:  make(map[string]bool),
+				}
+				snapshotInputs[key] = input
+			}
+			input.orders[scoped] = struct{}{}
+			if orderTriggerUsesLastRun(a) {
+				if cached, ok := m.cachedLastRunOnly(scoped, storeKeysForGate); ok && orderCachedLastRunSuppresses(a, now, cached) {
+					continue
+				}
+				input.needsLastRun[scoped] = true
+			}
+			if a.Trigger == "event" {
+				input.needsCursor[scoped] = true
+			}
+		}
+		candidates = append(candidates, orderDispatchCandidate{
+			order:         a,
+			target:        target,
+			store:         store,
+			storeKey:      storeKey,
+			gateStores:    storesForGate,
+			gateStoreKeys: storeKeysForGate,
+		})
+	}
+
+	if len(candidates) == 0 {
+		return
+	}
+
+	snapshotCtx, cancel := context.WithTimeout(ctx, orderDispatchSnapshotBudget)
+	snapshots := buildOrderDispatchSnapshots(snapshotCtx, snapshotInputs, now)
+	cancel()
+
+	for _, candidate := range candidates {
+		a := candidate.order
+		scoped := a.ScopedName()
+		if err := snapshots.degradation(scoped, candidate.gateStoreKeys); err != nil {
+			m.recordOrderDispatchDeferred(scoped, fmt.Errorf("snapshot degraded: %w", err))
 			continue
 		}
-		if hasOpenWork {
+		if snapshots.hasOpenWork(scoped, candidate.gateStoreKeys) {
 			continue
 		}
 
-		baseLastRunFn := orders.LastRunAcrossStores(storesForGate...)
-		var lastRunErr error
-		var lastRunFromCache bool
 		lastRunFn := func(orderName string) (time.Time, error) {
-			last, fromCache, err := m.cachedLastRun(orderName, storeKeysForGate, baseLastRunFn)
-			if err != nil {
-				lastRunErr = err
+			if err := snapshots.degradation(orderName, candidate.gateStoreKeys); err != nil {
+				return time.Time{}, err
 			}
-			if fromCache {
-				lastRunFromCache = true
+			last := snapshots.lastRun(orderName, candidate.gateStoreKeys)
+			if cached, ok := m.cachedLastRunOnly(orderName, candidate.gateStoreKeys); ok && cached.After(last) {
+				last = cached
 			}
-			return last, err
+			return last, nil
 		}
-		cursorFn := orders.CursorAcrossStores(storesForGate...)
-		if a.Trigger == "event" {
-			cursor, err := bdCursorAcrossStores(a.ScopedName(), storesForGate...)
-			if err != nil {
-				logDispatchError(m.stderr, "gc: order dispatch: reading event cursor for %s: %v", a.ScopedName(), err)
-				continue
+		cursorFn := func(orderName string) uint64 {
+			if err := snapshots.degradation(orderName, candidate.gateStoreKeys); err != nil {
+				return 0
 			}
-			cursorFn = func(string) uint64 {
-				return cursor
-			}
+			return snapshots.cursor(orderName, candidate.gateStoreKeys)
 		}
-		triggerOpts, err := orderTriggerOptionsForTarget(cityPath, m.cfg, target, a)
+		triggerOpts, err := orderTriggerOptionsForTarget(cityPath, m.cfg, candidate.target, a)
 		if err != nil {
 			redacted := redactOrderEnvError(err, os.Environ())
 			msg := fmt.Sprintf("building trigger env: %s", redacted)
 			logDispatchError(m.stderr, "gc: order dispatch: building trigger env for %s: %s", a.ScopedName(), redacted)
 			// Leave this open so the existing open-work gate suppresses repeat
 			// ticks until the normal stale tracking sweep gives the order another try.
-			trackingBead, createErr := store.Create(beads.Bead{
+			trackingBead, createErr := createOrderTrackingBeadBounded(ctx, candidate.store, beads.Bead{
 				Title:  "order:" + scoped,
 				Labels: append(orderTrackingLabels(scoped), labelTriggerEnvFailed),
 			})
 			if createErr != nil {
 				logDispatchError(m.stderr, "gc: order dispatch: creating trigger env failure tracking bead for %s: %v", scoped, createErr)
 			} else {
-				m.rememberLastRun(scoped, storeKeysForGate, trackingBead.CreatedAt)
+				m.rememberLastRun(scoped, candidate.gateStoreKeys, trackingBead.CreatedAt)
 			}
 			m.rec.Record(events.Event{
 				Type:    events.OrderFailed,
@@ -482,44 +563,20 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 			continue
 		}
 		result := orders.CheckTriggerWithOptions(a, now, lastRunFn, m.ep, cursorFn, triggerOpts)
-		if lastRunErr != nil {
-			logDispatchError(m.stderr, "gc: order dispatch: reading last run for %s: %v", a.ScopedName(), lastRunErr)
+		if err := snapshots.degradation(scoped, candidate.gateStoreKeys); err != nil {
+			m.recordOrderDispatchDeferred(scoped, fmt.Errorf("snapshot degraded after trigger evaluation: %w", err))
 			continue
+		}
+		if orderTriggerUsesLastRun(a) && !result.LastRun.IsZero() {
+			m.rememberLastRun(scoped, candidate.gateStoreKeys, result.LastRun)
 		}
 		if !result.Due {
-			continue
-		}
-		if lastRunFromCache && orderTriggerUsesLastRun(a) {
-			refreshedLastRun, err := baseLastRunFn(a.ScopedName())
-			if err != nil {
-				logDispatchError(m.stderr, "gc: order dispatch: refreshing last run for %s: %v", a.ScopedName(), err)
-				continue
-			}
-			if refreshedLastRun.After(result.LastRun) {
-				m.rememberLastRun(a.ScopedName(), storeKeysForGate, refreshedLastRun)
-				refreshedLastRunFn := func(string) (time.Time, error) {
-					return refreshedLastRun, nil
-				}
-				result = orders.CheckTriggerWithOptions(a, now, refreshedLastRunFn, m.ep, cursorFn, triggerOpts)
-				if !result.Due {
-					continue
-				}
-			}
-		}
-
-		// Skip dispatch if previous work hasn't been processed yet.
-		hasOpenWork, err = m.hasOpenWorkInStoresStrictCached(storesForGate, storeKeysForGate, scoped, openWorkCache)
-		if err != nil {
-			logDispatchError(m.stderr, "gc: order dispatch: checking open work for %s: %v", scoped, err)
-			continue
-		}
-		if hasOpenWork {
 			continue
 		}
 
 		// Create tracking bead synchronously BEFORE dispatch goroutine.
 		// This prevents the cooldown trigger from re-firing on the next tick.
-		trackingBead, err := store.Create(beads.Bead{
+		trackingBead, err := createOrderTrackingBeadBounded(ctx, candidate.store, beads.Bead{
 			Title:  "order:" + scoped,
 			Labels: orderTrackingLabels(scoped),
 		})
@@ -527,14 +584,344 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 			logDispatchError(m.stderr, "gc: order dispatch: creating tracking bead for %s: %v", scoped, err)
 			continue
 		}
-		m.rememberLastRun(scoped, storeKeysForGate, trackingBead.CreatedAt)
+		m.rememberLastRun(scoped, candidate.gateStoreKeys, trackingBead.CreatedAt)
 
 		// Fire with timeout; inflight tracks the spawned goroutine so
 		// drain can wait for tracking-bead outcome persistence before
 		// controller exit or config reload.
-		a := a // capture loop variable
+		orderToDispatch := a
 		m.addInflight()
-		m.launchDispatchOne(ctx, store, target, a, cityPath, trackingBead.ID)
+		m.launchDispatchOne(ctx, candidate.store, candidate.target, orderToDispatch, cityPath, trackingBead.ID)
+	}
+}
+
+func buildOrderDispatchSnapshots(ctx context.Context, inputs map[string]*orderDispatchSnapshotInput, now time.Time) orderDispatchSnapshots {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	keys := make([]string, 0, len(inputs))
+	for key := range inputs {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	result := orderDispatchSnapshots{byStore: make(map[string]*orderDispatchStoreSnapshot, len(keys))}
+	for _, key := range keys {
+		input := inputs[key]
+		if input == nil || input.store == nil {
+			continue
+		}
+		storeCtx, cancel := context.WithTimeout(ctx, orderDispatchStoreReadBudget)
+		result.byStore[key] = buildOrderDispatchStoreSnapshot(storeCtx, input, now)
+		cancel()
+	}
+	return result
+}
+
+func buildOrderDispatchStoreSnapshot(ctx context.Context, input *orderDispatchSnapshotInput, now time.Time) *orderDispatchStoreSnapshot {
+	snapshot := &orderDispatchStoreSnapshot{
+		storeKey:       input.storeKey,
+		capturedAt:     now,
+		lastRunByOrder: make(map[string]time.Time),
+		cursorByOrder:  make(map[string]uint64),
+		openByOrder:    make(map[string]bool),
+		degraded:       make(map[string][]error),
+	}
+	names := make([]string, 0, len(input.orders))
+	for name := range input.orders {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := ctx.Err(); err != nil {
+			snapshot.addDegradation(name, "snapshot deadline", err)
+			continue
+		}
+		snapshot.captureOrder(ctx, input.store, name, input.needsLastRun[name], input.needsCursor[name])
+	}
+	return snapshot
+}
+
+func (s *orderDispatchStoreSnapshot) captureOrder(ctx context.Context, store beads.Store, scopedName string, needsLastRun, needsCursor bool) {
+	tracking, err := orderDispatchRuntimeList(ctx, store, beads.ListQuery{
+		Label: scopedOrderTrackingLabel(scopedName),
+		Limit: 1,
+	}, "order.dispatch.scoped-tracking")
+	if err != nil {
+		s.addDegradation(scopedName, "scoped order-tracking", err)
+		return
+	}
+	for _, b := range tracking {
+		if b.Status != "closed" {
+			s.openByOrder[scopedName] = true
+		}
+	}
+	if s.openByOrder[scopedName] {
+		return
+	}
+
+	openWork, err := orderDispatchRuntimeList(ctx, store, beads.ListQuery{
+		Label:    orderRunLabel(scopedName),
+		Limit:    orderDispatchOpenReadLimit,
+		Sort:     beads.SortCreatedDesc,
+		TierMode: beads.TierBoth,
+	}, "order.dispatch.open-work")
+	if err != nil {
+		s.addDegradation(scopedName, "checking open work", err)
+		return
+	}
+	if len(openWork) >= orderDispatchOpenReadLimit {
+		s.addDegradation(scopedName, "checking open work", fmt.Errorf("open work read hit cap %d", orderDispatchOpenReadLimit))
+	}
+	for _, b := range openWork {
+		if b.Status == "closed" {
+			continue
+		}
+		if beadLabelsContain(b.Labels, labelOrderTracking) {
+			s.openByOrder[scopedName] = true
+			continue
+		}
+		if !isOrderWispRootCandidate(b) {
+			continue
+		}
+		if isOrderRootOnlyWispCandidate(b) {
+			s.openByOrder[scopedName] = true
+			continue
+		}
+		hasOpen, descErr := orderDispatchHasOpenDescendants(ctx, store, b.ID)
+		if descErr != nil {
+			s.addDegradation(scopedName, "order wisp descendants", descErr)
+			return
+		}
+		if hasOpen {
+			s.openByOrder[scopedName] = true
+		}
+	}
+	if s.openByOrder[scopedName] {
+		return
+	}
+
+	if needsLastRun {
+		history, err := orderDispatchRuntimeList(ctx, store, beads.ListQuery{
+			Label:         orderRunLabel(scopedName),
+			Limit:         orderDispatchHistoryReadLimit,
+			IncludeClosed: true,
+			Sort:          beads.SortCreatedDesc,
+			TierMode:      beads.TierBoth,
+		}, "order.dispatch.order-run-history")
+		if err != nil {
+			s.addDegradation(scopedName, "order-run history", err)
+			return
+		}
+		if len(history) >= orderDispatchHistoryReadLimit {
+			s.addDegradation(scopedName, "order-run history", fmt.Errorf("history read hit cap %d", orderDispatchHistoryReadLimit))
+		}
+		for _, b := range history {
+			if b.CreatedAt.After(s.lastRunByOrder[scopedName]) {
+				s.lastRunByOrder[scopedName] = b.CreatedAt
+			}
+		}
+	}
+
+	if !needsCursor {
+		return
+	}
+	cursorRows, err := orderDispatchRuntimeList(ctx, store, beads.ListQuery{
+		Label:         "order:" + scopedName,
+		Limit:         orderDispatchHistoryReadLimit,
+		IncludeClosed: true,
+		Sort:          beads.SortCreatedDesc,
+		TierMode:      beads.TierBoth,
+	}, "order.dispatch.event-cursor")
+	if err != nil {
+		s.addDegradation(scopedName, "event cursor", err)
+		return
+	}
+	if len(cursorRows) >= orderDispatchHistoryReadLimit {
+		s.addDegradation(scopedName, "event cursor", fmt.Errorf("cursor read hit cap %d", orderDispatchHistoryReadLimit))
+	}
+	labelSets := make([][]string, 0, len(cursorRows))
+	for _, b := range cursorRows {
+		labelSets = append(labelSets, b.Labels)
+	}
+	s.cursorByOrder[scopedName] = orders.MaxSeqFromLabels(labelSets)
+}
+
+func orderDispatchHasOpenDescendants(ctx context.Context, store beads.Store, parentID string) (bool, error) {
+	if parentID == "" {
+		return false, nil
+	}
+	type queuedParent struct {
+		id    string
+		depth int
+	}
+	seen := map[string]struct{}{parentID: {}}
+	queue := []queuedParent{{id: parentID}}
+	rows := 0
+	for len(queue) > 0 {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		next := queue[0]
+		queue = queue[1:]
+		if next.depth >= orderDispatchDescendantMaxDepth {
+			return false, fmt.Errorf("descendant depth hit cap %d", orderDispatchDescendantMaxDepth)
+		}
+		children, err := orderDispatchRuntimeList(ctx, store, beads.ListQuery{
+			ParentID:      next.id,
+			IncludeClosed: true,
+			Limit:         orderDispatchOpenReadLimit,
+			TierMode:      beads.TierBoth,
+		}, "order.dispatch.descendants")
+		if err != nil {
+			return false, err
+		}
+		rows += len(children)
+		if rows > orderDispatchDescendantMaxRows {
+			return false, fmt.Errorf("descendant rows hit cap %d", orderDispatchDescendantMaxRows)
+		}
+		for _, child := range children {
+			if child.ID == "" {
+				continue
+			}
+			if _, ok := seen[child.ID]; ok {
+				continue
+			}
+			seen[child.ID] = struct{}{}
+			if child.Status != "closed" {
+				return true, nil
+			}
+			queue = append(queue, queuedParent{id: child.ID, depth: next.depth + 1})
+		}
+	}
+	return false, nil
+}
+
+func orderDispatchRuntimeList(ctx context.Context, store beads.Store, query beads.ListQuery, caller string) ([]beads.Bead, error) {
+	if store == nil {
+		return nil, fmt.Errorf("nil store")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	readCtx, cancel := context.WithTimeout(ctx, orderDispatchSingleReadBudget)
+	defer cancel()
+	policy := beads.RuntimeReadPolicy(beads.ReadClassHotAuthoritative, caller)
+	policy.Timeout = orderDispatchSingleReadBudget
+	if query.Limit > 0 {
+		policy.MaxRows = query.Limit
+	}
+	type listResult struct {
+		rows []beads.Bead
+		err  error
+	}
+	done := make(chan listResult, 1)
+	go func() {
+		rows, err := beads.RuntimeList(readCtx, store, query, policy)
+		done <- listResult{rows: rows, err: err}
+	}()
+	select {
+	case result := <-done:
+		return result.rows, result.err
+	case <-readCtx.Done():
+		return nil, readCtx.Err()
+	}
+}
+
+func (s *orderDispatchStoreSnapshot) addDegradation(orderName, shape string, err error) {
+	if err == nil {
+		return
+	}
+	s.degraded[orderName] = append(s.degraded[orderName], fmt.Errorf("%s %s: %w", s.storeKey, shape, err))
+}
+
+func (s orderDispatchSnapshots) degradation(orderName string, storeKeys []string) error {
+	var errs []error
+	for _, key := range storeKeys {
+		snapshot := s.byStore[key]
+		if snapshot == nil {
+			errs = append(errs, fmt.Errorf("%s snapshot missing", key))
+			continue
+		}
+		errs = append(errs, snapshot.degraded[orderName]...)
+	}
+	return errors.Join(errs...)
+}
+
+func (s orderDispatchSnapshots) hasOpenWork(orderName string, storeKeys []string) bool {
+	for _, key := range storeKeys {
+		if snapshot := s.byStore[key]; snapshot != nil && snapshot.openByOrder[orderName] {
+			return true
+		}
+	}
+	return false
+}
+
+func (s orderDispatchSnapshots) lastRun(orderName string, storeKeys []string) time.Time {
+	var latest time.Time
+	for _, key := range storeKeys {
+		if snapshot := s.byStore[key]; snapshot != nil && snapshot.lastRunByOrder[orderName].After(latest) {
+			latest = snapshot.lastRunByOrder[orderName]
+		}
+	}
+	return latest
+}
+
+func (s orderDispatchSnapshots) cursor(orderName string, storeKeys []string) uint64 {
+	var latest uint64
+	for _, key := range storeKeys {
+		if snapshot := s.byStore[key]; snapshot != nil && snapshot.cursorByOrder[orderName] > latest {
+			latest = snapshot.cursorByOrder[orderName]
+		}
+	}
+	return latest
+}
+
+func (m *memoryOrderDispatcher) cachedLastRunOnly(orderName string, storeKeys []string) (time.Time, bool) {
+	key := orderHistoryCacheKey(orderName, storeKeys)
+	m.cacheMu.Lock()
+	defer m.cacheMu.Unlock()
+	if m.lastRunCache == nil {
+		return time.Time{}, false
+	}
+	last, ok := m.lastRunCache[key]
+	return last, ok
+}
+
+func (m *memoryOrderDispatcher) recordOrderDispatchDeferred(scoped string, err error) {
+	logDispatchError(m.stderr, "gc: order dispatch: deferring %s: %v", scoped, err)
+	if m.rec != nil {
+		m.rec.Record(events.Event{
+			Type:    events.OrderFailed,
+			Actor:   "controller",
+			Subject: scoped,
+			Message: fmt.Sprintf("deferred order dispatch: %v", err),
+		})
+	}
+}
+
+func createOrderTrackingBeadBounded(ctx context.Context, store beads.Store, bead beads.Bead) (beads.Bead, error) {
+	if store == nil {
+		return beads.Bead{}, fmt.Errorf("nil store")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	writeCtx, cancel := context.WithTimeout(ctx, orderDispatchTrackingWriteBudget)
+	defer cancel()
+	type createResult struct {
+		bead beads.Bead
+		err  error
+	}
+	done := make(chan createResult, 1)
+	go func() {
+		created, err := store.Create(bead)
+		done <- createResult{bead: created, err: err}
+	}()
+	select {
+	case result := <-done:
+		return result.bead, result.err
+	case <-writeCtx.Done():
+		return beads.Bead{}, writeCtx.Err()
 	}
 }
 
@@ -630,25 +1017,6 @@ func (m *memoryOrderDispatcher) legacyCityStoreForTarget(cityPath string, target
 	return store, true
 }
 
-func (m *memoryOrderDispatcher) cachedLastRun(orderName string, storeKeys []string, read orders.LastRunFunc) (time.Time, bool, error) {
-	key := orderHistoryCacheKey(orderName, storeKeys)
-	m.cacheMu.Lock()
-	if m.lastRunCache != nil {
-		if last, ok := m.lastRunCache[key]; ok {
-			m.cacheMu.Unlock()
-			return last, true, nil
-		}
-	}
-	m.cacheMu.Unlock()
-
-	last, err := read(orderName)
-	if err != nil {
-		return time.Time{}, false, err
-	}
-	m.rememberLastRun(orderName, storeKeys, last)
-	return last, false, nil
-}
-
 func (m *memoryOrderDispatcher) rememberLastRun(orderName string, storeKeys []string, last time.Time) {
 	key := orderHistoryCacheKey(orderName, storeKeys)
 	m.cacheMu.Lock()
@@ -667,6 +1035,17 @@ func orderHistoryCacheKey(orderName string, storeKeys []string) string {
 
 func orderTriggerUsesLastRun(a orders.Order) bool {
 	return a.Trigger == "cooldown" || a.Trigger == "cron"
+}
+
+func orderCachedLastRunSuppresses(a orders.Order, now time.Time, cached time.Time) bool {
+	if cached.IsZero() {
+		return false
+	}
+	lastRunFn := func(string) (time.Time, error) {
+		return cached, nil
+	}
+	result := orders.CheckTriggerWithOptions(a, now, lastRunFn, nil, nil, orders.TriggerOptions{})
+	return !result.Due
 }
 
 func eventCursorLabels(scoped string, headSeq uint64) []string {
@@ -1152,28 +1531,6 @@ func (m *memoryOrderDispatcher) hasOpenWorkStrict(store beads.Store, scopedName 
 	return false, nil
 }
 
-type orderOpenWorkCacheEntry struct {
-	hasOpen bool
-	err     error
-}
-
-func (m *memoryOrderDispatcher) hasOpenWorkInStoresStrictCached(stores []beads.Store, storeKeys []string, scopedName string, cache map[string]orderOpenWorkCacheEntry) (bool, error) {
-	if cache == nil {
-		return m.hasOpenWorkInStoresStrict(stores, scopedName)
-	}
-	key := orderOpenWorkCacheKey(scopedName, storeKeys)
-	if cached, ok := cache[key]; ok {
-		return cached.hasOpen, cached.err
-	}
-	hasOpen, err := m.hasOpenWorkInStoresStrict(stores, scopedName)
-	cache[key] = orderOpenWorkCacheEntry{hasOpen: hasOpen, err: err}
-	return hasOpen, err
-}
-
-func orderOpenWorkCacheKey(scopedName string, storeKeys []string) string {
-	return scopedName + "\x00" + strings.Join(storeKeys, "\x00")
-}
-
 func isOrderWispRootCandidate(b beads.Bead) bool {
 	if beads.IsMoleculeType(b.Type) {
 		return true
@@ -1218,22 +1575,6 @@ func storeHasOpenDescendants(store beads.Store, parentID string, includeWisps bo
 				return true, nil
 			}
 			queue = append(queue, c.ID)
-		}
-	}
-	return false, nil
-}
-
-func (m *memoryOrderDispatcher) hasOpenWorkInStoresStrict(stores []beads.Store, scopedName string) (bool, error) {
-	for _, store := range stores {
-		if store == nil {
-			continue
-		}
-		hasOpen, err := m.hasOpenWorkStrict(store, scopedName)
-		if err != nil {
-			return false, err
-		}
-		if hasOpen {
-			return true, nil
 		}
 	}
 	return false, nil

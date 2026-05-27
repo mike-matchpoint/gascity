@@ -82,6 +82,13 @@ type countingListStore struct {
 	includeClosedLists int
 }
 
+type slowOrderDispatchListStore struct {
+	beads.Store
+
+	slowLabel string
+	delay     time.Duration
+}
+
 func TestScanOrderSetSnapshotFSTracksAddChangeRemove(t *testing.T) {
 	fs := fsys.NewFake()
 	fs.Dirs["/city/orders"] = true
@@ -218,6 +225,13 @@ func (s triggerEvaluationFailStore) List(query beads.ListQuery) ([]beads.Bead, e
 func (s *countingListStore) List(query beads.ListQuery) ([]beads.Bead, error) {
 	if query.IncludeClosed || query.Status == "closed" {
 		s.includeClosedLists++
+	}
+	return s.Store.List(query)
+}
+
+func (s slowOrderDispatchListStore) List(query beads.ListQuery) ([]beads.Bead, error) {
+	if query.Label == s.slowLabel {
+		time.Sleep(s.delay)
 	}
 	return s.Store.List(query)
 }
@@ -1327,6 +1341,91 @@ func TestOrderDispatchCachesAutoTrackingBeadCreatedAt(t *testing.T) {
 	all = trackingBeads(t, store, "order-run:test-order")
 	if len(all) != 1 {
 		t.Fatalf("order-run beads after second dispatch = %d, want cached cooldown suppression", len(all))
+	}
+}
+
+func TestOrderDispatchSnapshotSlowListDefersOneOrderWithoutBlockingUnrelated(t *testing.T) {
+	store := slowOrderDispatchListStore{
+		Store:     beads.NewMemStore(),
+		slowLabel: "order-run:aaa-slow",
+		delay:     2 * time.Second,
+	}
+	rec := &memRecorder{}
+	ran := make(map[string]bool)
+	fakeExec := func(_ context.Context, command, _ string, _ []string) ([]byte, error) {
+		ran[command] = true
+		return nil, nil
+	}
+	aa := []orders.Order{
+		{Name: "aaa-slow", Trigger: "cooldown", Interval: "1s", Exec: "aaa-slow"},
+		{Name: "zzz-fast", Trigger: "cooldown", Interval: "1s", Exec: "zzz-fast"},
+	}
+	ad := buildOrderDispatcherFromListExec(aa, store, nil, fakeExec, rec)
+	if ad == nil {
+		t.Fatal("expected non-nil dispatcher")
+	}
+
+	start := time.Now()
+	ad.dispatch(context.Background(), t.TempDir(), time.Now().Add(5*time.Second))
+	elapsed := time.Since(start)
+	ad.drain(context.Background())
+
+	if elapsed >= 5*time.Second {
+		t.Fatalf("dispatch elapsed = %v, want under 5s despite slow List", elapsed)
+	}
+	if ran["aaa-slow"] {
+		t.Fatal("slow degraded order ran; want it deferred for the tick")
+	}
+	if !ran["zzz-fast"] {
+		t.Fatal("unrelated fast order did not run after slow order degraded")
+	}
+	if !rec.hasSubject("aaa-slow") {
+		t.Fatal("degraded slow order did not record a deferral/failure event")
+	}
+}
+
+func TestOrderDispatchOpenCrossOrderDependencyDoesNotSuppressDifferentOrder(t *testing.T) {
+	store := beads.NewMemStore()
+	wo20, err := store.Create(beads.Bead{
+		Title:  "wo-020 active task",
+		Type:   "task",
+		Labels: []string{"order-run:wo-020"},
+	})
+	if err != nil {
+		t.Fatalf("create wo-020 task: %v", err)
+	}
+	blocker, err := store.Create(beads.Bead{
+		Title: "shared blocker",
+		Type:  "task",
+	})
+	if err != nil {
+		t.Fatalf("create blocker: %v", err)
+	}
+	if err := store.DepAdd(wo20.ID, blocker.ID, "blocks"); err != nil {
+		t.Fatalf("DepAdd: %v", err)
+	}
+
+	ran := false
+	fakeExec := func(context.Context, string, string, []string) ([]byte, error) {
+		ran = true
+		return nil, nil
+	}
+	aa := []orders.Order{{
+		Name:     "wo-022",
+		Trigger:  "cooldown",
+		Interval: "1s",
+		Exec:     "wo-022",
+	}}
+	ad := buildOrderDispatcherFromListExec(aa, store, nil, fakeExec, nil)
+	if ad == nil {
+		t.Fatal("expected non-nil dispatcher")
+	}
+
+	ad.dispatch(context.Background(), t.TempDir(), time.Now().Add(5*time.Second))
+	ad.drain(context.Background())
+
+	if !ran {
+		t.Fatal("wo-022 did not run; open work for another order must not suppress it")
 	}
 }
 
