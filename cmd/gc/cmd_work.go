@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,16 +15,21 @@ import (
 	"github.com/gastownhall/gascity/internal/workselect"
 )
 
+var errWorkNotFound = errors.New("no matching work")
+
 type workCommandOptions struct {
-	Agent string
-	JSON  bool
+	Agent       string
+	Assignee    string
+	JSON        bool
+	Status      string
+	SetMetadata []string
 }
 
 func newWorkCmd(stdout, stderr io.Writer) *cobra.Command {
 	base := &workCommandOptions{}
 	cmd := &cobra.Command{
 		Use:   "work",
-		Short: "Inspect typed work selectors",
+		Short: "Inspect and claim typed work selectors",
 	}
 	cmd.PersistentFlags().StringVar(&base.Agent, "agent", "", "agent identity (defaults to $GC_TEMPLATE, $GC_ALIAS, or $GC_AGENT)")
 
@@ -53,8 +59,26 @@ func newWorkCmd(stdout, stderr io.Writer) *cobra.Command {
 			return nil
 		},
 	}
+	nextCmd.Flags().BoolVar(&nextOpts.JSON, "json", false, "print JSON")
 
-	cmd.AddCommand(countCmd, nextCmd)
+	claimOpts := &workCommandOptions{}
+	claimCmd := &cobra.Command{
+		Use:   "claim",
+		Short: "Atomically claim the next work item matching an agent's typed selector",
+		RunE: func(_ *cobra.Command, _ []string) error {
+			claimOpts.Agent = base.Agent
+			if code := cmdWorkClaim(*claimOpts, stdout, stderr); code != 0 {
+				return errExit
+			}
+			return nil
+		},
+	}
+	claimCmd.Flags().StringVar(&claimOpts.Assignee, "assignee", "", "claim assignee (defaults to session identity)")
+	claimCmd.Flags().BoolVar(&claimOpts.JSON, "json", false, "print JSON")
+	claimCmd.Flags().StringVar(&claimOpts.Status, "status", "", "claim status (default and only supported value: in_progress)")
+	claimCmd.Flags().StringArrayVar(&claimOpts.SetMetadata, "set-metadata", nil, "metadata key=value to set atomically with the claim")
+
+	cmd.AddCommand(countCmd, nextCmd, claimCmd)
 	return cmd
 }
 
@@ -93,6 +117,42 @@ func cmdWorkNext(opts workCommandOptions, stdout, stderr io.Writer) int {
 		return 1
 	}
 	writeBeadJSON(next, stdout)
+	return 0
+}
+
+func cmdWorkClaim(opts workCommandOptions, stdout, stderr io.Writer) int {
+	ctx, err := resolveWorkCommandContext(opts, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "gc work claim: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	assignee := strings.TrimSpace(opts.Assignee)
+	if assignee == "" {
+		assignee = defaultWorkClaimAssignee(ctx.agent)
+	}
+	metadata, err := parseWorkMetadata(opts.SetMetadata)
+	if err != nil {
+		fmt.Fprintf(stderr, "gc work claim: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	if _, err := normalizeWorkClaimStatus(opts.Status); err != nil {
+		fmt.Fprintf(stderr, "gc work claim: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	claimed, err := claimNextWork(ctx.store, ctx.selector, assignee, metadata)
+	if err != nil {
+		if errors.Is(err, errWorkNotFound) {
+			fmt.Fprintln(stderr, "gc work claim: no matching work") //nolint:errcheck
+			return 1
+		}
+		if errors.Is(err, beads.ErrClaimLost) {
+			fmt.Fprintf(stderr, "gc work claim: %v\n", err) //nolint:errcheck
+			return 2
+		}
+		fmt.Fprintf(stderr, "gc work claim: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	writeBeadJSON(claimed, stdout)
 	return 0
 }
 
@@ -145,6 +205,25 @@ func resolveWorkCommandContext(opts workCommandOptions, stderr io.Writer) (workC
 	}, nil
 }
 
+func claimNextWork(store beads.Store, selector config.WorkSelector, assignee string, metadata map[string]string) (beads.Bead, error) {
+	assignee = strings.TrimSpace(assignee)
+	if assignee == "" {
+		return beads.Bead{}, fmt.Errorf("assignee is required")
+	}
+	next, ok, err := workselect.Next(store, selector)
+	if err != nil {
+		return beads.Bead{}, err
+	}
+	if !ok {
+		return beads.Bead{}, errWorkNotFound
+	}
+	claimer, ok := store.(beads.ClaimStore)
+	if !ok {
+		return beads.Bead{}, fmt.Errorf("claiming bead %q: %w", next.ID, beads.ErrClaimUnsupported)
+	}
+	return claimer.Claim(next.ID, beads.ClaimOpts{Assignee: assignee, Metadata: metadata})
+}
+
 func workSelectorCountForController(store beads.Store, selector config.WorkSelector) (int, error) {
 	compiled, err := workselect.Compile(selector, 0)
 	if err != nil {
@@ -161,6 +240,42 @@ func workSelectorCountForController(store beads.Store, selector config.WorkSelec
 		return 0, filterErr
 	}
 	return len(filtered), err
+}
+
+func parseWorkMetadata(values []string) (map[string]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(values))
+	for _, raw := range values {
+		key, val, ok := strings.Cut(raw, "=")
+		key = strings.TrimSpace(key)
+		if !ok || key == "" {
+			return nil, fmt.Errorf("invalid --set-metadata %q (want key=value)", raw)
+		}
+		out[key] = val
+	}
+	return out, nil
+}
+
+func normalizeWorkClaimStatus(raw string) (string, error) {
+	status := strings.TrimSpace(raw)
+	if status == "" {
+		return "in_progress", nil
+	}
+	if status != "in_progress" {
+		return "", fmt.Errorf("unsupported --status %q (only in_progress is supported by the atomic claim primitive)", raw)
+	}
+	return status, nil
+}
+
+func defaultWorkClaimAssignee(agentCfg config.Agent) string {
+	return firstNonEmptyWork(
+		os.Getenv("GC_ALIAS"),
+		os.Getenv("GC_SESSION_NAME"),
+		os.Getenv("GC_AGENT"),
+		agentCfg.QualifiedName(),
+	)
 }
 
 func firstNonEmptyWork(values ...string) string {

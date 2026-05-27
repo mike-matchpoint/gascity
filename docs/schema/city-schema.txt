@@ -184,7 +184,7 @@
         },
         "scale_check_query": {
           "$ref": "#/$defs/WorkSelector",
-          "description": "ScaleCheckQuery is the typed count-side selector for new session demand.\nIt must be paired with an identical WorkSelector so controller demand and\nworker discovery use the same normalized predicate."
+          "description": "ScaleCheckQuery is the typed count-side selector for new session demand.\nIt must be paired with an identical WorkSelector so the controller,\nworker discovery, and claim path use the same normalized predicate."
         },
         "drain_timeout": {
           "type": "string",
@@ -213,7 +213,7 @@
         },
         "work_selector": {
           "$ref": "#/$defs/WorkSelector",
-          "description": "WorkSelector is the typed work predicate used by `gc work count` and\n`gc work next`. It is intentionally declarative so controller demand and\ndiscovery can share one compiled selector instead of duplicating shell\npredicates."
+          "description": "WorkSelector is the typed work predicate used by `gc work count`,\n`gc work next`, and `gc work claim`. It is intentionally declarative so\ncontroller demand, discovery, and claim can share one compiled selector\ninstead of duplicating shell predicates."
         },
         "idle_timeout": {
           "type": "string",
@@ -646,7 +646,7 @@
         },
         "work_selector": {
           "$ref": "#/$defs/WorkSelector",
-          "description": "WorkSelector overrides the typed selector used by gc work count/next."
+          "description": "WorkSelector overrides the typed selector used by gc work count/next/claim."
         },
         "option_defaults": {
           "additionalProperties": {
@@ -2385,7 +2385,7 @@
       },
       "additionalProperties": false,
       "type": "object",
-      "description": "WorkSelector is a declarative bead predicate shared by controller demand and worker discovery."
+      "description": "WorkSelector is a declarative bead predicate shared by controller demand, worker discovery, and atomic claim commands."
     },
     "Workspace": {
       "properties": {

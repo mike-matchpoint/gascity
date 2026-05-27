@@ -384,8 +384,8 @@ type NamedSession struct {
 	BindingName string `toml:"-" json:"-"`
 }
 
-// WorkSelector is a declarative bead predicate shared by controller demand and
-// worker discovery.
+// WorkSelector is a declarative bead predicate shared by controller demand,
+// worker discovery, and atomic claim commands.
 type WorkSelector struct {
 	// Status selects one bead status. Empty defaults to open at evaluation time.
 	Status string `toml:"status,omitempty" jsonschema:"enum=open,enum=in_progress,enum=closed"`
@@ -749,7 +749,7 @@ type AgentOverride struct {
 	// unassigned session demand. When set, WorkSelector must be set to the
 	// same selector so controller demand and worker discovery stay paired.
 	ScaleCheckQuery *WorkSelector `toml:"scale_check_query,omitempty"`
-	// WorkSelector overrides the typed selector used by gc work count/next.
+	// WorkSelector overrides the typed selector used by gc work count/next/claim.
 	WorkSelector *WorkSelector `toml:"work_selector,omitempty"`
 	// OptionDefaults adds or overrides provider option defaults for this agent.
 	// Keys are option keys, values are choice values. Merges additively
@@ -2353,8 +2353,8 @@ type Agent struct {
 	// before running the command.
 	ScaleCheck string `toml:"scale_check,omitempty"`
 	// ScaleCheckQuery is the typed count-side selector for new session demand.
-	// It must be paired with an identical WorkSelector so controller demand and
-	// worker discovery use the same normalized predicate.
+	// It must be paired with an identical WorkSelector so the controller,
+	// worker discovery, and claim path use the same normalized predicate.
 	ScaleCheckQuery WorkSelector `toml:"scale_check_query,omitempty"`
 	// DrainTimeout is the maximum time to wait for a session to finish its
 	// current work before force-killing it during scale-down. Duration string
@@ -2402,10 +2402,10 @@ type Agent struct {
 	// reconciler/scale_check paths decide when sessions are created.
 	// Custom sling_query and work_query can be overridden independently.
 	SlingQuery string `toml:"sling_query,omitempty"`
-	// WorkSelector is the typed work predicate used by `gc work count` and
-	// `gc work next`. It is intentionally declarative so controller demand and
-	// discovery can share one compiled selector instead of duplicating shell
-	// predicates.
+	// WorkSelector is the typed work predicate used by `gc work count`,
+	// `gc work next`, and `gc work claim`. It is intentionally declarative so
+	// controller demand, discovery, and claim can share one compiled selector
+	// instead of duplicating shell predicates.
 	WorkSelector WorkSelector `toml:"work_selector,omitempty"`
 	// IdleTimeout is the maximum time an agent session can be inactive before
 	// the controller kills and restarts it. Duration string (e.g., "15m", "1h").
