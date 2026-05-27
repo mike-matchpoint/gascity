@@ -66,8 +66,9 @@ func maybeQueueNamedSessionPatrolWispNudge(
 	}
 	targetNudge := resolveNudgeTargetFromSessionBead(cityPath, cfg, *target.session)
 	continuationEpoch := strings.TrimSpace(targetNudge.continuationEpoch)
-	if strings.TrimSpace(target.session.Metadata[namedSessionPatrolWispNudgeRefMetadata]) == refID &&
-		strings.TrimSpace(target.session.Metadata[namedSessionPatrolWispNudgeEpochMetadata]) == continuationEpoch {
+	if queued, err := namedSessionPatrolWispNudgeQueued(cityPath, targetNudge, refID, now); err != nil {
+		fmt.Fprintf(stderr, "session reconciler: checking queued patrol-wisp nudge for %s from %s: %v\n", targetNudge.agentKey(), refID, err) //nolint:errcheck
+	} else if queued {
 		return
 	}
 	item := newQueuedNudgeWithOptions(
@@ -101,6 +102,40 @@ func maybeQueueNamedSessionPatrolWispNudge(
 		target.session.Metadata[key] = value
 	}
 	maybeStartNudgePoller(targetNudge)
+}
+
+func namedSessionPatrolWispNudgeQueued(cityPath string, target nudgeTarget, refID string, now time.Time) (bool, error) {
+	pending, inFlight, _, err := listQueuedNudgesForTarget(cityPath, target, now)
+	if err != nil {
+		return false, err
+	}
+	for _, item := range pending {
+		if queuedPatrolWispNudgeMatchesTarget(item, target, refID) {
+			return true, nil
+		}
+	}
+	for _, item := range inFlight {
+		if queuedPatrolWispNudgeMatchesTarget(item, target, refID) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func queuedPatrolWispNudgeMatchesTarget(item queuedNudge, target nudgeTarget, refID string) bool {
+	if item.Source != namedSessionPatrolWispNudgeSource || item.Reference == nil {
+		return false
+	}
+	if item.Reference.Kind != namedSessionPatrolWispNudgeSource || item.Reference.ID != refID {
+		return false
+	}
+	if item.SessionID != "" && target.sessionID != "" && item.SessionID != target.sessionID {
+		return false
+	}
+	if item.ContinuationEpoch != "" && target.continuationEpoch != "" && item.ContinuationEpoch != target.continuationEpoch {
+		return false
+	}
+	return true
 }
 
 func lifecycleTimerBlocker(metadata map[string]string, now time.Time) string {
