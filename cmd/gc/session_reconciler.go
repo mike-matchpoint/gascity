@@ -66,6 +66,9 @@ func maybeQueueNamedSessionPatrolWispNudge(
 	}
 	targetNudge := resolveNudgeTargetFromSessionBead(cityPath, cfg, *target.session)
 	continuationEpoch := strings.TrimSpace(targetNudge.continuationEpoch)
+	if err := supersedeStaleNamedSessionPatrolWispNudges(cityPath, store, targetNudge, refID, now); err != nil {
+		fmt.Fprintf(stderr, "session reconciler: superseding stale patrol-wisp nudges for %s from %s: %v\n", targetNudge.agentKey(), refID, err) //nolint:errcheck
+	}
 	if queued, err := namedSessionPatrolWispNudgeQueued(cityPath, targetNudge, refID, now); err != nil {
 		fmt.Fprintf(stderr, "session reconciler: checking queued patrol-wisp nudge for %s from %s: %v\n", targetNudge.agentKey(), refID, err) //nolint:errcheck
 	} else if queued {
@@ -120,6 +123,76 @@ func namedSessionPatrolWispNudgeQueued(cityPath string, target nudgeTarget, refI
 		}
 	}
 	return false, nil
+}
+
+func supersedeStaleNamedSessionPatrolWispNudges(cityPath string, store beads.Store, target nudgeTarget, refID string, now time.Time) error {
+	if cityPath == "" || refID == "" {
+		return nil
+	}
+	if store == nil {
+		store = openNudgeBeadStore(cityPath)
+	}
+	return withNudgeQueueState(cityPath, func(state *nudgeQueueState) error {
+		if err := recoverExpiredInFlightNudges(state, store, now); err != nil {
+			return err
+		}
+		if err := pruneExpiredQueuedNudges(state, store, now); err != nil {
+			return err
+		}
+		if err := pruneDeadQueuedNudges(state, store, now); err != nil {
+			return err
+		}
+		pending := state.Pending[:0]
+		for _, item := range state.Pending {
+			if stalePatrolWispNudgeMatchesTarget(item, target, refID) {
+				if err := markQueuedNudgeSuperseded(store, &state.Dead, item, now); err != nil {
+					return err
+				}
+				continue
+			}
+			pending = append(pending, item)
+		}
+		state.Pending = pending
+		inFlight := state.InFlight[:0]
+		for _, item := range state.InFlight {
+			if stalePatrolWispNudgeMatchesTarget(item, target, refID) {
+				if err := markQueuedNudgeSuperseded(store, &state.Dead, item, now); err != nil {
+					return err
+				}
+				continue
+			}
+			inFlight = append(inFlight, item)
+		}
+		state.InFlight = inFlight
+		sortQueuedNudges(state)
+		return nil
+	})
+}
+
+func markQueuedNudgeSuperseded(store beads.Store, dead *[]queuedNudge, item queuedNudge, now time.Time) error {
+	item.DeadAt = now.UTC()
+	item.LastError = "superseded"
+	*dead = append(*dead, item)
+	return markQueuedNudgeTerminal(store, item, "superseded", "superseded", "", now)
+}
+
+func stalePatrolWispNudgeMatchesTarget(item queuedNudge, target nudgeTarget, currentRefID string) bool {
+	if item.Source != namedSessionPatrolWispNudgeSource || item.Reference == nil {
+		return false
+	}
+	if item.Reference.Kind != namedSessionPatrolWispNudgeSource || item.Reference.ID == "" || item.Reference.ID == currentRefID {
+		return false
+	}
+	if !target.matchesQueueAgent(item.Agent) {
+		return false
+	}
+	if item.SessionID != "" && target.sessionID != "" && item.SessionID != target.sessionID {
+		return false
+	}
+	if item.ContinuationEpoch != "" && target.continuationEpoch != "" && item.ContinuationEpoch != target.continuationEpoch {
+		return false
+	}
+	return true
 }
 
 func queuedPatrolWispNudgeMatchesTarget(item queuedNudge, target nudgeTarget, refID string) bool {
