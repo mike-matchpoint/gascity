@@ -132,6 +132,27 @@ func (s *demandListCountingStore) List(query beads.ListQuery) ([]beads.Bead, err
 	return s.Store.List(query)
 }
 
+type demandTierRecordingStore struct {
+	*beads.MemStore
+	mu            sync.Mutex
+	wispTierLists int
+}
+
+func (s *demandTierRecordingStore) List(query beads.ListQuery) ([]beads.Bead, error) {
+	if query.TierMode == beads.TierWisps {
+		s.mu.Lock()
+		s.wispTierLists++
+		s.mu.Unlock()
+	}
+	return s.MemStore.List(query)
+}
+
+func (s *demandTierRecordingStore) WispTierLists() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.wispTierLists
+}
+
 type demandRefreshFailStore struct {
 	beads.Store
 	failNextGet         bool
@@ -292,51 +313,6 @@ func TestCollectAssignedWorkBeadsUsesCachedInProgressReadModel(t *testing.T) {
 	}
 }
 
-func TestCollectAssignedWorkBeadsIncludesInProgressAssignedWisps(t *testing.T) {
-	store := beads.NewMemStore()
-	refineryWisp, err := store.Create(beads.Bead{
-		Title:     "refinery patrol",
-		Type:      "molecule",
-		Status:    "in_progress",
-		Assignee:  "repo/refinery",
-		Ephemeral: true,
-	})
-	if err != nil {
-		t.Fatalf("create refinery wisp: %v", err)
-	}
-	deaconWisp, err := store.Create(beads.Bead{
-		Title:     "deacon patrol",
-		Type:      "molecule",
-		Status:    "in_progress",
-		Assignee:  "deacon",
-		Ephemeral: true,
-	})
-	if err != nil {
-		t.Fatalf("create deacon wisp: %v", err)
-	}
-	status := "in_progress"
-	if err := store.Update(refineryWisp.ID, beads.UpdateOpts{Status: &status}); err != nil {
-		t.Fatalf("set refinery wisp in_progress: %v", err)
-	}
-	if err := store.Update(deaconWisp.ID, beads.UpdateOpts{Status: &status}); err != nil {
-		t.Fatalf("set deacon wisp in_progress: %v", err)
-	}
-
-	got, partial := collectAssignedWorkBeads(&config.City{}, store)
-	if partial {
-		t.Fatal("collectAssignedWorkBeads reported partial results")
-	}
-	gotIDs := map[string]bool{}
-	for _, b := range got {
-		gotIDs[b.ID] = true
-	}
-	for _, want := range []string{refineryWisp.ID, deaconWisp.ID} {
-		if !gotIDs[want] {
-			t.Fatalf("collectAssignedWorkBeads IDs = %v, want assigned in-progress wisp %s", gotIDs, want)
-		}
-	}
-}
-
 func TestCollectAssignedWorkBeadsFallsBackLiveWhenCachedInProgressDirty(t *testing.T) {
 	backing := &demandRefreshFailStore{Store: beads.NewMemStore()}
 	work, err := backing.Create(beads.Bead{
@@ -367,6 +343,39 @@ func TestCollectAssignedWorkBeadsFallsBackLiveWhenCachedInProgressDirty(t *testi
 	}
 	if backing.liveInProgressLists != 1 {
 		t.Fatalf("live in_progress list calls = %d, want dirty cache fallback", backing.liveInProgressLists)
+	}
+}
+
+func TestCollectAssignedWorkBeadsDoesNotReadWispTierForDemand(t *testing.T) {
+	store := &demandTierRecordingStore{MemStore: beads.NewMemStore()}
+	work, err := store.Create(beads.Bead{
+		Title:    "active handoff",
+		Type:     "task",
+		Status:   "in_progress",
+		Assignee: "repo/refinery",
+	})
+	if err != nil {
+		t.Fatalf("create active bead: %v", err)
+	}
+	if _, err := store.Create(beads.Bead{
+		Title:     "refinery patrol",
+		Type:      "molecule",
+		Status:    "in_progress",
+		Assignee:  "repo/refinery",
+		Ephemeral: true,
+	}); err != nil {
+		t.Fatalf("create ephemeral wisp: %v", err)
+	}
+
+	got, partial := collectAssignedWorkBeads(&config.City{}, store)
+	if partial {
+		t.Fatal("collectAssignedWorkBeads reported partial results")
+	}
+	if store.WispTierLists() != 0 {
+		t.Fatalf("wisp-tier demand list calls = %d, want 0", store.WispTierLists())
+	}
+	if len(got) != 1 || got[0].ID != work.ID {
+		t.Fatalf("collectAssignedWorkBeads returned %#v, want only issue-tier work %s", got, work.ID)
 	}
 }
 

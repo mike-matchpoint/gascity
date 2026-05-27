@@ -804,20 +804,6 @@ func collectAssignedWorkBeadsWithStores(
 					appendInProgressWorkUnique(cfg, &result, &resultStores, &resultStoreRefs, inProgress, seen, source.store, source.ref)
 				}
 			}
-			// Ephemeral wisps tier: patrol/loop wisps (e.g. mol-refinery-patrol)
-			// assigned to named sessions live here. The issues-tier query above
-			// drops them via the default TierIssues filter at query.go:124-127,
-			// so they would be invisible to namedWorkReady wake decisions
-			// without this separate read. Wisps tier is not cached, so this is
-			// a small live query against the ephemeral table.
-			if inProgressWisps, err := listForControllerDemand(source.store, beads.ListQuery{Status: "in_progress", TierMode: beads.TierWisps}); err == nil {
-				appendInProgressWorkUnique(cfg, &result, &resultStores, &resultStoreRefs, inProgressWisps, seen, source.store, source.ref)
-			} else {
-				errs = append(errs, fmt.Errorf("List(in_progress, wisps): %w", err))
-				if beads.IsPartialResult(err) && len(inProgressWisps) > 0 {
-					appendInProgressWorkUnique(cfg, &result, &resultStores, &resultStoreRefs, inProgressWisps, seen, source.store, source.ref)
-				}
-			}
 			results[idx] = storeAssignedWorkResult{beads: result, stores: resultStores, storeRefs: resultStoreRefs, errs: errs}
 		}()
 	}
