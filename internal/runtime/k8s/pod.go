@@ -20,6 +20,11 @@ import (
 const (
 	podManagedDoltHost = "dolt.gc.svc.cluster.local"
 	podManagedDoltPort = "3307"
+
+	defaultContainerHome = "/home/gcagent"
+	claudeSecretName     = "claude-credentials"
+	codexSecretName      = "codex-credentials"
+	gitSecretName        = "git-credentials"
 )
 
 func controllerCityPath(cfgEnv map[string]string) string {
@@ -218,7 +223,12 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 			linuxUsername,
 		)
 	}
-	credCopy := `mkdir -p $HOME/.claude && cp -rL /tmp/claude-secret/. $HOME/.claude/ 2>/dev/null; git config --global --add safe.directory '*' 2>/dev/null; `
+	credCopy := `mkdir -p "$HOME/.claude" "$HOME/.codex" && ` +
+		`cp -rL /tmp/claude-secret/. "$HOME/.claude/" 2>/dev/null || true; ` +
+		`cp -f /tmp/claude-secret/.claude.json "$HOME/.claude.json" 2>/dev/null || true; ` +
+		`cp -rL /tmp/codex-secret/. "$HOME/.codex/" 2>/dev/null || true; ` +
+		`git config --global --add safe.directory '*' 2>/dev/null || true; ` +
+		`if [ -n "${GITHUB_TOKEN:-}" ]; then export GH_TOKEN="${GH_TOKEN:-$GITHUB_TOKEN}"; gh auth setup-git >/dev/null 2>&1 || true; fi; `
 	wsWait := ""
 	if !p.prebaked {
 		wsWait = `while [ ! -f /workspace/.gc-workspace-ready ] && [ ! -f /workspace/.gc-ready ]; do sleep 0.5; done; `
@@ -266,7 +276,18 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 	volumes = append(volumes, corev1.Volume{
 		Name: "claude-config", VolumeSource: corev1.VolumeSource{
 			Secret: &corev1.SecretVolumeSource{
-				SecretName: "claude-credentials",
+				SecretName: claudeSecretName,
+				Optional:   boolPtr(true),
+			},
+		},
+	})
+	mainVolMounts = append(mainVolMounts, corev1.VolumeMount{
+		Name: "codex-config", MountPath: "/tmp/codex-secret", ReadOnly: true,
+	})
+	volumes = append(volumes, corev1.Volume{
+		Name: "codex-config", VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: codexSecretName,
 				Optional:   boolPtr(true),
 			},
 		},
@@ -441,28 +462,38 @@ func buildPodEnv(cfgEnv map[string]string, podWorkDir, managedServiceHost, manag
 	// Add tmux session env so agent's tmux provider uses the same session.
 	env = append(env, corev1.EnvVar{Name: "GC_TMUX_SESSION", Value: tmuxSession})
 
-	// CLAUDE_CONFIG_DIR: use dynamic username home if LINUX_USERNAME is set,
-	// otherwise fall back to the baked-in gcagent user.
-	linuxUser := cfgEnv["LINUX_USERNAME"]
-	if linuxUser != "" {
-		env = append(env, corev1.EnvVar{Name: "CLAUDE_CONFIG_DIR", Value: "/home/" + linuxUser + "/.claude"})
-	} else {
-		env = append(env, corev1.EnvVar{Name: "CLAUDE_CONFIG_DIR", Value: "/home/gcagent/.claude"})
-	}
+	providerHome := podProviderHome(cfgEnv)
+	env = append(env, corev1.EnvVar{Name: "CLAUDE_CONFIG_DIR", Value: providerHome + "/.claude"})
+	env = append(env, corev1.EnvVar{Name: "CODEX_HOME", Value: providerHome + "/.codex"})
 
 	// Inject GITHUB_TOKEN from optional K8s secret for git push in pods.
-	env = append(env, corev1.EnvVar{
-		Name: "GITHUB_TOKEN",
+	env = append(env, gitTokenEnv("GITHUB_TOKEN"))
+	env = append(env, gitTokenEnv("GH_TOKEN"))
+
+	return env, nil
+}
+
+func podProviderHome(cfgEnv map[string]string) string {
+	if linuxUser := strings.TrimSpace(cfgEnv["LINUX_USERNAME"]); linuxUser != "" {
+		return "/home/" + linuxUser
+	}
+	if home := strings.TrimSpace(cfgEnv["GC_K8S_CONTAINER_HOME"]); home != "" {
+		return strings.TrimRight(home, "/")
+	}
+	return defaultContainerHome
+}
+
+func gitTokenEnv(name string) corev1.EnvVar {
+	return corev1.EnvVar{
+		Name: name,
 		ValueFrom: &corev1.EnvVarSource{
 			SecretKeyRef: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{Name: "git-credentials"},
+				LocalObjectReference: corev1.LocalObjectReference{Name: gitSecretName},
 				Key:                  "token",
 				Optional:             boolPtr(true),
 			},
 		},
-	})
-
-	return env, nil
+	}
 }
 
 // needsStaging returns true if the session config requires file staging
