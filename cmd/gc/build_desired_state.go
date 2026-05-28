@@ -787,6 +787,9 @@ func refreshDesiredStateWithSessionBeads(
 // work that is actually ready. Routed-but-unassigned pool queue work is
 // intentionally excluded here, except stranded in-progress pool work with no
 // assignee is included so reconciliation can reopen it for normal claiming.
+// Direct-assigned formula steps are collected through the selector-ready hot
+// read path because generic Ready() intentionally excludes workflow steps from
+// unassigned pool demand.
 func collectAssignedWorkBeads(
 	cfg *config.City,
 	cityStore beads.Store,
@@ -869,10 +872,6 @@ func collectAssignedWorkBeadsWithStores(
 	skipReadyAssignees := assignedWorkAssigneeSet(result)
 	expandSkipAssigneesWithSessionIdentities(skipReadyAssignees, sessionBeads)
 	assignees := readyAssignedWorkAssignees(cfg, sessionBeads, skipReadyAssignees)
-	if len(skipReadyAssignees) > 0 && len(assignees) == 0 {
-		return result, resultStores, resultStoreRefs, partial
-	}
-
 	readyResults := make([]storeAssignedWorkResult, len(stores))
 	for idx, source := range stores {
 		idx, source := idx, source
@@ -882,12 +881,12 @@ func collectAssignedWorkBeadsWithStores(
 			var ready []beads.Bead
 			var err error
 			var errs []error
-			if len(assignees) == 0 {
+			if len(assignees) == 0 && len(skipReadyAssignees) == 0 {
 				ready, err = readyForControllerDemandQuery(source.store, beads.ReadyQuery{Limit: assignedWorkReadyLimit(cfg)})
 				if err != nil {
 					errs = append(errs, fmt.Errorf("Ready(): %w", err))
 				}
-			} else {
+			} else if len(assignees) > 0 {
 				for _, assignee := range assignees {
 					part, partErr := readyForControllerDemandQuery(source.store, beads.ReadyQuery{Assignee: assignee, Limit: assignedWorkReadyLimit(cfg)})
 					if partErr != nil {
@@ -896,6 +895,11 @@ func collectAssignedWorkBeadsWithStores(
 					ready = append(ready, part...)
 				}
 			}
+			assignedSteps, assignedStepErr := readyAssignedFormulaStepsForControllerDemand(source.store)
+			if assignedStepErr != nil {
+				errs = append(errs, fmt.Errorf("Ready(assigned formula steps): %w", assignedStepErr))
+			}
+			ready = append(ready, assignedSteps...)
 			var readyBeads []beads.Bead
 			var readyStores []beads.Store
 			var readyStoreRefs []string
@@ -915,6 +919,28 @@ func collectAssignedWorkBeadsWithStores(
 		}
 	}
 	return result, resultStores, resultStoreRefs, partial
+}
+
+func readyAssignedFormulaStepsForControllerDemand(store beads.Store) ([]beads.Bead, error) {
+	ready, err := beads.RuntimeReadyList(context.Background(), store, beads.ListQuery{
+		Status:     "open",
+		Type:       "step",
+		AllowScan:  true,
+		SkipLabels: true,
+		Sort:       beads.SortCreatedAsc,
+		TierMode:   beads.TierIssues,
+	}, beads.RuntimeReadPolicy(beads.ReadClassHotDegradedOK, "controller.demand.assigned-formula-step"))
+	if len(ready) == 0 {
+		return ready, err
+	}
+	filtered := ready[:0]
+	for _, bead := range ready {
+		if strings.TrimSpace(bead.Assignee) == "" {
+			continue
+		}
+		filtered = append(filtered, bead)
+	}
+	return filtered, err
 }
 
 func namedSessionPatrolWispWakeDemand(
@@ -1146,6 +1172,13 @@ func readyAssignedWorkAssignees(cfg *config.City, sessionBeads *sessionBeadSnaps
 				continue
 			}
 			add(cfg.NamedSessions[i].QualifiedName())
+		}
+		for i := range cfg.Agents {
+			agent := &cfg.Agents[i]
+			if agent.Suspended || !agent.SupportsGenericEphemeralSessions() || !agent.UsesCanonicalSingletonPoolIdentity() {
+				continue
+			}
+			add(agent.QualifiedName())
 		}
 	}
 	return result

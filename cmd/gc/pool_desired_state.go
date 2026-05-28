@@ -13,7 +13,7 @@ import (
 type SessionRequest struct {
 	Template      string // agent template qualified name (e.g., "gascity/claude")
 	BeadPriority  int    // priority of the driving work bead
-	Tier          string // "resume" (in-progress work with assigned session) or "new" (ready unassigned work)
+	Tier          string // "resume" (assigned session), "assigned" (assigned template), or "new" (ready routed work)
 	SessionBeadID string // concrete session to preserve for resume or in-flight new demand
 	WorkBeadID    string // the work bead driving this request
 }
@@ -23,6 +23,33 @@ func beadPriority(b beads.Bead) int {
 		return *b.Priority
 	}
 	return 0
+}
+
+func agentBacksNamedSession(cfg *config.City, template string) bool {
+	if cfg == nil {
+		return false
+	}
+	template = strings.TrimSpace(template)
+	if template == "" {
+		return false
+	}
+	for i := range cfg.NamedSessions {
+		if cfg.NamedSessions[i].TemplateQualifiedName() == template {
+			return true
+		}
+	}
+	return false
+}
+
+func workAssigneeTargetsCanonicalSingletonAgent(assignee string, agent *config.Agent) bool {
+	assignee = strings.TrimSpace(assignee)
+	if assignee == "" || agent == nil {
+		return false
+	}
+	if !agent.SupportsGenericEphemeralSessions() || !agent.UsesCanonicalSingletonPoolIdentity() {
+		return false
+	}
+	return assignee == agent.QualifiedName()
 }
 
 // PoolDesiredState holds the desired state for a single agent template.
@@ -120,8 +147,15 @@ func computePoolDesiredStates(
 		}
 		template := agent.QualifiedName()
 
+		backsNamedSession := agentBacksNamedSession(cfg, template)
 		// Resume tier: actionable assigned work beads whose assignee resolves
 		// to a non-closed session bead. These sessions must stay alive.
+		//
+		// Canonical singleton pool templates also accept direct assignment to
+		// their configured identity. That covers fresh-wake formula/control
+		// work whose assignee is the stable singleton alias and no session bead
+		// exists yet. Multi-session pools intentionally do not use this path:
+		// a fresh "worker-1" session would not match work assigned to "worker".
 		for _, wb := range assignedWorkBeads {
 			routedTo := wb.Metadata["gc.routed_to"]
 			if wb.Status != "in_progress" && wb.Status != "open" {
@@ -163,6 +197,15 @@ func computePoolDesiredStates(
 					Tier:          "resume",
 					SessionBeadID: sessionBeadID,
 					WorkBeadID:    wb.ID,
+				})
+				continue
+			}
+			if !backsNamedSession && workAssigneeTargetsCanonicalSingletonAgent(assignee, agent) {
+				resumeRequests = append(resumeRequests, SessionRequest{
+					Template:     template,
+					BeadPriority: beadPriority(wb),
+					Tier:         "assigned",
+					WorkBeadID:   wb.ID,
 				})
 			}
 			// Else: assignee set but session closed/unknown — orphaned

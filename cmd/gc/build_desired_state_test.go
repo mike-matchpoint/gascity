@@ -418,6 +418,63 @@ func TestCollectAssignedWorkBeadsUsesCachedInProgressReadModel(t *testing.T) {
 	}
 }
 
+func TestCollectAssignedWorkBeadsUsesRuntimeReadyListForAssignedFormulaSteps(t *testing.T) {
+	backing := &readyFailStore{Store: beads.NewMemStore()}
+	readyStep, err := backing.Create(beads.Bead{
+		Title:    "assigned formula step",
+		Type:     "step",
+		Status:   "open",
+		Assignee: "cartographer",
+	})
+	if err != nil {
+		t.Fatalf("create assigned step: %v", err)
+	}
+	blocker, err := backing.Create(beads.Bead{
+		Title:  "blocker",
+		Type:   "task",
+		Status: "open",
+	})
+	if err != nil {
+		t.Fatalf("create blocker: %v", err)
+	}
+	blockedStep, err := backing.Create(beads.Bead{
+		Title:    "blocked assigned formula step",
+		Type:     "step",
+		Status:   "open",
+		Assignee: "cartographer",
+	})
+	if err != nil {
+		t.Fatalf("create blocked assigned step: %v", err)
+	}
+	if err := backing.DepAdd(blockedStep.ID, blocker.ID, "blocks"); err != nil {
+		t.Fatalf("block assigned step: %v", err)
+	}
+	if _, err := backing.Create(beads.Bead{
+		Title:  "unassigned formula step",
+		Type:   "step",
+		Status: "open",
+	}); err != nil {
+		t.Fatalf("create unassigned step: %v", err)
+	}
+
+	cache := beads.NewCachingStoreForTest(backing, nil)
+	if err := cache.PrimeActive(); err != nil {
+		t.Fatalf("PrimeActive: %v", err)
+	}
+	store := &controllerHotReadSpyStore{CachingStore: cache}
+
+	got, partial := collectAssignedWorkBeads(&config.City{}, store)
+	if partial {
+		t.Fatal("collectAssignedWorkBeads partial = true, want complete runtime ready-list read")
+	}
+	if len(got) != 1 || got[0].ID != readyStep.ID {
+		t.Fatalf("collectAssignedWorkBeads returned %#v, want ready assigned step %s only", got, readyStep.ID)
+	}
+	if store.readyCalls != 0 || store.depListCalls != 0 || store.getCalls != 0 {
+		t.Fatalf("hot path calls Ready=%d DepList=%d Get=%d, want all zero", store.readyCalls, store.depListCalls, store.getCalls)
+	}
+}
+
 func TestCollectAssignedWorkBeadsDegradesWhenReadyCacheDirty(t *testing.T) {
 	backing := &demandRefreshFailStore{Store: beads.NewMemStore()}
 	work, err := backing.Create(beads.Bead{
@@ -6389,6 +6446,99 @@ func TestBuildDesiredState_PlainTemplateMaxOneDoesNotMaterializeWithoutDemand(t 
 	dsResult := buildDesiredState("test-city", cityPath, time.Now().UTC(), cfg, runtime.NewFake(), store, io.Discard)
 	if len(dsResult.State) != 0 {
 		t.Fatalf("plain max=1 template should not auto-materialize without demand: %+v", dsResult.State)
+	}
+}
+
+func TestBuildDesiredState_CanonicalSingletonPoolAssignedReadyWorkMaterializes(t *testing.T) {
+	cityPath := t.TempDir()
+	store := beads.NewMemStore()
+	priority := 7
+	if _, err := store.Create(beads.Bead{
+		Title:    "assigned cartographer step",
+		Type:     "step",
+		Status:   "open",
+		Priority: &priority,
+		Assignee: "cartographer",
+		Metadata: map[string]string{
+			"gc.routed_to": "cartographer",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Agents: []config.Agent{{
+			Name:              "cartographer",
+			StartCommand:      "true",
+			MaxActiveSessions: intPtr(1),
+			MinActiveSessions: intPtr(0),
+			ScaleCheck:        "printf 0",
+			WakeMode:          "fresh",
+		}},
+	}
+
+	var stderr bytes.Buffer
+	dsResult := buildDesiredState("test-city", cityPath, time.Now().UTC(), cfg, runtime.NewFake(), store, &stderr)
+	if len(dsResult.AssignedWorkBeads) != 1 {
+		t.Fatalf("AssignedWorkBeads = %d, want direct assigned singleton work; stderr=%q", len(dsResult.AssignedWorkBeads), stderr.String())
+	}
+	if len(dsResult.State) != 1 {
+		t.Fatalf("desired sessions = %d, want one canonical singleton session; keys=%v stderr=%q", len(dsResult.State), mapKeys(dsResult.State), stderr.String())
+	}
+	var got TemplateParams
+	for _, tp := range dsResult.State {
+		got = tp
+	}
+	if got.TemplateName != "cartographer" {
+		t.Fatalf("TemplateName = %q, want cartographer", got.TemplateName)
+	}
+	if got.InstanceName != "cartographer" {
+		t.Fatalf("InstanceName = %q, want canonical cartographer", got.InstanceName)
+	}
+	if got.Alias != "cartographer" {
+		t.Fatalf("Alias = %q, want canonical cartographer", got.Alias)
+	}
+	if got.PoolSlot != 0 {
+		t.Fatalf("PoolSlot = %d, want 0 for canonical singleton identity", got.PoolSlot)
+	}
+	if strings.Contains(got.InstanceName, "-1") || strings.Contains(got.Alias, "-1") {
+		t.Fatalf("canonical singleton materialized phantom slot identity: instance=%q alias=%q", got.InstanceName, got.Alias)
+	}
+}
+
+func TestBuildDesiredState_MultiSessionPoolTemplateAssignedReadyWorkDoesNotMaterialize(t *testing.T) {
+	cityPath := t.TempDir()
+	store := beads.NewMemStore()
+	if _, err := store.Create(beads.Bead{
+		Title:    "assigned worker step",
+		Type:     "step",
+		Status:   "open",
+		Assignee: "worker",
+		Metadata: map[string]string{
+			"gc.routed_to": "worker",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Agents: []config.Agent{{
+			Name:              "worker",
+			StartCommand:      "true",
+			MaxActiveSessions: intPtr(2),
+			ScaleCheck:        "printf 0",
+		}},
+	}
+
+	var stderr bytes.Buffer
+	dsResult := buildDesiredState("test-city", cityPath, time.Now().UTC(), cfg, runtime.NewFake(), store, &stderr)
+	if len(dsResult.AssignedWorkBeads) != 1 {
+		t.Fatalf("AssignedWorkBeads = %d, want assigned work collected for reconciliation", len(dsResult.AssignedWorkBeads))
+	}
+	if len(dsResult.State) != 0 {
+		t.Fatalf("multi-session pool must not spawn worker-N for work assigned to base template; state=%#v stderr=%q", dsResult.State, stderr.String())
 	}
 }
 
