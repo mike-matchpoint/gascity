@@ -131,7 +131,7 @@ func AnalyzeDoltContentionLog(path string, opts DoltContentionOptions) (DoltCont
 			summary.ClosedConnectionCount++
 			matched = true
 		}
-		if duration, ok := doltLogQueryDuration(line); ok && duration >= opts.SlowQueryThreshold {
+		if duration, ok := doltLogQueryDuration(line); ok && !doltLogNothingToCommit(line) && duration >= opts.SlowQueryThreshold {
 			summary.SlowQueryCount++
 			if seconds := duration.Seconds(); seconds > summary.MaxQueryDurationSeconds {
 				summary.MaxQueryDurationSeconds = seconds
@@ -209,6 +209,10 @@ func doltLogDatabase(line string) string {
 		return ""
 	}
 	return matches[1]
+}
+
+func doltLogNothingToCommit(line string) bool {
+	return strings.Contains(line, "nothing to commit")
 }
 
 func doltLogQueryDuration(line string) (time.Duration, bool) {

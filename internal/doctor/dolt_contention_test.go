@@ -48,15 +48,26 @@ func TestAnalyzeDoltContentionLogRecognizesIncidentSignaturesAfterRestart(t *tes
 func TestAnalyzeDoltContentionLogIgnoresNothingToCommit(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "dolt.log")
-	if err := os.WriteFile(logPath, []byte(`time="2026-05-27T09:12:11-07:00" level=warning msg="nothing to commit"`+"\n"), 0o644); err != nil {
+	data := strings.Join([]string{
+		`Starting server with Config HP="0.0.0.0:18860"|T="300000"|R="false"|L="warning"`,
+		`time="2026-05-27T09:12:11-07:00" level=warning msg="nothing to commit"`,
+		`time="2026-05-27T16:51:38-07:00" level=warning msg="error running query" connectTime="2026-05-27 16:51:33.941521 -0700 PDT m=+485.740775876" connectionDb=hq connectionID=17976 error="nothing to commit" queryTime="2026-05-27 16:51:38.046086 -0700 PDT m=+489.845308459"`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(logPath, []byte(data), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	summary, err := AnalyzeDoltContentionLog(logPath, DoltContentionOptions{})
+	summary, err := AnalyzeDoltContentionLog(logPath, DoltContentionOptions{SlowQueryThreshold: time.Second})
 	if err != nil {
 		t.Fatalf("AnalyzeDoltContentionLog: %v", err)
 	}
 	if !summary.Healthy() {
 		t.Fatalf("nothing-to-commit warning should not create contention: %+v", summary)
+	}
+	if summary.SlowQueryCount != 0 || summary.MaxQueryDurationSeconds != 0 {
+		t.Fatalf("nothing-to-commit slow query summary = count:%d max:%f", summary.SlowQueryCount, summary.MaxQueryDurationSeconds)
+	}
+	if summary.FirstIssueAt != "" || summary.LastIssueAt != "" || len(summary.Databases) != 0 {
+		t.Fatalf("nothing-to-commit should not create issue metadata: %+v", summary)
 	}
 }
 
