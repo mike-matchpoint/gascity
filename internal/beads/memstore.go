@@ -1,6 +1,7 @@
 package beads
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"slices"
@@ -273,6 +274,33 @@ func (m *MemStore) List(query ListQuery) ([]Bead, error) {
 		result = result[:query.Limit]
 	}
 	return result, nil
+}
+
+// RuntimeReadyList computes selector-ready rows from the complete in-memory
+// active set without per-row Store Get or DepList calls.
+func (m *MemStore) RuntimeReadyList(_ context.Context, query ListQuery, policy ReadPolicy) ([]Bead, error) {
+	policy = normalizeReadPolicy(policy)
+	if policy.AllowFallback {
+		return readyListWithQuery(m, query)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rows := make([]Bead, 0, len(m.beads))
+	for _, b := range m.beads {
+		if b.Status == "closed" {
+			continue
+		}
+		row := cloneBead(b)
+		for _, dep := range m.deps {
+			if dep.IssueID == row.ID {
+				row.Dependencies = append(row.Dependencies, dep)
+			}
+		}
+		rows = append(rows, row)
+	}
+	sortBeadsForQuery(rows, query.Sort)
+	ready := readyFromActiveRowsMatchingListQuery(rows, query)
+	return enforceRuntimeRowCap(ready, policy, "ready", "memory")
 }
 
 // ListOpen returns non-closed beads in creation order by default.

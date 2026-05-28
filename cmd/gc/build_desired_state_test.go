@@ -45,6 +45,10 @@ func (s *readyFailStore) Ready(...beads.ReadyQuery) ([]beads.Bead, error) {
 	return nil, errors.New("backing ready should not be used")
 }
 
+func (s *readyFailStore) RuntimeReadyList(ctx context.Context, query beads.ListQuery, policy beads.ReadPolicy) ([]beads.Bead, error) {
+	return beads.RuntimeReadyList(ctx, s.Store, query, policy)
+}
+
 type readyStaticStore struct {
 	beads.Store
 	ready      []beads.Bead
@@ -56,6 +60,63 @@ func (s *readyStaticStore) Ready(...beads.ReadyQuery) ([]beads.Bead, error) {
 	out := make([]beads.Bead, len(s.ready))
 	copy(out, s.ready)
 	return out, nil
+}
+
+type indexedListStaticReader struct {
+	result beads.IndexedListResult
+	calls  int
+}
+
+func (s *indexedListStaticReader) ListIndexed(context.Context, beads.ListQuery) (beads.IndexedListResult, error) {
+	s.calls++
+	return s.result, nil
+}
+
+type indexedListSequenceResult struct {
+	result beads.IndexedListResult
+	err    error
+}
+
+type indexedListSequenceReader struct {
+	results []indexedListSequenceResult
+	calls   int
+	queries []beads.ListQuery
+}
+
+func (s *indexedListSequenceReader) ListIndexed(_ context.Context, query beads.ListQuery) (beads.IndexedListResult, error) {
+	s.calls++
+	s.queries = append(s.queries, query)
+	if len(s.results) == 0 {
+		return beads.IndexedListResult{}, beads.ErrIndexedListUnsupported
+	}
+	idx := s.calls - 1
+	if idx >= len(s.results) {
+		idx = len(s.results) - 1
+	}
+	next := s.results[idx]
+	return next.result, next.err
+}
+
+type controllerHotReadSpyStore struct {
+	*beads.CachingStore
+	readyCalls   int
+	depListCalls int
+	getCalls     int
+}
+
+func (s *controllerHotReadSpyStore) Ready(query ...beads.ReadyQuery) ([]beads.Bead, error) {
+	s.readyCalls++
+	return s.CachingStore.Ready(query...)
+}
+
+func (s *controllerHotReadSpyStore) DepList(id, direction string) ([]beads.Dep, error) {
+	s.depListCalls++
+	return s.CachingStore.DepList(id, direction)
+}
+
+func (s *controllerHotReadSpyStore) Get(id string) (beads.Bead, error) {
+	s.getCalls++
+	return s.CachingStore.Get(id)
 }
 
 type readyQueryRecordingStore struct {
@@ -929,10 +990,10 @@ func TestDefaultScaleCheckCountsHonorsCachedWriteThroughDependencies(t *testing.
 	}
 }
 
-func TestDefaultScaleCheckCountsDegradesWhenCachedEventDepsUnknown(t *testing.T) {
-	backing := &readyStaticStore{
-		Store: beads.NewMemStore(),
-		ready: []beads.Bead{{
+func TestDefaultScaleCheckCountsUsesRuntimeListWhenCachedEventDepsUnknown(t *testing.T) {
+	var runnerCalls int
+	indexed := &indexedListStaticReader{result: beads.IndexedListResult{
+		Beads: []beads.Bead{{
 			ID:     "gc-ready",
 			Title:  "ready routed work",
 			Type:   "task",
@@ -941,6 +1002,54 @@ func TestDefaultScaleCheckCountsDegradesWhenCachedEventDepsUnknown(t *testing.T)
 				"gc.routed_to": "gascity/workflows.codex-max",
 			},
 		}},
+		DependencyCoverage: true,
+		LabelsCoverage:     true,
+	}}
+	backing := beads.NewBdStore("/city", func(string, string, ...string) ([]byte, error) {
+		runnerCalls++
+		return nil, errors.New("bd command fallback should not be used")
+	}).WithIndexedReader(indexed)
+	cache := beads.NewCachingStoreForTest(backing, nil)
+	if err := cache.PrimeActive(); err != nil {
+		t.Fatalf("PrimeActive: %v", err)
+	}
+	cache.ApplyEvent("bead.updated", []byte(`{"id":"gc-ready","title":"ready routed work","status":"open","issue_type":"task","created_at":"2026-05-28T00:00:00Z"}`))
+
+	counts, partials, errs := defaultScaleCheckCounts([]defaultScaleCheckTarget{{
+		template: "gascity/workflows.codex-max",
+		storeKey: "rig:gascity",
+		store:    cache,
+	}})
+	if len(errs) != 0 {
+		t.Fatalf("defaultScaleCheckCounts errs = %v, want indexed runtime-list recovery instead of degraded scale_check", errs)
+	}
+	if len(partials) != 0 {
+		t.Fatalf("defaultScaleCheckCounts partials = %v, want no partial demand marker after indexed recovery", partials)
+	}
+	if got := counts["gascity/workflows.codex-max"]; got != 1 {
+		t.Fatalf("defaultScaleCheckCounts = %d, want ready demand from runtime list", got)
+	}
+	if indexed.calls < 2 {
+		t.Fatalf("ListIndexed calls = %d, want prime plus runtime-list recovery", indexed.calls)
+	}
+	if runnerCalls != 0 {
+		t.Fatalf("bd command fallback calls = %d, want none", runnerCalls)
+	}
+}
+
+func TestDefaultScaleCheckCountsUsesRuntimeListWhenCachedEventDepsUnknownOnMemStore(t *testing.T) {
+	backing := &readyStaticStore{
+		Store: beads.NewMemStore(),
+	}
+	if _, err := backing.Create(beads.Bead{
+		Title:  "ready routed work",
+		Type:   "task",
+		Status: "open",
+		Metadata: map[string]string{
+			"gc.routed_to": "gascity/workflows.codex-max",
+		},
+	}); err != nil {
+		t.Fatalf("Create ready bead: %v", err)
 	}
 	cache := beads.NewCachingStoreForTest(backing, nil)
 	if err := cache.PrimeActive(); err != nil {
@@ -953,14 +1062,312 @@ func TestDefaultScaleCheckCountsDegradesWhenCachedEventDepsUnknown(t *testing.T)
 		storeKey: "rig:gascity",
 		store:    cache,
 	}})
-	if len(errs) == 0 {
-		t.Fatal("defaultScaleCheckCounts errs = nil, want degraded runtime ready error")
+	if len(errs) != 0 {
+		t.Fatalf("defaultScaleCheckCounts errs = %v, want runtime list recovery", errs)
 	}
-	if got := counts["gascity/workflows.codex-max"]; got != 0 {
-		t.Fatalf("defaultScaleCheckCounts = %d, want 0 when hot ready read degrades", got)
+	if got := counts["gascity/workflows.codex-max"]; got != 1 {
+		t.Fatalf("defaultScaleCheckCounts = %d, want ready demand from runtime list", got)
 	}
 	if backing.readyCalls != 0 {
 		t.Fatalf("backing Ready calls = %d, want no hydrated ready fallback", backing.readyCalls)
+	}
+}
+
+func TestWorkSelectorCountForControllerUsesSelectorReadyForExplicitStep(t *testing.T) {
+	store := &readyFailStore{Store: beads.NewMemStore()}
+	first, err := store.Create(beads.Bead{
+		Title:  "cartographer first step",
+		Type:   "step",
+		Status: "open",
+		Metadata: map[string]string{
+			"gc.routed_to": "Matchpoint-Vehicle-Graph/vg-support.cartographer",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create first step: %v", err)
+	}
+	second, err := store.Create(beads.Bead{
+		Title:  "cartographer blocked step",
+		Type:   "step",
+		Status: "open",
+		Metadata: map[string]string{
+			"gc.routed_to": "Matchpoint-Vehicle-Graph/vg-support.cartographer",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create second step: %v", err)
+	}
+	if err := store.DepAdd(second.ID, first.ID, "blocks"); err != nil {
+		t.Fatalf("block second step: %v", err)
+	}
+
+	count, err := workSelectorCountForController(store, config.WorkSelector{
+		Type:       "step",
+		Ready:      true,
+		Unassigned: true,
+		Metadata: map[string]string{
+			"gc.routed_to": "Matchpoint-Vehicle-Graph/vg-support.cartographer",
+		},
+	})
+	if err != nil {
+		t.Fatalf("workSelectorCountForController: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("workSelectorCountForController = %d, want only the unblocked cartographer step", count)
+	}
+	if store.readyCalls != 0 {
+		t.Fatalf("backing Ready calls = %d, want selector-aware list path for explicit step ready query", store.readyCalls)
+	}
+}
+
+func TestWorkSelectorCountForControllerExplicitStepReadyUsesIndexedActiveRowsWithoutHydratedFallback(t *testing.T) {
+	const route = "Matchpoint-Vehicle-Graph/vg-support.cartographer"
+	active := beads.IndexedListResult{
+		Beads: []beads.Bead{
+			{
+				ID:     "vg-ready",
+				Title:  "cartographer ready step",
+				Type:   "step",
+				Status: "open",
+				Metadata: map[string]string{
+					"gc.routed_to": route,
+				},
+			},
+			{
+				ID:     "vg-blocked",
+				Title:  "cartographer blocked step",
+				Type:   "step",
+				Status: "open",
+				Metadata: map[string]string{
+					"gc.routed_to": route,
+				},
+				Dependencies: []beads.Dep{{
+					IssueID:     "vg-blocked",
+					DependsOnID: "vg-ready",
+					Type:        "blocks",
+				}},
+			},
+		},
+		DependencyCoverage: true,
+		LabelsCoverage:     true,
+	}
+	indexed := &indexedListSequenceReader{results: []indexedListSequenceResult{
+		{result: active},
+		{result: active},
+	}}
+	runnerCalls := 0
+	backing := beads.NewBdStore("/city", func(string, string, ...string) ([]byte, error) {
+		runnerCalls++
+		return nil, errors.New("bd command fallback should not be used")
+	}).WithIndexedReader(indexed)
+	cache := beads.NewCachingStoreForTest(backing, nil)
+	if err := cache.PrimeActive(); err != nil {
+		t.Fatalf("PrimeActive: %v", err)
+	}
+	cache.ApplyEvent("bead.updated", []byte(`{"id":"vg-ready","title":"cartographer ready step","status":"open","issue_type":"step","created_at":"2026-05-28T00:00:00Z"}`))
+	store := &controllerHotReadSpyStore{CachingStore: cache}
+	runnerCalls = 0
+
+	count, err := workSelectorCountForController(store, config.WorkSelector{
+		Type:       "step",
+		Ready:      true,
+		Unassigned: true,
+		Metadata: map[string]string{
+			"gc.routed_to": route,
+		},
+	})
+	if err != nil {
+		t.Fatalf("workSelectorCountForController: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("workSelectorCountForController = %d, want only the unblocked explicit step", count)
+	}
+	if indexed.calls < 2 {
+		t.Fatalf("ListIndexed calls = %d, want prime plus hot ready-selector recovery", indexed.calls)
+	}
+	if runnerCalls != 0 {
+		t.Fatalf("bd runner calls = %d, want no bd ready/dep/get fallback", runnerCalls)
+	}
+	if store.readyCalls != 0 || store.depListCalls != 0 || store.getCalls != 0 {
+		t.Fatalf("hot path calls Ready=%d DepList=%d Get=%d, want all zero", store.readyCalls, store.depListCalls, store.getCalls)
+	}
+}
+
+func TestWorkSelectorCountForControllerExplicitStepReadyDegradesWhenIndexedActiveRowsUnsafe(t *testing.T) {
+	const route = "Matchpoint-Vehicle-Graph/vg-support.cartographer"
+	prime := beads.IndexedListResult{
+		Beads: []beads.Bead{{
+			ID:     "vg-ready",
+			Title:  "cartographer ready step",
+			Type:   "step",
+			Status: "open",
+			Metadata: map[string]string{
+				"gc.routed_to": route,
+			},
+		}},
+		DependencyCoverage: true,
+		LabelsCoverage:     true,
+	}
+	cappedRows := make([]beads.Bead, 250)
+	for i := range cappedRows {
+		cappedRows[i] = beads.Bead{
+			ID:     fmt.Sprintf("vg-cap-%03d", i),
+			Title:  "cap row",
+			Type:   "step",
+			Status: "open",
+			Metadata: map[string]string{
+				"gc.routed_to": route,
+			},
+		}
+	}
+	cases := []struct {
+		name   string
+		result beads.IndexedListResult
+		err    error
+	}{
+		{
+			name: "capped",
+			result: beads.IndexedListResult{
+				Beads:              cappedRows,
+				DependencyCoverage: true,
+				LabelsCoverage:     true,
+			},
+		},
+		{
+			name: "partial",
+			result: beads.IndexedListResult{
+				Beads:              prime.Beads,
+				DependencyCoverage: true,
+				LabelsCoverage:     true,
+			},
+			err: context.DeadlineExceeded,
+		},
+		{
+			name: "dependency-incomplete",
+			result: beads.IndexedListResult{
+				Beads:              prime.Beads,
+				DependencyCoverage: false,
+				LabelsCoverage:     true,
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			indexed := &indexedListSequenceReader{results: []indexedListSequenceResult{
+				{result: prime},
+				{result: tc.result, err: tc.err},
+			}}
+			runnerCalls := 0
+			backing := beads.NewBdStore("/city", func(string, string, ...string) ([]byte, error) {
+				runnerCalls++
+				return nil, errors.New("bd command fallback should not be used")
+			}).WithIndexedReader(indexed)
+			cache := beads.NewCachingStoreForTest(backing, nil)
+			if err := cache.PrimeActive(); err != nil {
+				t.Fatalf("PrimeActive: %v", err)
+			}
+			cache.ApplyEvent("bead.updated", []byte(`{"id":"vg-ready","title":"cartographer ready step","status":"open","issue_type":"step","created_at":"2026-05-28T00:00:00Z"}`))
+			store := &controllerHotReadSpyStore{CachingStore: cache}
+			runnerCalls = 0
+
+			count, err := workSelectorCountForController(store, config.WorkSelector{
+				Type:       "step",
+				Ready:      true,
+				Unassigned: true,
+				Metadata: map[string]string{
+					"gc.routed_to": route,
+				},
+			})
+			if err == nil {
+				t.Fatal("workSelectorCountForController err = nil, want degraded hot read")
+			}
+			if !beads.IsDegradedRead(err) {
+				t.Fatalf("workSelectorCountForController err = %v, want degraded hot read", err)
+			}
+			if count != 0 {
+				t.Fatalf("workSelectorCountForController count = %d, want 0 on degraded hot ready-selector read", count)
+			}
+			if runnerCalls != 0 {
+				t.Fatalf("bd runner calls = %d, want no bd ready/dep/get fallback", runnerCalls)
+			}
+			if store.readyCalls != 0 || store.depListCalls != 0 || store.getCalls != 0 {
+				t.Fatalf("hot path calls Ready=%d DepList=%d Get=%d, want all zero", store.readyCalls, store.depListCalls, store.getCalls)
+			}
+		})
+	}
+}
+
+func TestTypedScaleCheckQueryCountsReadyExplicitStepDemand(t *testing.T) {
+	store := &readyFailStore{Store: beads.NewMemStore()}
+	first, err := store.Create(beads.Bead{
+		Title:  "cartographer first step",
+		Type:   "step",
+		Status: "open",
+		Metadata: map[string]string{
+			"gc.routed_to": "Matchpoint-Vehicle-Graph/vg-support.cartographer",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create first step: %v", err)
+	}
+	second, err := store.Create(beads.Bead{
+		Title:  "cartographer blocked step",
+		Type:   "step",
+		Status: "open",
+		Metadata: map[string]string{
+			"gc.routed_to": "Matchpoint-Vehicle-Graph/vg-support.cartographer",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create second step: %v", err)
+	}
+	if err := store.DepAdd(second.ID, first.ID, "blocks"); err != nil {
+		t.Fatalf("block second step: %v", err)
+	}
+	selector := config.WorkSelector{
+		Type:       "step",
+		Ready:      true,
+		Unassigned: true,
+		Metadata: map[string]string{
+			"gc.routed_to": "Matchpoint-Vehicle-Graph/vg-support.cartographer",
+		},
+	}
+	cfg := &config.City{Agents: []config.Agent{{
+		Name:            "cartographer",
+		Dir:             "Matchpoint-Vehicle-Graph",
+		BindingName:     "vg-support",
+		WorkSelector:    selector,
+		ScaleCheckQuery: selector,
+	}}, Rigs: []config.Rig{{
+		Name: "Matchpoint-Vehicle-Graph",
+		Path: t.TempDir(),
+	}}}
+	template := cfg.Agents[0].QualifiedName()
+	if template != "Matchpoint-Vehicle-Graph/vg-support.cartographer" {
+		t.Fatalf("QualifiedName = %q, want Matchpoint-Vehicle-Graph/vg-support.cartographer", template)
+	}
+	selected, ok := typedDemandSelectorForAgent(&cfg.Agents[0])
+	if !ok {
+		t.Fatal("typedDemandSelectorForAgent returned no selector")
+	}
+
+	var stderr strings.Builder
+	counts, partials := evaluateTypedPendingPoolsMap(cfg, []typedPoolEvalWork{
+		typedPoolEvalWorkForAgent(t.TempDir(), cfg, &cfg.Agents[0], selected, nil, map[string]beads.Store{
+			"Matchpoint-Vehicle-Graph": store,
+		}),
+	}, &stderr, nil)
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want no typed scale_check_query degradation", stderr.String())
+	}
+	if len(partials) != 0 {
+		t.Fatalf("partials = %v, want no partial typed scale_check_query", partials)
+	}
+	if got := counts[template]; got != 1 {
+		t.Fatalf("typed scale_check_query count = %d, counts = %v, want only the unblocked cartographer step", got, counts)
+	}
+	if store.readyCalls != 0 {
+		t.Fatalf("backing Ready calls = %d, want selector-aware list path for explicit step ready query", store.readyCalls)
 	}
 }
 

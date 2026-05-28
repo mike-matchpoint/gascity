@@ -139,3 +139,120 @@ func TestCachingStoreRuntimeReadyDoesNotFallbackToBdReady(t *testing.T) {
 		t.Fatalf("runner calls = %d, want 0", runnerCalls.Load())
 	}
 }
+
+func TestCachingStoreRuntimeReadyUsesIndexedActiveRowsWhenCacheDepsIncomplete(t *testing.T) {
+	var runnerCalls atomic.Int64
+	backing := NewBdStore("/city", func(string, string, ...string) ([]byte, error) {
+		runnerCalls.Add(1)
+		return nil, errors.New("runner must not be called")
+	}).WithIndexedReader(runtimeReadIndexedStub{result: IndexedListResult{
+		Beads: []Bead{
+			{ID: "blocker", Title: "blocker", Status: "in_progress", Type: "task"},
+			{
+				ID:     "blocked",
+				Title:  "blocked",
+				Status: "open",
+				Type:   "bug",
+				Dependencies: []Dep{{
+					IssueID:     "blocked",
+					DependsOnID: "blocker",
+					Type:        "blocks",
+				}},
+			},
+			{ID: "ready", Title: "ready", Status: "open", Type: "bug"},
+			{ID: "workflow-step", Title: "step", Status: "open", Type: "step"},
+		},
+		DependencyCoverage: true,
+		LabelsCoverage:     true,
+	}})
+	cache := NewCachingStoreForTest(backing, nil)
+
+	rows, err := RuntimeReady(context.Background(), cache, ReadyQuery{},
+		RuntimeReadPolicy(ReadClassHotDegradedOK, "test.ready"))
+	if err != nil {
+		t.Fatalf("RuntimeReady: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != "ready" {
+		t.Fatalf("rows = %+v, want only indexed ready row", rows)
+	}
+	if runnerCalls.Load() != 0 {
+		t.Fatalf("runner calls = %d, want 0", runnerCalls.Load())
+	}
+}
+
+func TestCachingStoreRuntimeReadyDegradesBeforeComputingFromCappedIndexedActiveRows(t *testing.T) {
+	var runnerCalls atomic.Int64
+	backing := NewBdStore("/city", func(string, string, ...string) ([]byte, error) {
+		runnerCalls.Add(1)
+		return nil, errors.New("runner must not be called")
+	}).WithIndexedReader(runtimeReadIndexedStub{result: IndexedListResult{
+		Beads: []Bead{
+			{
+				ID:     "candidate",
+				Title:  "would be unsafe if blocker is outside the cap",
+				Status: "open",
+				Type:   "bug",
+				Dependencies: []Dep{{
+					IssueID:     "candidate",
+					DependsOnID: "open-blocker-outside-active-window",
+					Type:        "blocks",
+				}},
+			},
+			{ID: "cap-row", Title: "second row reaches cap", Status: "open", Type: "bug"},
+		},
+		DependencyCoverage: true,
+		LabelsCoverage:     true,
+	}})
+	cache := NewCachingStoreForTest(backing, nil)
+	policy := RuntimeReadPolicy(ReadClassHotDegradedOK, "test.ready.capped")
+	policy.MaxRows = 2
+
+	rows, err := RuntimeReady(context.Background(), cache, ReadyQuery{}, policy)
+	if len(rows) != 0 {
+		t.Fatalf("rows = %+v, want none when indexed active rows hit the cap", rows)
+	}
+	if !IsDegradedRead(err) {
+		t.Fatalf("err = %v, want degraded read before readiness is computed from a capped active set", err)
+	}
+	if runnerCalls.Load() != 0 {
+		t.Fatalf("runner calls = %d, want 0", runnerCalls.Load())
+	}
+}
+
+func TestCachingStoreRuntimeReadyDegradesBeforeComputingFromPartialIndexedActiveRows(t *testing.T) {
+	var runnerCalls atomic.Int64
+	backing := NewBdStore("/city", func(string, string, ...string) ([]byte, error) {
+		runnerCalls.Add(1)
+		return nil, errors.New("runner must not be called")
+	}).WithIndexedReader(runtimeReadIndexedStub{
+		result: IndexedListResult{
+			Beads: []Bead{{
+				ID:     "candidate",
+				Title:  "partial row must not be treated as ready",
+				Status: "open",
+				Type:   "bug",
+				Dependencies: []Dep{{
+					IssueID:     "candidate",
+					DependsOnID: "missing-from-partial-active-set",
+					Type:        "blocks",
+				}},
+			}},
+			DependencyCoverage: true,
+			LabelsCoverage:     true,
+		},
+		err: context.DeadlineExceeded,
+	})
+	cache := NewCachingStoreForTest(backing, nil)
+
+	rows, err := RuntimeReady(context.Background(), cache, ReadyQuery{},
+		RuntimeReadPolicy(ReadClassHotDegradedOK, "test.ready.partial"))
+	if len(rows) != 0 {
+		t.Fatalf("rows = %+v, want none when indexed active rows are partial", rows)
+	}
+	if !IsDegradedRead(err) {
+		t.Fatalf("err = %v, want degraded read before readiness is computed from partial active rows", err)
+	}
+	if runnerCalls.Load() != 0 {
+		t.Fatalf("runner calls = %d, want 0", runnerCalls.Load())
+	}
+}

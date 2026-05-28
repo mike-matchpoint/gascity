@@ -128,6 +128,10 @@ type runtimeReadyer interface {
 	RuntimeReady(context.Context, ReadyQuery, ReadPolicy) ([]Bead, error)
 }
 
+type runtimeReadyLister interface {
+	RuntimeReadyList(context.Context, ListQuery, ReadPolicy) ([]Bead, error)
+}
+
 // RuntimeList executes a list query under policy. Foreground/maintenance
 // policies preserve the existing authoritative store behavior. Hot policies use
 // cache or indexed routes only and return DegradedReadError instead of falling
@@ -162,11 +166,57 @@ func RuntimeReady(ctx context.Context, store Store, query ReadyQuery, policy Rea
 	return readyWithQuery(store, query)
 }
 
+// RuntimeReadyList executes selector-ready work lookup under policy. Unlike
+// RuntimeList plus per-row ready filters, hot policies compute readiness from a
+// complete active read model and never call per-row Get or DepList fallbacks.
+func RuntimeReadyList(ctx context.Context, store Store, query ListQuery, policy ReadPolicy) ([]Bead, error) {
+	if store == nil {
+		return nil, degradedRead(policy, "ready", "none", "", errors.New("nil bead store"))
+	}
+	policy = normalizeReadPolicy(policy)
+	if policy.AllowFallback {
+		return readyListWithQuery(store, query)
+	}
+	if runtimeStore, ok := store.(runtimeReadyLister); ok {
+		return runtimeStore.RuntimeReadyList(ctx, query, policy)
+	}
+	rows, err := RuntimeList(ctx, store, runtimeReadyActiveListQuery(query, policy), policy)
+	if err != nil {
+		if IsDegradedRead(err) {
+			return nil, err
+		}
+		return nil, degradedRead(policy, "ready", "indexed", "", err)
+	}
+	ready := readyFromActiveRowsMatchingListQuery(rows, query)
+	return enforceRuntimeRowCap(ready, policy, "ready", "indexed")
+}
+
 func readyWithQuery(store Store, query ReadyQuery) ([]Bead, error) {
 	if query == (ReadyQuery{}) {
 		return store.Ready()
 	}
 	return store.Ready(query)
+}
+
+func readyListWithQuery(store Store, query ListQuery) ([]Bead, error) {
+	rows, err := store.List(runtimeReadyActiveListQuery(query, ReadPolicy{}))
+	if err != nil {
+		return nil, err
+	}
+	return readyFromActiveRowsMatchingListQuery(rows, query), nil
+}
+
+func runtimeReadyActiveListQuery(query ListQuery, policy ReadPolicy) ListQuery {
+	active := ListQuery{
+		AllowScan:  true,
+		SkipLabels: query.Label == "",
+		Sort:       query.Sort,
+		TierMode:   query.TierMode,
+	}
+	if policy.MaxRows > 0 {
+		active.Limit = policy.MaxRows
+	}
+	return active
 }
 
 func normalizeReadPolicy(policy ReadPolicy) ReadPolicy {

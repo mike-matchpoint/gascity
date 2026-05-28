@@ -509,20 +509,164 @@ func (c *CachingStore) CachedReady() ([]Bead, bool) {
 	return result, true
 }
 
-// RuntimeReady serves controller/session hot ready checks from the cache read
-// model only. If the cache cannot prove dependency coverage, the read degrades
-// instead of invoking bd ready.
-func (c *CachingStore) RuntimeReady(_ context.Context, query ReadyQuery, policy ReadPolicy) ([]Bead, error) {
+// RuntimeReady serves controller/session hot ready checks from cache or the
+// bounded indexed active read path. It never invokes bd ready.
+func (c *CachingStore) RuntimeReady(ctx context.Context, query ReadyQuery, policy ReadPolicy) ([]Bead, error) {
 	policy = normalizeReadPolicy(policy)
 	if policy.AllowFallback {
 		return readyWithQuery(c, query)
 	}
 	ready, ok := c.CachedReady()
 	if !ok {
-		return nil, degradedRead(policy, "ready", "cache", "dependency-incomplete", ErrIndexedListUnsupported)
+		return c.runtimeIndexedReady(ctx, query, policy)
 	}
 	ready = filterReadyQuery(ready, query)
 	return enforceRuntimeRowCap(ready, policy, "ready", "cache")
+}
+
+// RuntimeReadyList computes selector-ready rows for controller hot reads from
+// dependency-complete cache state or from one bounded indexed active snapshot.
+// It does not invoke bd ready, bd dep list, bd get, or per-row store fallbacks.
+func (c *CachingStore) RuntimeReadyList(ctx context.Context, query ListQuery, policy ReadPolicy) ([]Bead, error) {
+	policy = normalizeReadPolicy(policy)
+	if policy.AllowFallback {
+		return readyListWithQuery(c, query)
+	}
+	if rows, ok := c.runtimeCachedActiveRowsForReady(query); ok {
+		ready := readyFromActiveRowsMatchingListQuery(rows, query)
+		return enforceRuntimeRowCap(ready, policy, "ready", "cache")
+	}
+	return c.runtimeIndexedReadyList(ctx, query, policy)
+}
+
+func (c *CachingStore) runtimeIndexedReady(ctx context.Context, query ReadyQuery, policy ReadPolicy) ([]Bead, error) {
+	if c == nil || c.backing == nil {
+		return nil, degradedRead(policy, "ready", "indexed", "", errors.New("nil backing store"))
+	}
+	// RuntimeList reports degraded row-cap or partial indexed reads. Do not
+	// compute readiness unless the active set is complete enough to prove that
+	// missing dependency targets are closed rather than just outside the window.
+	rows, err := RuntimeList(ctx, c.backing, ListQuery{
+		AllowScan:  true,
+		SkipLabels: true,
+		TierMode:   TierIssues,
+	}, policy)
+	if err != nil {
+		return nil, degradedRead(policy, "ready", "indexed", "", err)
+	}
+	ready := readyFromActiveRows(rows, query)
+	return enforceRuntimeRowCap(ready, policy, "ready", "indexed")
+}
+
+func (c *CachingStore) runtimeCachedActiveRowsForReady(query ListQuery) ([]Bead, bool) {
+	if c == nil || query.TierMode != TierIssues || query.Live || query.IncludesClosed() {
+		return nil, false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.state != cacheLive && c.state != cachePartial {
+		return nil, false
+	}
+	if c.primePartialErr != nil || len(c.dirty) > 0 || !c.depsComplete {
+		return nil, false
+	}
+	rows := make([]Bead, 0, len(c.beads))
+	for _, b := range c.beads {
+		if b.Status == "closed" || b.Ephemeral {
+			continue
+		}
+		row := cloneBead(b)
+		row.Dependencies = cloneDeps(c.deps[b.ID])
+		rows = append(rows, row)
+	}
+	sortBeadsForQuery(rows, query.Sort)
+	return rows, true
+}
+
+func (c *CachingStore) runtimeIndexedReadyList(ctx context.Context, query ListQuery, policy ReadPolicy) ([]Bead, error) {
+	if c == nil || c.backing == nil {
+		return nil, degradedRead(policy, "ready", "indexed", "", errors.New("nil backing store"))
+	}
+	indexed, ok := c.backing.(IndexedLister)
+	if !ok {
+		return nil, degradedRead(policy, "ready", "indexed", "unavailable", ErrIndexedListUnsupported)
+	}
+	indexedQuery := liveListQuery(runtimeReadyActiveListQuery(query, policy))
+	readCtx, cancel := contextWithReadPolicy(ctx, policy)
+	defer cancel()
+	result, err := indexed.ListIndexed(readCtx, indexedQuery)
+	if err != nil {
+		return nil, degradedRead(policy, "ready", "indexed", "", err)
+	}
+	if !result.DependencyCoverage {
+		return nil, degradedRead(policy, "ready", "indexed", "dependency-incomplete", ErrIndexedListUnsupported)
+	}
+	if query.Label != "" && !result.LabelsCoverage {
+		return nil, degradedRead(policy, "ready", "indexed", "labels-incomplete", ErrIndexedListUnsupported)
+	}
+	rows := rowsWithIndexedDependencies(result)
+	if policy.MaxRows > 0 && len(rows) >= policy.MaxRows {
+		return nil, degradedRead(policy, "ready", "indexed", "row-cap", fmt.Errorf("runtime ready active set returned %d rows at cap %d", len(rows), policy.MaxRows))
+	}
+	ready := readyFromActiveRowsMatchingListQuery(rows, query)
+	return enforceRuntimeRowCap(ready, policy, "ready", "indexed")
+}
+
+func rowsWithIndexedDependencies(result IndexedListResult) []Bead {
+	depsByID := indexedResultDepMap(result)
+	rows := make([]Bead, 0, len(result.Beads))
+	for _, row := range result.Beads {
+		next := cloneBead(row)
+		next.Dependencies = cloneDeps(depsByID[next.ID])
+		rows = append(rows, next)
+	}
+	return rows
+}
+
+func readyFromActiveRows(rows []Bead, query ReadyQuery) []Bead {
+	statusByID := make(map[string]string, len(rows))
+	for _, row := range rows {
+		statusByID[row.ID] = row.Status
+	}
+	ready := make([]Bead, 0, len(rows))
+	for _, row := range rows {
+		if row.Status != "open" || row.Ephemeral || IsReadyExcludedType(row.Type) {
+			continue
+		}
+		if !cachedBeadReady(statusByID, row.Dependencies) {
+			continue
+		}
+		ready = append(ready, cloneBead(row))
+	}
+	return filterReadyQuery(ready, query)
+}
+
+func readyFromActiveRowsMatchingListQuery(rows []Bead, query ListQuery) []Bead {
+	statusByID := make(map[string]string, len(rows))
+	for _, row := range rows {
+		statusByID[row.ID] = row.Status
+	}
+	ready := make([]Bead, 0, len(rows))
+	explicitType := query.Type != ""
+	for _, row := range rows {
+		if row.Status != "open" {
+			continue
+		}
+		if !explicitType && IsReadyExcludedType(row.Type) {
+			continue
+		}
+		if !query.Matches(row) {
+			continue
+		}
+		if !cachedBeadReady(statusByID, row.Dependencies) {
+			continue
+		}
+		ready = append(ready, cloneBead(row))
+		if query.Limit > 0 && len(ready) >= query.Limit {
+			break
+		}
+	}
+	return ready
 }
 
 func filterReadyQuery(items []Bead, query ReadyQuery) []Bead {

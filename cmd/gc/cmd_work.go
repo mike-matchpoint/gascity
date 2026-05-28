@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -233,7 +234,7 @@ func workSelectorCountForController(store beads.Store, selector config.WorkSelec
 	if err != nil {
 		return 0, err
 	}
-	if compiled.Ready {
+	if compiled.Ready && !compiled.ExplicitType {
 		ready, readyErr := readyForControllerDemand(store)
 		if readyErr != nil {
 			return 0, readyErr
@@ -245,6 +246,14 @@ func workSelectorCountForController(store beads.Store, selector config.WorkSelec
 			}
 		}
 		return len(workselect.ApplyPostFilters(matching, compiled)), nil
+	}
+	if compiled.Ready {
+		items, readyErr := beads.RuntimeReadyList(context.Background(), store, compiled.Query,
+			beads.RuntimeReadPolicy(beads.ReadClassHotDegradedOK, "controller.demand.ready-selector"))
+		if readyErr != nil {
+			return 0, readyErr
+		}
+		return len(workselect.ApplyPostFilters(items, compiled)), nil
 	}
 	items, err := listForControllerDemand(store, compiled.Query)
 	if err != nil {
