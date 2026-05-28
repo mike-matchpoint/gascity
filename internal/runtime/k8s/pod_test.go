@@ -203,6 +203,33 @@ func TestBuildPod_MountsProviderCredentialSecrets(t *testing.T) {
 	}
 }
 
+func TestBuildPod_MountsGitCredentialSecret(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+	pod, err := buildPod("test-session", runtime.Config{Command: "/bin/bash"}, p)
+	if err != nil {
+		t.Fatalf("buildPod: %v", err)
+	}
+
+	mount, ok := volumeMountByName(pod.Spec.Containers[0].VolumeMounts, "git-credentials")
+	if !ok {
+		t.Fatal("missing git-credentials volume mount")
+	}
+	if mount.MountPath != "/tmp/git-secret" || !mount.ReadOnly {
+		t.Fatalf("git-credentials mount = %#v, want readonly /tmp/git-secret", mount)
+	}
+
+	volume, ok := volumeByName(pod.Spec.Volumes, "git-credentials")
+	if !ok || volume.Secret == nil {
+		t.Fatalf("missing git-credentials secret volume: %#v", volume)
+	}
+	if volume.Secret.SecretName != "git-credentials" {
+		t.Fatalf("git secret name = %q, want git-credentials", volume.Secret.SecretName)
+	}
+	if volume.Secret.Optional == nil || !*volume.Secret.Optional {
+		t.Fatal("git secret should be optional")
+	}
+}
+
 func TestBuildPodEnv_ProviderCredentialEnvUsesConfiguredContainerHome(t *testing.T) {
 	env, err := buildPodEnv(
 		map[string]string{"GC_K8S_CONTAINER_HOME": "/home/gascity"},

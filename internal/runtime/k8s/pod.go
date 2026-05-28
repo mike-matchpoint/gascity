@@ -292,6 +292,17 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 			},
 		},
 	})
+	mainVolMounts = append(mainVolMounts, corev1.VolumeMount{
+		Name: "git-credentials", MountPath: "/tmp/git-secret", ReadOnly: true,
+	})
+	volumes = append(volumes, corev1.Volume{
+		Name: "git-credentials", VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: gitSecretName,
+				Optional:   boolPtr(true),
+			},
+		},
+	})
 
 	// If GC_CITY differs from work_dir, add a city volume (not needed when prebaked).
 	if !p.prebaked && ctrlCity != "" && ctrlCity != cfg.WorkDir {
