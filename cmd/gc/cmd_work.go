@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -94,10 +93,9 @@ func cmdWorkCount(opts workCommandOptions, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if opts.JSON {
-		_ = json.NewEncoder(stdout).Encode(map[string]int{"count": n})
-	} else {
-		fmt.Fprintln(stdout, n) //nolint:errcheck
+		return writeCLIJSONLineOrExit(stdout, stderr, "gc work count", map[string]int{"count": n})
 	}
+	fmt.Fprintln(stdout, n) //nolint:errcheck
 	return 0
 }
 
@@ -115,6 +113,9 @@ func cmdWorkNext(opts workCommandOptions, stdout, stderr io.Writer) int {
 	if !ok {
 		fmt.Fprintln(stderr, "gc work next: no matching work") //nolint:errcheck
 		return 1
+	}
+	if opts.JSON {
+		return writeCLIJSONLineOrExit(stdout, stderr, "gc work next", next)
 	}
 	writeBeadJSON(next, stdout)
 	return 0
@@ -151,6 +152,9 @@ func cmdWorkClaim(opts workCommandOptions, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stderr, "gc work claim: %v\n", err) //nolint:errcheck
 		return 1
+	}
+	if opts.JSON {
+		return writeCLIJSONLineOrExit(stdout, stderr, "gc work claim", claimed)
 	}
 	writeBeadJSON(claimed, stdout)
 	return 0

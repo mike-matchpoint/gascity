@@ -1123,6 +1123,41 @@ func TestCachingStoreCachedListRejectsPartialPrime(t *testing.T) {
 	}
 }
 
+func TestCachingStoreRuntimeListHotAuthoritativeUsesCompleteCache(t *testing.T) {
+	t.Parallel()
+
+	backing := NewMemStore()
+	work, err := backing.Create(Bead{
+		Title:    "open work",
+		Type:     "task",
+		Status:   "open",
+		Assignee: "sess-1",
+	})
+	if err != nil {
+		t.Fatalf("Create(work): %v", err)
+	}
+	cache := NewCachingStoreForTest(backing, nil)
+	if err := cache.Prime(context.Background()); err != nil {
+		t.Fatalf("Prime: %v", err)
+	}
+
+	empty := ""
+	if err := backing.Update(work.ID, UpdateOpts{Assignee: &empty}); err != nil {
+		t.Fatalf("Update(%s): %v", work.ID, err)
+	}
+
+	rows, err := cache.RuntimeList(context.Background(), ListQuery{
+		Status:   "open",
+		Assignee: "sess-1",
+	}, RuntimeReadPolicy(ReadClassHotAuthoritative, "test.hot-authoritative-cache"))
+	if err != nil {
+		t.Fatalf("RuntimeList: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != work.ID {
+		t.Fatalf("RuntimeList rows = %#v, want cached work %s", rows, work.ID)
+	}
+}
+
 func TestCachingStorePrimePartialDoesNotServeActiveListAsComplete(t *testing.T) {
 	t.Parallel()
 

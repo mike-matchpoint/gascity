@@ -109,7 +109,7 @@ func (c *CachingStore) RuntimeList(ctx context.Context, query ListQuery, policy 
 	if !query.HasFilter() && !query.AllowScan {
 		return nil, fmt.Errorf("runtime cache list: %w", ErrQueryRequiresScan)
 	}
-	if cached, ok := c.runtimeCachedList(query, policy); ok {
+	if cached, ok := c.runtimeCachedList(query); ok {
 		return enforceRuntimeRowCap(cached, policy, "list", "cache")
 	}
 	indexed, ok := c.backing.(IndexedLister)
@@ -136,10 +136,7 @@ func (c *CachingStore) RuntimeList(ctx context.Context, query ListQuery, policy 
 	return enforceRuntimeRowCap(items, policy, "list", "indexed")
 }
 
-func (c *CachingStore) runtimeCachedList(query ListQuery, policy ReadPolicy) ([]Bead, bool) {
-	if policy.Class == ReadClassHotAuthoritative {
-		return nil, false
-	}
+func (c *CachingStore) runtimeCachedList(query ListQuery) ([]Bead, bool) {
 	if query.TierMode != TierIssues || query.Live {
 		return nil, false
 	}

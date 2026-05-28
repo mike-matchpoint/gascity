@@ -1705,6 +1705,51 @@ func TestOrderDispatchLimitsProductionCreatesPerTick(t *testing.T) {
 	}
 }
 
+func TestOrderDispatchLimitRotatesProductionStartAcrossTicks(t *testing.T) {
+	oldMax := orderDispatchMaxCreatesPerTick
+	orderDispatchMaxCreatesPerTick = 1
+	t.Cleanup(func() {
+		orderDispatchMaxCreatesPerTick = oldMax
+	})
+
+	store := beads.NewMemStore()
+	var ran []string
+	fakeExec := func(_ context.Context, command, _ string, _ []string) ([]byte, error) {
+		ran = append(ran, command)
+		return []byte("ok\n"), nil
+	}
+	aa := []orders.Order{
+		{Name: "aaa-first", Trigger: "cooldown", Interval: "1s", Exec: "aaa-first"},
+		{Name: "bbb-second", Trigger: "cooldown", Interval: "1s", Exec: "bbb-second"},
+		{Name: "ccc-third", Trigger: "cooldown", Interval: "1s", Exec: "ccc-third"},
+	}
+	ad := buildOrderDispatcherFromListExec(aa, store, nil, fakeExec, nil)
+	md, ok := ad.(*memoryOrderDispatcher)
+	if !ok {
+		t.Fatalf("dispatcher type = %T, want *memoryOrderDispatcher", ad)
+	}
+	md.cfg = &config.City{}
+
+	now := time.Date(2026, 5, 28, 1, 0, 0, 0, time.UTC)
+	md.dispatch(context.Background(), t.TempDir(), now)
+	md.drain(context.Background())
+	md.dispatch(context.Background(), t.TempDir(), now.Add(2*time.Second))
+	md.drain(context.Background())
+
+	if got, want := strings.Join(ran, ","), "aaa-first,bbb-second"; got != want {
+		t.Fatalf("dispatch sequence = %q, want %q", got, want)
+	}
+	if got := len(trackingBeads(t, store, "order-run:aaa-first")); got != 1 {
+		t.Fatalf("first order tracking beads = %d, want 1", got)
+	}
+	if got := len(trackingBeads(t, store, "order-run:bbb-second")); got != 1 {
+		t.Fatalf("second order tracking beads = %d, want 1", got)
+	}
+	if got := len(trackingBeads(t, store, "order-run:ccc-third")); got != 0 {
+		t.Fatalf("third order tracking beads = %d, want 0 before third tick", got)
+	}
+}
+
 func TestOrderDispatchRecordsTickTelemetry(t *testing.T) {
 	store := beads.NewMemStore()
 	var rec memRecorder

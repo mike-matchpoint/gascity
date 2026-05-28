@@ -271,17 +271,18 @@ type orderSetSnapshot struct {
 // ctx OR dispatchCtx is done (see launchDispatchOne). cancel() cancels
 // dispatchCtx.
 type memoryOrderDispatcher struct {
-	aa           []orders.Order
-	storeFn      orderStoreFunc
-	ep           events.Provider
-	execRun      ExecRunner
-	rec          events.Recorder
-	stderr       io.Writer
-	maxTimeout   time.Duration
-	cfg          *config.City
-	cityName     string
-	cacheMu      sync.Mutex
-	lastRunCache map[string]time.Time
+	aa                 []orders.Order
+	storeFn            orderStoreFunc
+	ep                 events.Provider
+	execRun            ExecRunner
+	rec                events.Recorder
+	stderr             io.Writer
+	maxTimeout         time.Duration
+	cfg                *config.City
+	cityName           string
+	cacheMu            sync.Mutex
+	lastRunCache       map[string]time.Time
+	nextCandidateStart int
 
 	dispatchCtx    context.Context
 	dispatchCancel context.CancelFunc
@@ -544,6 +545,7 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 	snapshots := buildOrderDispatchSnapshots(snapshotCtx, snapshotInputs, now)
 	cancel()
 
+	candidates = m.rotateDispatchCandidates(candidates)
 	for _, candidate := range candidates {
 		a := candidate.order
 		scoped := a.ScopedName()
@@ -635,6 +637,28 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 		m.addInflight()
 		m.launchDispatchOne(ctx, candidate.store, candidate.target, orderToDispatch, cityPath, trackingBead.ID)
 	}
+}
+
+func (m *memoryOrderDispatcher) rotateDispatchCandidates(candidates []orderDispatchCandidate) []orderDispatchCandidate {
+	if m == nil || m.cfg == nil || len(candidates) <= 1 || orderDispatchMaxCreatesPerTick <= 0 {
+		return candidates
+	}
+	start := m.nextCandidateStart % len(candidates)
+	if start < 0 {
+		start = 0
+	}
+	step := orderDispatchMaxCreatesPerTick
+	if step > len(candidates) {
+		step = len(candidates)
+	}
+	m.nextCandidateStart = (start + step) % len(candidates)
+	if start == 0 {
+		return candidates
+	}
+	rotated := make([]orderDispatchCandidate, 0, len(candidates))
+	rotated = append(rotated, candidates[start:]...)
+	rotated = append(rotated, candidates[:start]...)
+	return rotated
 }
 
 func (m *memoryOrderDispatcher) dispatchCreateLimitReached(stats *orderDispatchTickStats) bool {

@@ -76,6 +76,10 @@ func (s *taskWorkDirLiveListCountingStore) List(query beads.ListQuery) ([]beads.
 	return s.Store.List(query)
 }
 
+func (s *taskWorkDirLiveListCountingStore) RuntimeList(ctx context.Context, query beads.ListQuery, policy beads.ReadPolicy) ([]beads.Bead, error) {
+	return beads.RuntimeList(ctx, s.Store, query, policy)
+}
+
 type panicMetadataBatchStore struct {
 	*beads.MemStore
 }
