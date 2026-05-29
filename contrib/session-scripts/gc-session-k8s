@@ -216,7 +216,6 @@ case "$op" in
     ws_wait="while [ ! -f /workspace/.gc-workspace-ready ]; do sleep 0.5; done; "
 
     cmd_b64=$(printf '%s' "${command:-/bin/bash}" | base64 -w0)
-    tmux_cmd="${cred_copy}${ws_wait}${pre_cmds}CMD=\$(echo '${cmd_b64}' | base64 -d) && tmux new-session -d -s ${TMUX_SESSION} \"\$CMD\" && sleep infinity"
 
     # Build the pod manifest as JSON using jq.
     # All values are properly JSON-escaped by jq — no injection risk.
@@ -239,6 +238,8 @@ case "$op" in
           ;;
       esac
     fi
+    pod_work_dir_sh=$(printf '%q' "$pod_work_dir")
+    tmux_cmd="${cred_copy}${ws_wait}${pre_cmds}CMD=\$(echo '${cmd_b64}' | base64 -d) && cd ${pod_work_dir_sh} && tmux new-session -d -s ${TMUX_SESSION} \"\$CMD\" && sleep infinity"
 
     # Build env array for the pod. Remove controller-only exec providers
     # (GC_BEADS, GC_SESSION, GC_EVENTS) — agents use native bd against dolt.
@@ -329,7 +330,7 @@ case "$op" in
         --arg mem_req "$MEM_REQ" \
         --arg cpu_lim "$CPU_LIM" \
         --arg mem_lim "$MEM_LIM" \
-        --arg work_dir "$pod_work_dir" \
+        --arg work_dir "/workspace" \
         --arg sa "$SERVICE_ACCOUNT" \
         --argjson env "$env_array" \
         --arg city "$gc_city" \
@@ -397,7 +398,7 @@ case "$op" in
         --arg mem_req "$MEM_REQ" \
         --arg cpu_lim "$CPU_LIM" \
         --arg mem_lim "$MEM_LIM" \
-        --arg work_dir "$pod_work_dir" \
+        --arg work_dir "/workspace" \
         --arg sa "$SERVICE_ACCOUNT" \
         --argjson env "$env_array" \
         --arg city "$gc_city" \

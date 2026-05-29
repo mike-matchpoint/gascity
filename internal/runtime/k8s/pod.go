@@ -20,6 +20,8 @@ import (
 const (
 	podManagedDoltHost = "dolt.gc.svc.cluster.local"
 	podManagedDoltPort = "3307"
+
+	podEntrypointWorkDir = "/workspace"
 )
 
 func controllerCityPath(cfgEnv map[string]string) string {
@@ -312,7 +314,7 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 				Name:            "agent",
 				Image:           p.image,
 				ImagePullPolicy: corev1.PullAlways,
-				WorkingDir:      podWorkDir,
+				WorkingDir:      podEntrypointWorkDir,
 				Command:         []string{"/bin/sh", "-c"},
 				Args:            []string{tmuxCmd},
 				Env:             env,
