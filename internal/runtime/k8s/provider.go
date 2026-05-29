@@ -42,6 +42,8 @@ type Provider struct {
 	memLimit           string
 	serviceAccount     string              // pod service account name (GC_K8S_SERVICE_ACCOUNT)
 	prebaked           bool                // skip staging + init container for prebaked images
+	workspacePVC       string              // optional PersistentVolumeClaim for shared pod workspace
+	workspaceRoot      string              // pod mount path for workspacePVC
 	nodeSelector       map[string]string   // GC_K8S_NODE_SELECTOR (JSON)
 	tolerations        []corev1.Toleration // GC_K8S_TOLERATIONS (JSON)
 	affinity           *corev1.Affinity    // GC_K8S_AFFINITY (JSON)
@@ -57,12 +59,19 @@ type schedulingFields struct {
 	priorityClassName string
 }
 
+type workspaceFields struct {
+	pvc  string
+	root string
+}
+
 // NewProvider creates a K8s session provider.
 // Configuration is read from environment variables (matching gc-session-k8s):
 //   - GC_K8S_NAMESPACE — namespace (default: "gc")
 //   - GC_K8S_IMAGE — container image (required for Start)
 //   - GC_K8S_CONTEXT — kubectl context (default: current)
 //   - GC_K8S_SERVICE_ACCOUNT — pod service account name (default: namespace default)
+//   - GC_K8S_WORKSPACE_PVC — optional PVC claim mounted into agent pods
+//   - GC_K8S_WORKSPACE_ROOT — mount path for GC_K8S_WORKSPACE_PVC (default: /workspace)
 //   - GC_K8S_CPU_REQUEST, GC_K8S_MEM_REQUEST — resource requests
 //   - GC_K8S_CPU_LIMIT, GC_K8S_MEM_LIMIT — resource limits
 //
@@ -97,6 +106,10 @@ func NewProvider() (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
+	workspace, err := parseWorkspaceEnv()
+	if err != nil {
+		return nil, err
+	}
 
 	return &Provider{
 		ops: &realK8sOps{
@@ -115,6 +128,8 @@ func NewProvider() (*Provider, error) {
 		memLimit:           envOrDefault("GC_K8S_MEM_LIMIT", "4Gi"),
 		serviceAccount:     os.Getenv("GC_K8S_SERVICE_ACCOUNT"),
 		prebaked:           os.Getenv("GC_K8S_PREBAKED") == "true",
+		workspacePVC:       workspace.pvc,
+		workspaceRoot:      workspace.root,
 		postStartSettle:    3 * time.Second,
 		stderr:             os.Stderr,
 		nodeSelector:       scheduling.nodeSelector,
@@ -145,6 +160,25 @@ func parseSchedulingEnv() (schedulingFields, error) {
 	return scheduling, nil
 }
 
+func parseWorkspaceEnv() (workspaceFields, error) {
+	pvc := strings.TrimSpace(os.Getenv("GC_K8S_WORKSPACE_PVC"))
+	if pvc == "" {
+		return workspaceFields{root: defaultPodWorkspaceRoot}, nil
+	}
+	root := strings.TrimSpace(os.Getenv("GC_K8S_WORKSPACE_ROOT"))
+	if root == "" {
+		root = defaultPodWorkspaceRoot
+	}
+	if !strings.HasPrefix(root, "/") {
+		return workspaceFields{}, fmt.Errorf("GC_K8S_WORKSPACE_ROOT must be an absolute pod path when GC_K8S_WORKSPACE_PVC is set")
+	}
+	root = strings.TrimRight(root, "/")
+	if root == "" {
+		root = "/"
+	}
+	return workspaceFields{pvc: pvc, root: root}, nil
+}
+
 // newProviderWithOps creates a provider with a custom k8sOps (for testing).
 func newProviderWithOps(ops k8sOps) *Provider {
 	return &Provider{
@@ -157,8 +191,28 @@ func newProviderWithOps(ops k8sOps) *Provider {
 		memRequest:         "1Gi",
 		cpuLimit:           "2",
 		memLimit:           "4Gi",
+		workspaceRoot:      defaultPodWorkspaceRoot,
 		stderr:             io.Discard,
 	}
+}
+
+func (p *Provider) usesPersistentWorkspace() bool {
+	return strings.TrimSpace(p.workspacePVC) != ""
+}
+
+func (p *Provider) podWorkspaceRoot() string {
+	if !p.usesPersistentWorkspace() {
+		return defaultPodWorkspaceRoot
+	}
+	root := strings.TrimSpace(p.workspaceRoot)
+	if root == "" {
+		return defaultPodWorkspaceRoot
+	}
+	root = strings.TrimRight(root, "/")
+	if root == "" {
+		return "/"
+	}
+	return root
 }
 
 // Start creates a new K8s pod running a tmux session with the agent command.
@@ -220,7 +274,7 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 
 	ctrlCity := controllerCityPath(cfg.Env)
 
-	if !p.prebaked {
+	if !p.prebaked && !p.usesPersistentWorkspace() {
 		// Stage files via init container if needed.
 		if needsStaging(cfg, ctrlCity) {
 			if err := stageFiles(ctx, p.ops, podName, cfg, ctrlCity, p.stderr); err != nil {
@@ -236,7 +290,7 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 		return fmt.Errorf("waiting for pod %q: %w", podName, err)
 	}
 
-	if !p.prebaked {
+	if !p.prebaked && !p.usesPersistentWorkspace() {
 		// Initialize the city inside the pod.
 		if ctrlCity != "" {
 			if err := initCityInPod(ctx, p.ops, podName, ctrlCity); err != nil {
@@ -253,8 +307,8 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 
 	// Ensure .beads/ inside the pod. This remains warning-only so older staged
 	// or prebaked workspaces can self-heal instead of failing session startup.
-	podWorkDir := projectedPodWorkDir(cfg)
-	if err := initBeadsInPod(ctx, p.ops, podName, cfg, podWorkDir, p.managedServiceHost, p.managedServicePort); err != nil {
+	podWorkDir := projectedPodWorkDirForProvider(cfg, p)
+	if err := initBeadsInPod(ctx, p.ops, podName, cfg, podWorkDir, p.podWorkspaceRoot(), p.managedServiceHost, p.managedServicePort); err != nil {
 		fmt.Fprintf(p.stderr, "gc: warning: initBeadsInPod for %s: %v\n", podName, err) //nolint:errcheck
 	}
 
@@ -830,7 +884,7 @@ func initCityInPod(ctx context.Context, ops k8sOps, podName, ctrlCity string) er
 // initBeadsInPod ensures the pod workspace has usable .beads state. It keeps
 // the older warning-only self-heal behavior for prebaked or older staged
 // workspaces by patching existing metadata and bootstrapping missing state.
-func initBeadsInPod(ctx context.Context, ops k8sOps, podName string, cfg runtime.Config, workDir, managedServiceHost, managedServicePort string) error {
+func initBeadsInPod(ctx context.Context, ops k8sOps, podName string, cfg runtime.Config, workDir, podCityRoot, managedServiceHost, managedServicePort string) error {
 	projected, err := projectedPodDoltEnv(cfg.Env, managedServiceHost, managedServicePort)
 	if err != nil {
 		return err
@@ -840,7 +894,7 @@ func initBeadsInPod(ctx context.Context, ops k8sOps, podName string, cfg runtime
 	}
 	doltHost := projected["GC_DOLT_HOST"]
 	doltPort := projected["GC_DOLT_PORT"]
-	storeRoot := projectedPodStoreRoot(cfg, workDir)
+	storeRoot := projectedPodStoreRootForRoot(cfg, workDir, podCityRoot)
 	prefix := strings.TrimSpace(cfg.Env["GC_BEADS_PREFIX"])
 	if prefix == "" {
 		return fmt.Errorf("missing projected GC_BEADS_PREFIX")

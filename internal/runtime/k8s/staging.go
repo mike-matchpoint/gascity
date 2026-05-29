@@ -100,15 +100,31 @@ func stageFiles(ctx context.Context, ops k8sOps, podName string, cfg runtime.Con
 }
 
 func projectedPodWorkDirForControllerPath(workDir, ctrlCity string) string {
-	if podPath, ok := projectedPodPathForControllerPath(ctrlCity, workDir); ok {
+	return projectedPodWorkDirForControllerPathRoot(workDir, ctrlCity, defaultPodWorkspaceRoot)
+}
+
+func projectedPodWorkDirForControllerPathRoot(workDir, ctrlCity, podCityRoot string) string {
+	if podPath, ok := projectedPodPathForControllerPathRoot(ctrlCity, workDir, podCityRoot); ok {
 		return podPath
 	}
-	return "/workspace"
+	podCityRoot = strings.TrimRight(strings.TrimSpace(podCityRoot), "/")
+	if podCityRoot == "" {
+		return defaultPodWorkspaceRoot
+	}
+	return podCityRoot
 }
 
 func projectedPodPathForControllerPath(ctrlCity, controllerPath string) (string, bool) {
+	return projectedPodPathForControllerPathRoot(ctrlCity, controllerPath, defaultPodWorkspaceRoot)
+}
+
+func projectedPodPathForControllerPathRoot(ctrlCity, controllerPath, podCityRoot string) (string, bool) {
 	ctrlCity = strings.TrimSpace(ctrlCity)
 	controllerPath = strings.TrimSpace(controllerPath)
+	podCityRoot = strings.TrimRight(strings.TrimSpace(podCityRoot), "/")
+	if podCityRoot == "" {
+		podCityRoot = defaultPodWorkspaceRoot
+	}
 	if ctrlCity == "" || controllerPath == "" {
 		return "", false
 	}
@@ -117,9 +133,9 @@ func projectedPodPathForControllerPath(ctrlCity, controllerPath string) (string,
 		return "", false
 	}
 	if rel == "." {
-		return "/workspace", true
+		return podCityRoot, true
 	}
-	return path.Join("/workspace", filepath.ToSlash(rel)), true
+	return path.Join(podCityRoot, filepath.ToSlash(rel)), true
 }
 
 func needsCityRootRuntimeInputStaging(workDir, ctrlCity string) bool {
