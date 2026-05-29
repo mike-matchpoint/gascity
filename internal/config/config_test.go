@@ -1976,6 +1976,36 @@ func TestValidateAgentsTypedWorkSelectorPairing(t *testing.T) {
 	}
 }
 
+func TestWorkSelectorAnyValidatesPairing(t *testing.T) {
+	selector := WorkSelector{Any: []WorkSelector{
+		{Type: "step", Unassigned: true, Metadata: map[string]string{"gc.routed_to": "worker"}},
+		{Type: "task", Label: "warrant", Unassigned: true, Metadata: map[string]string{
+			"gc.routed_to":        "worker",
+			"gc.attached_formula": "mol-shutdown-dance",
+		}},
+	}}
+	if err := ValidateAgents([]Agent{{Name: "worker", WorkSelector: selector, ScaleCheckQuery: selector}}); err != nil {
+		t.Fatalf("ValidateAgents paired any selector: %v", err)
+	}
+
+	reordered := WorkSelector{Any: []WorkSelector{selector.Any[1], selector.Any[0]}}
+	if err := ValidateAgents([]Agent{{Name: "worker", WorkSelector: selector, ScaleCheckQuery: reordered}}); err != nil {
+		t.Fatalf("ValidateAgents reordered any selector: %v", err)
+	}
+
+	mismatched := selector
+	mismatched.Any = append([]WorkSelector(nil), selector.Any...)
+	mismatched.Any[1].Metadata = map[string]string{"gc.routed_to": "worker"}
+	if err := ValidateAgents([]Agent{{Name: "worker", WorkSelector: selector, ScaleCheckQuery: mismatched}}); err == nil || !strings.Contains(err.Error(), "must match work_selector") {
+		t.Fatalf("ValidateAgents mismatched any selector err = %v, want match error", err)
+	}
+
+	invalid := WorkSelector{Type: "task", Any: []WorkSelector{selector.Any[0]}}
+	if err := ValidateAgents([]Agent{{Name: "worker", WorkSelector: invalid, ScaleCheckQuery: invalid}}); err == nil || !strings.Contains(err.Error(), "cannot combine top-level fields with any") {
+		t.Fatalf("ValidateAgents mixed any selector err = %v, want top-level field error", err)
+	}
+}
+
 func TestLoadAgentTypedWorkSelectors(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "city.toml")
@@ -2022,6 +2052,73 @@ sort = "created_desc"
 	}
 	if !worker.ScaleCheckQuery.Equivalent(worker.WorkSelector) {
 		t.Fatalf("scale_check_query = %+v, want equivalent to work_selector %+v", worker.ScaleCheckQuery, worker.WorkSelector)
+	}
+}
+
+func TestWorkSelectorAnyLoadsAgentConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "city.toml")
+	content := `[workspace]
+name = "demo"
+
+[[agent]]
+name = "dog"
+
+[[agent.work_selector.any]]
+status = "open"
+type = "step"
+unassigned = true
+
+[agent.work_selector.any.metadata]
+"gc.routed_to" = "{{.Agent}}"
+
+[[agent.work_selector.any]]
+status = "open"
+type = "task"
+label = "warrant"
+unassigned = true
+
+[agent.work_selector.any.metadata]
+"gc.routed_to" = "{{.Agent}}"
+"gc.attached_formula" = "mol-shutdown-dance"
+
+[[agent.scale_check_query.any]]
+status = "open"
+type = "step"
+unassigned = true
+
+[agent.scale_check_query.any.metadata]
+"gc.routed_to" = "{{.Agent}}"
+
+[[agent.scale_check_query.any]]
+status = "open"
+type = "task"
+label = "warrant"
+unassigned = true
+
+[agent.scale_check_query.any.metadata]
+"gc.routed_to" = "{{.Agent}}"
+"gc.attached_formula" = "mol-shutdown-dance"
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(fsys.OSFS{}, path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Agents) != 1 {
+		t.Fatalf("agents = %d, want 1", len(cfg.Agents))
+	}
+	dog := cfg.Agents[0]
+	if len(dog.WorkSelector.Any) != 2 {
+		t.Fatalf("work_selector.any len = %d, want 2", len(dog.WorkSelector.Any))
+	}
+	if got := dog.WorkSelector.Any[1].Metadata["gc.attached_formula"]; got != "mol-shutdown-dance" {
+		t.Fatalf("warrant clause attached formula = %q", got)
+	}
+	if !dog.ScaleCheckQuery.Equivalent(dog.WorkSelector) {
+		t.Fatalf("scale_check_query.any = %+v, want equivalent to work_selector.any %+v", dog.ScaleCheckQuery, dog.WorkSelector)
 	}
 }
 

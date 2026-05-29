@@ -29,6 +29,7 @@ import (
 	"github.com/gastownhall/gascity/internal/orderdiscovery"
 	"github.com/gastownhall/gascity/internal/orders"
 	"github.com/gastownhall/gascity/internal/processgroup"
+	"github.com/gastownhall/gascity/internal/routedwork"
 )
 
 const (
@@ -1639,7 +1640,7 @@ func (m *memoryOrderDispatcher) dispatchWisp(ctx context.Context, store beads.St
 		)
 	}
 	if a.Pool != "" {
-		update.Metadata = map[string]string{"gc.routed_to": pool}
+		update.Metadata = routedwork.FormulaOrderPoolDemandMetadata(pool)
 	}
 	if err := store.Update(rootID, update); err != nil {
 		// Label failure is critical for duplicate-dispatch prevention.

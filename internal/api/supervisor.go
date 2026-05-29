@@ -153,6 +153,7 @@ func NewSupervisorMux(resolver CityResolver, initializer cityInitializer, readOn
 	sm.registerSupervisorRoutes()
 	sm.registerCityRoutes()
 	documentProblemTypes(sm.humaAPI.OpenAPI())
+	documentWorkSelectorAnyClauses(sm.humaAPI.OpenAPI())
 	// Declare framework-level response headers (X-GC-Request-Id) via
 	// components.headers + $ref on every operation. Middleware writes
 	// the header at runtime; the spec describes the contract. Must run

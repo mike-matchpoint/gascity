@@ -1240,6 +1240,9 @@ func TestOrderRunResolvesPackBindingForPool(t *testing.T) {
 	if got := results[0].Metadata["gc.routed_to"]; got != "maintenance.dog" {
 		t.Fatalf("gc.routed_to = %q, want maintenance.dog", got)
 	}
+	if got := results[0].Metadata[poolDemandMetadataKey]; got != poolDemandMetadataValue {
+		t.Fatalf("%s = %q, want %q", poolDemandMetadataKey, got, poolDemandMetadataValue)
+	}
 	if !strings.Contains(stdout.String(), "gc.routed_to=maintenance.dog") {
 		t.Fatalf("stdout = %q, want binding-qualified route", stdout.String())
 	}

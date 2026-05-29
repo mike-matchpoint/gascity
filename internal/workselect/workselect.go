@@ -3,6 +3,7 @@ package workselect
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/gastownhall/gascity/internal/beads"
@@ -22,6 +23,9 @@ type Compiled struct {
 // Compile lowers selector into a normalized ListQuery. Empty status defaults
 // to open; empty tier defaults to issues; empty sort defaults to created_asc.
 func Compile(selector config.WorkSelector, limit int) (Compiled, error) {
+	if len(selector.Any) > 0 {
+		return Compiled{}, fmt.Errorf("work selector: any must be evaluated with List")
+	}
 	query := beads.ListQuery{
 		Status:      strings.TrimSpace(selector.Status),
 		Type:        strings.TrimSpace(selector.Type),
@@ -90,6 +94,9 @@ func Compile(selector config.WorkSelector, limit int) (Compiled, error) {
 // List returns beads matching selector using the same normalized predicate for
 // demand counts, next-item discovery, and claim candidate selection.
 func List(store beads.Store, selector config.WorkSelector, limit int) ([]beads.Bead, error) {
+	if len(selector.Any) > 0 {
+		return listAny(store, selector, limit)
+	}
 	compiled, err := Compile(selector, limit)
 	if err != nil {
 		return nil, err
@@ -134,6 +141,14 @@ func Next(store beads.Store, selector config.WorkSelector) (beads.Bead, bool, er
 
 // Matches reports whether b satisfies selector after normalization.
 func Matches(selector config.WorkSelector, b beads.Bead) bool {
+	if len(selector.Any) > 0 {
+		for _, clause := range selector.Any {
+			if Matches(clause, b) {
+				return true
+			}
+		}
+		return false
+	}
 	compiled, err := Compile(selector, 0)
 	if err != nil {
 		return false
@@ -142,6 +157,76 @@ func Matches(selector config.WorkSelector, b beads.Bead) bool {
 		return false
 	}
 	return len(ApplyPostFilters([]beads.Bead{b}, compiled)) == 1
+}
+
+func listAny(store beads.Store, selector config.WorkSelector, limit int) ([]beads.Bead, error) {
+	seen := make(map[string]struct{})
+	items := make([]beads.Bead, 0)
+	for _, clause := range selector.Any {
+		clauseItems, err := List(store, clause, 0)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range clauseItems {
+			if _, ok := seen[item.ID]; ok {
+				continue
+			}
+			seen[item.ID] = struct{}{}
+			items = append(items, item)
+		}
+	}
+	SortSelectorResults(selector, items)
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}
+
+// SortSelectorResults applies the deterministic selector result order used by
+// any-clause unions after de-duplication.
+func SortSelectorResults(selector config.WorkSelector, items []beads.Bead) {
+	sortBeads(items, selectorSortOrder(selector))
+}
+
+func selectorSortOrder(selector config.WorkSelector) beads.SortOrder {
+	if len(selector.Any) == 0 {
+		switch strings.TrimSpace(selector.Sort) {
+		case "created_desc":
+			return beads.SortCreatedDesc
+		default:
+			return beads.SortCreatedAsc
+		}
+	}
+	var order beads.SortOrder
+	for _, clause := range selector.Any {
+		clauseOrder := selectorSortOrder(clause)
+		if order == "" {
+			order = clauseOrder
+			continue
+		}
+		if order != clauseOrder {
+			return beads.SortCreatedAsc
+		}
+	}
+	if order == "" {
+		return beads.SortCreatedAsc
+	}
+	return order
+}
+
+func sortBeads(items []beads.Bead, order beads.SortOrder) {
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			if order == beads.SortCreatedDesc {
+				return items[i].ID > items[j].ID
+			}
+			return items[i].ID < items[j].ID
+		}
+		if order == beads.SortCreatedDesc {
+			return items[i].CreatedAt.After(items[j].CreatedAt)
+		}
+		return items[i].CreatedAt.Before(items[j].CreatedAt)
+	})
 }
 
 // ApplyPostFilters enforces selector predicates that are not represented by
