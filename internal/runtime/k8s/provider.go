@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +25,7 @@ import (
 var (
 	_ runtime.Provider              = (*Provider)(nil)
 	_ runtime.RuntimeArtifactLister = (*Provider)(nil)
+	_ runtime.InventoryProvider     = (*Provider)(nil)
 )
 
 // Provider is a native Kubernetes session provider using client-go.
@@ -606,27 +608,51 @@ func (p *Provider) Peek(name string, lines int) (string, error) {
 
 // ListRunning returns names of all running sessions with the given prefix.
 func (p *Provider) ListRunning(prefix string) ([]string, error) {
-	ctx := context.Background()
-	pods, err := p.ops.listPods(ctx, "app=gc-agent", "status.phase=Running")
+	inventory, err := p.Inventory(context.Background(), prefix)
 	if err != nil {
 		return nil, err
 	}
-	var names []string
+	names := make([]string, 0, len(inventory.Observations))
+	for name := range inventory.Observations {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// Inventory returns a single pod-list snapshot for session list/status
+// read paths. It intentionally treats Running pods as running sessions without
+// execing into tmux; stronger tmux/process proof remains on direct operations
+// such as get, peek, attach, stop, and reconciliation.
+func (p *Provider) Inventory(ctx context.Context, prefix string) (runtime.Inventory, error) {
+	pods, err := p.ops.listPods(ctx, "app=gc-agent", "status.phase=Running")
+	inventory := runtime.Inventory{
+		Complete:     err == nil,
+		Source:       "k8s",
+		Observations: map[string]runtime.InventoryObservation{},
+	}
+	if err != nil {
+		return inventory, err
+	}
 	for i := range pods {
 		pod := &pods[i]
-		// Prefer annotation (raw name) over label (sanitized).
-		name := pod.Annotations["gc-session-name"]
-		if name == "" {
-			name = pod.Labels["gc-session"]
+		if pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning {
+			continue
 		}
+		name := podRuntimeSessionName(pod)
 		if name == "" {
 			continue
 		}
-		if prefix == "" || strings.HasPrefix(name, prefix) {
-			names = append(names, name)
+		if prefix != "" && !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		inventory.Observations[name] = runtime.InventoryObservation{
+			SessionName: name,
+			Running:     true,
+			Source:      "k8s/pod",
 		}
 	}
-	return names, nil
+	return inventory, nil
 }
 
 // StatusRunningSessions exposes the K8s provider's single-list running-session
