@@ -575,6 +575,13 @@ func (p *Provider) ListRunning(prefix string) ([]string, error) {
 	return names, nil
 }
 
+// StatusRunningSessions exposes the K8s provider's single-list running-session
+// snapshot to status renderers so large hosted cities do not fan out one pod
+// query per agent.
+func (p *Provider) StatusRunningSessions(prefix string) ([]string, error) {
+	return p.ListRunning(prefix)
+}
+
 // ListRuntimeArtifacts returns all provider-owned agent pod artifacts,
 // including pods that have not reached Running. The session ID is read from
 // the pod spec so cleanup can attribute init-stuck pods before tmux exists.
