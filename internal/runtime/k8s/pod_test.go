@@ -262,12 +262,54 @@ func TestBuildPodEntrypointTransfersPromptFileOwnershipForDynamicUser(t *testing
 	if want := "chown -R 'agentuser' '/workspace/rigs/frontend/.gc/tmp'"; !strings.Contains(entrypoint, want) {
 		t.Fatalf("entrypoint does not transfer prompt dir ownership with %q:\n%s", want, entrypoint)
 	}
-	if want := `su - agentuser -c`; !strings.Contains(entrypoint, want) {
+	if want := `su -m agentuser -c`; !strings.Contains(entrypoint, want) {
 		t.Fatalf("entrypoint does not drop to dynamic user with %q:\n%s", want, entrypoint)
 	}
 	script := decodedEntrypointScript(t, entrypoint)
 	if want := "rm -f '/workspace/rigs/frontend/.gc/tmp/prompt-test-session.txt'"; !strings.Contains(script, want) {
 		t.Fatalf("decoded launch script does not remove prompt file with %q:\n%s", want, script)
+	}
+}
+
+func TestBuildPodEntrypointPreservesRuntimeIdentityForDynamicUser(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+	pod, err := buildPod("test-session", runtime.Config{
+		Command: "/bin/bash",
+		WorkDir: "/city/.gc/agents/worker",
+		Env: map[string]string{
+			"GC_AGENT":          "worker",
+			"GC_ALIAS":          "worker",
+			"GC_CITY":           "/city",
+			"GC_INSTANCE_TOKEN": "tok-worker",
+			"GC_RUNTIME_EPOCH":  "12",
+			"GC_SESSION_ID":     "gc-session-pending",
+			"LINUX_USERNAME":    "agentuser",
+		},
+	}, p)
+	if err != nil {
+		t.Fatalf("buildPod: %v", err)
+	}
+
+	entrypoint := pod.Spec.Containers[0].Args[0]
+	if want := `export HOME="/home/agentuser" USER="agentuser" LOGNAME="agentuser" SHELL="/bin/bash"`; !strings.Contains(entrypoint, want) {
+		t.Fatalf("entrypoint does not prepare preserved user env with %q:\n%s", want, entrypoint)
+	}
+	if want := `su -m agentuser -c`; !strings.Contains(entrypoint, want) {
+		t.Fatalf("entrypoint must preserve container env when switching users with %q:\n%s", want, entrypoint)
+	}
+	if strings.Contains(entrypoint, `su - agentuser -c`) {
+		t.Fatalf("entrypoint uses login su, which drops runtime identity env:\n%s", entrypoint)
+	}
+
+	env := pod.Spec.Containers[0].Env
+	for key, want := range map[string]string{
+		"GC_SESSION_ID":     "gc-session-pending",
+		"GC_INSTANCE_TOKEN": "tok-worker",
+		"GC_RUNTIME_EPOCH":  "12",
+	} {
+		if got := envValue(env, key); got != want {
+			t.Fatalf("%s env = %q, want %q", key, got, want)
+		}
 	}
 }
 
