@@ -88,7 +88,7 @@ func cmdWorkCount(opts workCommandOptions, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "gc work count: %v\n", err) //nolint:errcheck
 		return 1
 	}
-	n, err := workSelectorCountForController(ctx.store, ctx.selector)
+	n, err := workSelectorCountForCommand(ctx.store, ctx.selector, ctx.assignmentIDs)
 	if err != nil {
 		fmt.Fprintf(stderr, "gc work count: %v\n", err) //nolint:errcheck
 		return 1
@@ -107,7 +107,7 @@ func cmdWorkNext(opts workCommandOptions, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "gc work next: %v\n", err) //nolint:errcheck
 		return 1
 	}
-	next, ok, err := workselect.Next(ctx.store, ctx.selector)
+	next, ok, err := nextWorkForCommand(ctx.store, ctx.selector, ctx.assignmentIDs)
 	if err != nil {
 		fmt.Fprintf(stderr, "gc work next: %v\n", err) //nolint:errcheck
 		return 1
@@ -126,9 +126,10 @@ func cmdWorkClaim(opts workCommandOptions, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "gc work claim: %v\n", err) //nolint:errcheck
 		return 1
 	}
-	assignee := strings.TrimSpace(opts.Assignee)
-	if assignee == "" {
-		assignee = defaultWorkClaimAssignee(ctx.agent)
+	explicitAssignee := strings.TrimSpace(opts.Assignee)
+	claimAssignee := explicitAssignee
+	if claimAssignee == "" {
+		claimAssignee = defaultWorkClaimAssignee(ctx.agent)
 	}
 	metadata, err := parseWorkMetadata(opts.SetMetadata)
 	if err != nil {
@@ -139,7 +140,7 @@ func cmdWorkClaim(opts workCommandOptions, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "gc work claim: %v\n", err) //nolint:errcheck
 		return 1
 	}
-	claimed, err := claimNextWork(ctx.store, ctx.selector, assignee, metadata)
+	claimed, err := claimNextWorkForCommand(ctx.store, ctx.selector, ctx.assignmentIDs, explicitAssignee, claimAssignee, metadata)
 	if err != nil {
 		if errors.Is(err, errWorkNotFound) {
 			fmt.Fprintln(stderr, "gc work claim: no matching work") //nolint:errcheck
@@ -157,11 +158,12 @@ func cmdWorkClaim(opts workCommandOptions, stdout, stderr io.Writer) int {
 }
 
 type workCommandContext struct {
-	cityPath string
-	cfg      *config.City
-	agent    config.Agent
-	selector config.WorkSelector
-	store    beads.Store
+	cityPath      string
+	cfg           *config.City
+	agent         config.Agent
+	selector      config.WorkSelector
+	store         beads.Store
+	assignmentIDs []string
 }
 
 func resolveWorkCommandContext(opts workCommandOptions, stderr io.Writer) (workCommandContext, error) {
@@ -197,12 +199,64 @@ func resolveWorkCommandContext(opts workCommandOptions, stderr io.Writer) (workC
 		return workCommandContext{}, err
 	}
 	return workCommandContext{
-		cityPath: cityPath,
-		cfg:      cfg,
-		agent:    agentCfg,
-		selector: selector,
-		store:    store,
+		cityPath:      cityPath,
+		cfg:           cfg,
+		agent:         agentCfg,
+		selector:      selector,
+		store:         store,
+		assignmentIDs: workAssignmentIdentifiers(),
 	}, nil
+}
+
+func workSelectorCountForCommand(store beads.Store, selector config.WorkSelector, assignmentIDs []string) (int, error) {
+	assigned, err := listAssignedWorkForIdentities(store, assignmentIDs, 0)
+	if err != nil {
+		return 0, err
+	}
+	selected, err := workselect.List(store, selector, 0)
+	if err != nil {
+		return 0, err
+	}
+	seen := make(map[string]struct{}, len(assigned)+len(selected))
+	for _, item := range assigned {
+		seen[item.ID] = struct{}{}
+	}
+	for _, item := range selected {
+		seen[item.ID] = struct{}{}
+	}
+	return len(seen), nil
+}
+
+func nextWorkForCommand(store beads.Store, selector config.WorkSelector, assignmentIDs []string) (beads.Bead, bool, error) {
+	assigned, err := listAssignedWorkForIdentities(store, assignmentIDs, 1)
+	if err != nil {
+		return beads.Bead{}, false, err
+	}
+	if len(assigned) > 0 {
+		return assigned[0], true, nil
+	}
+	return workselect.Next(store, selector)
+}
+
+func claimNextWorkForCommand(store beads.Store, selector config.WorkSelector, assignmentIDs []string, explicitAssignee string, fallbackAssignee string, metadata map[string]string) (beads.Bead, error) {
+	claimIDs := appendUniqueWorkIdentifier(assignmentIDs, explicitAssignee)
+	claimIDs = appendUniqueWorkIdentifier(claimIDs, fallbackAssignee)
+	assigned, err := listAssignedWorkForIdentities(store, claimIDs, 1)
+	if err != nil {
+		return beads.Bead{}, err
+	}
+	if len(assigned) > 0 {
+		target := assigned[0]
+		claimAssignee := strings.TrimSpace(explicitAssignee)
+		if claimAssignee == "" {
+			claimAssignee = strings.TrimSpace(target.Assignee)
+		}
+		if claimAssignee == "" {
+			claimAssignee = strings.TrimSpace(fallbackAssignee)
+		}
+		return claimWorkByID(store, target.ID, claimAssignee, metadata)
+	}
+	return claimNextWork(store, selector, fallbackAssignee, metadata)
 }
 
 func claimNextWork(store beads.Store, selector config.WorkSelector, assignee string, metadata map[string]string) (beads.Bead, error) {
@@ -217,11 +271,15 @@ func claimNextWork(store beads.Store, selector config.WorkSelector, assignee str
 	if !ok {
 		return beads.Bead{}, errWorkNotFound
 	}
+	return claimWorkByID(store, next.ID, assignee, metadata)
+}
+
+func claimWorkByID(store beads.Store, id string, assignee string, metadata map[string]string) (beads.Bead, error) {
 	claimer, ok := store.(beads.ClaimStore)
 	if !ok {
-		return beads.Bead{}, fmt.Errorf("claiming bead %q: %w", next.ID, beads.ErrClaimUnsupported)
+		return beads.Bead{}, fmt.Errorf("claiming bead %q: %w", id, beads.ErrClaimUnsupported)
 	}
-	return claimer.Claim(next.ID, beads.ClaimOpts{Assignee: assignee, Metadata: metadata})
+	return claimer.Claim(id, beads.ClaimOpts{Assignee: assignee, Metadata: metadata})
 }
 
 func workSelectorCountForController(store beads.Store, selector config.WorkSelector) (int, error) {
@@ -285,6 +343,142 @@ func firstNonEmptyWork(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func workAssignmentIdentifiers() []string {
+	return uniqueNonEmptyWorkIdentifiers(
+		os.Getenv("GC_SESSION_ID"),
+		os.Getenv("GC_SESSION_NAME"),
+		os.Getenv("GC_ALIAS"),
+	)
+}
+
+func appendUniqueWorkIdentifier(values []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return values
+	}
+	for _, existing := range values {
+		if strings.TrimSpace(existing) == value {
+			return values
+		}
+	}
+	out := make([]string, 0, len(values)+1)
+	out = append(out, value)
+	return out
+}
+
+func uniqueNonEmptyWorkIdentifiers(values ...string) []string {
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func listAssignedWorkForIdentities(store beads.Store, identities []string, limit int) ([]beads.Bead, error) {
+	if store == nil || len(identities) == 0 {
+		return nil, nil
+	}
+	out := make([]beads.Bead, 0)
+	seen := make(map[string]struct{})
+	statusByID := make(map[string]string)
+	for _, status := range []string{"in_progress", "open"} {
+		for _, assignee := range identities {
+			query := beads.ListQuery{
+				Status:      status,
+				Assignee:    assignee,
+				ExcludeType: "epic",
+				AllowScan:   true,
+				SkipLabels:  true,
+				Sort:        beads.SortCreatedAsc,
+				TierMode:    beads.TierBoth,
+			}
+			items, err := store.List(query)
+			if err != nil {
+				return nil, err
+			}
+			for _, item := range items {
+				if _, ok := seen[item.ID]; ok {
+					continue
+				}
+				if !directAssignedWorkCandidate(item) {
+					continue
+				}
+				if status == "open" {
+					ready, err := directAssignedWorkReady(store, item, statusByID)
+					if err != nil {
+						return nil, err
+					}
+					if !ready {
+						continue
+					}
+				}
+				seen[item.ID] = struct{}{}
+				out = append(out, item)
+				if limit > 0 && len(out) >= limit {
+					return out, nil
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
+func directAssignedWorkCandidate(item beads.Bead) bool {
+	switch strings.TrimSpace(item.Type) {
+	case "epic", "session", "agent", "role", "rig", "gate", "molecule", "message", "merge-request":
+		return false
+	default:
+		return true
+	}
+}
+
+func directAssignedWorkReady(store beads.Store, item beads.Bead, statusByID map[string]string) (bool, error) {
+	deps := item.Dependencies
+	if len(deps) == 0 {
+		var err error
+		deps, err = store.DepList(item.ID, "down")
+		if err != nil {
+			return false, err
+		}
+	}
+	for _, dep := range deps {
+		if !directAssignedBlockingDep(dep.Type) {
+			continue
+		}
+		status, ok := statusByID[dep.DependsOnID]
+		if !ok {
+			depBead, err := store.Get(dep.DependsOnID)
+			if err != nil {
+				return false, err
+			}
+			status = depBead.Status
+			statusByID[dep.DependsOnID] = status
+		}
+		if status != "closed" {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func directAssignedBlockingDep(depType string) bool {
+	switch strings.TrimSpace(depType) {
+	case "blocks", "waits-for", "conditional-blocks":
+		return true
+	default:
+		return false
+	}
 }
 
 func agentStoreRoot(cityPath string, cfg *config.City, agentCfg *config.Agent) string {

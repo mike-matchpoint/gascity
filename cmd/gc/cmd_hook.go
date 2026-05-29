@@ -121,7 +121,10 @@ func cmdHookWithFormat(args []string, inject bool, hookFormat string, stdout, st
 			fmt.Fprintf(stderr, "gc hook: %v\n", err) //nolint:errcheck
 			return 1
 		}
-		items, err := workselect.List(store, selector, 1)
+		items, err := listAssignedWorkForIdentities(store, workAssignmentIdentifiers(), 1)
+		if err == nil && len(items) == 0 {
+			items, err = workselect.List(store, selector, 1)
+		}
 		if err != nil {
 			fmt.Fprintf(stderr, "gc hook: %v\n", err) //nolint:errcheck
 			return 1
