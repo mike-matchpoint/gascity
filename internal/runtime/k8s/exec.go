@@ -115,11 +115,12 @@ type fakeK8sOps struct {
 }
 
 type fakeCall struct {
-	method    string
-	pod       string
-	container string
-	cmd       []string
-	selector  string
+	method        string
+	pod           string
+	container     string
+	cmd           []string
+	selector      string
+	fieldSelector string
 }
 
 func newFakeK8sOps() *fakeK8sOps {
@@ -178,7 +179,7 @@ func (f *fakeK8sOps) deletePod(_ context.Context, name string, _ int64) error {
 }
 
 func (f *fakeK8sOps) listPods(_ context.Context, selector string, fieldSelector string) ([]corev1.Pod, error) {
-	f.calls = append(f.calls, fakeCall{method: "listPods", selector: selector})
+	f.calls = append(f.calls, fakeCall{method: "listPods", selector: selector, fieldSelector: fieldSelector})
 	if f.listErr != nil {
 		return nil, f.listErr
 	}

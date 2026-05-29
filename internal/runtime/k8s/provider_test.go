@@ -357,6 +357,66 @@ func TestListRunning(t *testing.T) {
 	}
 }
 
+func TestInventoryListsPodsOnceWithoutTmuxProbes(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+
+	for i := 0; i < 30; i++ {
+		name := fmt.Sprintf("gc-test-agent-%02d", i)
+		addRunningPodWithAnnotation(fake, name, name, name)
+	}
+	addRunningPodWithAnnotation(fake, "gc-other-agent", "gc-other-agent", "gc-other-agent")
+	addRunningPodWithAnnotation(fake, "gc-test-deleting", "gc-test-deleting", "gc-test-deleting")
+	deleted := fake.pods["gc-test-deleting"]
+	now := metav1.Now()
+	deleted.DeletionTimestamp = &now
+	fake.pods["gc-test-pending"] = &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "gc-test-pending",
+			Labels:      map[string]string{"app": "gc-agent", "gc-session": "gc-test-pending"},
+			Annotations: map[string]string{"gc-session-name": "gc-test-pending"},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodPending},
+	}
+
+	inventory, err := p.Inventory(context.Background(), "gc-test-")
+	if err != nil {
+		t.Fatalf("Inventory: %v", err)
+	}
+	if !inventory.Complete {
+		t.Fatal("Inventory.Complete = false, want true")
+	}
+	if len(inventory.Observations) != 30 {
+		t.Fatalf("inventory observations = %d, want 30", len(inventory.Observations))
+	}
+	for i := 0; i < 30; i++ {
+		name := fmt.Sprintf("gc-test-agent-%02d", i)
+		running, known := inventory.RunningKnown(name)
+		if !known || !running {
+			t.Fatalf("RunningKnown(%q) = (%v, %v), want (true, true)", name, running, known)
+		}
+	}
+	if running, known := inventory.RunningKnown("gc-test-deleting"); !known || running {
+		t.Fatalf("RunningKnown(deleting) = (%v, %v), want known stopped", running, known)
+	}
+
+	listCalls := 0
+	for _, c := range fake.calls {
+		switch c.method {
+		case "listPods":
+			listCalls++
+			if c.selector != "app=gc-agent" || c.fieldSelector != "status.phase=Running" {
+				t.Fatalf("listPods selector = (%q, %q), want app=gc-agent/status.phase=Running", c.selector, c.fieldSelector)
+			}
+		case "execInPod":
+			t.Fatalf("Inventory performed tmux exec: %+v", c)
+		}
+	}
+	if listCalls != 1 {
+		t.Fatalf("listPods calls = %d, want 1", listCalls)
+	}
+}
+
 func TestListRuntimeArtifactsIncludesPendingPodsWithSessionID(t *testing.T) {
 	fake := newFakeK8sOps()
 	p := newProviderWithOps(fake)
