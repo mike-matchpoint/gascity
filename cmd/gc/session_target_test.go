@@ -49,6 +49,9 @@ func TestCurrentSessionRuntimeTargetPrefersProviderSessionNameOverInnerTmux(t *t
 	if got.sessionName != "rig--cartographer-gc-session-42" {
 		t.Fatalf("sessionName = %q, want provider session name", got.sessionName)
 	}
+	if got.runtimeMetadataSessionName() != "main" {
+		t.Fatalf("runtimeMetadataSessionName = %q, want inner tmux session", got.runtimeMetadataSessionName())
+	}
 }
 
 func TestCurrentSessionRuntimeTargetFallsBackToTmuxSessionName(t *testing.T) {
@@ -68,6 +71,9 @@ func TestCurrentSessionRuntimeTargetFallsBackToTmuxSessionName(t *testing.T) {
 	}
 	if got.sessionName != "host-session" {
 		t.Fatalf("sessionName = %q, want tmux fallback", got.sessionName)
+	}
+	if got.runtimeMetadataSessionName() != "host-session" {
+		t.Fatalf("runtimeMetadataSessionName = %q, want tmux fallback", got.runtimeMetadataSessionName())
 	}
 }
 
