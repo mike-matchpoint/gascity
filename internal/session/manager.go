@@ -580,16 +580,24 @@ func (m *Manager) createAliasedNamedWithTransport(ctx context.Context, alias, ex
 
 func (m *Manager) confirmStartedRuntimeMetadata(id string, b *beads.Bead) error {
 	metadata := ConfirmStartedPatch(time.Now().UTC())
+	current, err := m.store.Get(id)
+	if err != nil {
+		return fmt.Errorf("reloading session before storing started runtime metadata: %w", err)
+	}
+	if current.Status == "closed" {
+		return fmt.Errorf("%w: %s", ErrSessionClosed, id)
+	}
 	if err := m.store.SetMetadataBatch(id, metadata); err != nil {
 		return fmt.Errorf("storing started runtime metadata: %w", err)
 	}
 	if b != nil {
-		if b.Metadata == nil {
-			b.Metadata = make(map[string]string, len(metadata))
+		if current.Metadata == nil {
+			current.Metadata = make(map[string]string, len(metadata))
 		}
 		for k, v := range metadata {
-			b.Metadata[k] = v
+			current.Metadata[k] = v
 		}
+		*b = current
 	}
 	return nil
 }
@@ -1087,7 +1095,7 @@ func (m *Manager) ConfirmCreation(id string) error {
 		if !cmdLegal {
 			return nil // idempotent: already active
 		}
-		return m.store.SetMetadataBatch(id, ConfirmStartedPatch(time.Now()))
+		return m.confirmStartedRuntimeMetadata(id, nil)
 	})
 }
 

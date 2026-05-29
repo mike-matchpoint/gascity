@@ -210,6 +210,8 @@ func ConfirmStartedPatch(now time.Time) MetadataPatch {
 		"pending_create_claim":      "",
 		"pending_create_started_at": "",
 		"sleep_reason":              "",
+		"close_reason":              "",
+		"closed_at":                 "",
 	}
 }
 
@@ -259,6 +261,8 @@ func CommitStartedPatch(input CommitStartedPatchInput) MetadataPatch {
 		patch["state"] = string(StateActive)
 		patch["state_reason"] = "creation_complete"
 		patch["pending_create_started_at"] = ""
+		patch["close_reason"] = ""
+		patch["closed_at"] = ""
 	}
 	// creation_complete_at tracks when the runtime was last confirmed started.
 	// Stamp it whenever Now is non-zero — the ConfirmState path marks the

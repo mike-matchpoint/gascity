@@ -128,6 +128,8 @@ func TestLifecycleTransitionPatchesSetCompleteMetadata(t *testing.T) {
 				"pending_create_claim":      "",
 				"pending_create_started_at": "",
 				"sleep_reason":              "",
+				"close_reason":              "",
+				"closed_at":                 "",
 			},
 		},
 		{
@@ -500,6 +502,8 @@ func TestCommitStartedPatchBuildsAtomicStartMetadata(t *testing.T) {
 		"sleep_reason":               "",
 		"pending_create_claim":       "",
 		"pending_create_started_at":  "",
+		"close_reason":               "",
+		"closed_at":                  "",
 	}
 	if !reflect.DeepEqual(patch, want) {
 		t.Fatalf("patch = %#v, want %#v", patch, want)
@@ -519,7 +523,7 @@ func TestCommitStartedPatchClearsPendingCreateClaimAtomicallyWithStateTransition
 		ClearPendingCreateClaim: true,
 		Now:                     now,
 	})
-	required := []string{"state", "state_reason", "creation_complete_at", "pending_create_claim", "pending_create_started_at"}
+	required := []string{"state", "state_reason", "creation_complete_at", "pending_create_claim", "pending_create_started_at", "close_reason", "closed_at"}
 	for _, key := range required {
 		if _, ok := patch[key]; !ok {
 			t.Fatalf("patch missing %q — sweep-visibility atomicity broken: %#v", key, patch)

@@ -1734,6 +1734,20 @@ func setMetaBatch(store beads.Store, id string, batch map[string]string, stderr 
 }
 
 func closeFailedCreateBead(store beads.Store, id string, now time.Time, stderr io.Writer) bool {
+	closed := false
+	if err := session.WithSessionMutationLock(id, func() error {
+		closed = closeFailedCreateBeadLocked(store, id, now, stderr)
+		return nil
+	}); err != nil {
+		if stderr != nil {
+			fmt.Fprintf(stderr, "session beads: locking failed-create close for %s: %v\n", id, err) //nolint:errcheck
+		}
+		return false
+	}
+	return closed
+}
+
+func closeFailedCreateBeadLocked(store beads.Store, id string, now time.Time, stderr io.Writer) bool {
 	patch := session.ClosePatch(now.UTC(), string(session.StateFailedCreate))
 	patch["pending_create_claim"] = ""
 	patch["pending_create_started_at"] = ""
@@ -1906,7 +1920,7 @@ func cleanupDeadRuntimeSessionCorpses(
 	return cleaned
 }
 
-// reapRuntimesBoundToClosedBeads stops live runtime sessions whose
+// reapRuntimesBoundToClosedBeads reconciles live runtime sessions whose
 // GC_SESSION_ID identifies a session bead that has already been closed.
 //
 // This heals the case where a session_name (or its public alias) is reassigned
@@ -1923,17 +1937,23 @@ func cleanupDeadRuntimeSessionCorpses(
 // cleanupDeadRuntimeSessionCorpses does not catch this: it walks *open* beads
 // and only stops runtimes whose pane is already dead. Here the bead is *closed*
 // and the runtime is very much alive, so we walk the other direction — over
-// live runtimes — and reap any whose owning bead is confirmed closed.
+// live runtimes — and reap any whose owning bead is confirmed closed. A
+// failed-create close is the exception: when the same runtime identity later
+// proves live, the close was a stale rollback, so the bead is repaired back to
+// open/active instead of killing the runtime that successfully started.
 //
 // Safety: a runtime is only reaped when its GC_SESSION_ID names a bead the store
 // confirms is closed. A runtime without a readable GC_SESSION_ID, or one whose
 // bead is still open or cannot be fetched (e.g. another rig, or a transient
 // store error), is left untouched. Active drains are left to the drainTracker.
+// The return value counts runtimes that changed state, either by repair or
+// reap, so callers can refresh their open-session snapshot.
 func reapRuntimesBoundToClosedBeads(
 	store beads.Store,
 	sessionBeads *sessionBeadSnapshot,
 	dt *drainTracker,
 	sp runtime.Provider,
+	clk clock.Clock,
 	stderr io.Writer,
 ) int {
 	if store == nil || sp == nil {
@@ -1955,7 +1975,7 @@ func reapRuntimesBoundToClosedBeads(
 		return 0
 	}
 
-	reaped := 0
+	changed := 0
 	seen := make(map[string]bool, len(visible))
 	for _, artifact := range visible {
 		name := strings.TrimSpace(artifact.Name)
@@ -2002,6 +2022,11 @@ func reapRuntimesBoundToClosedBeads(
 			continue
 		}
 
+		if repairClosedFailedCreateRuntimeBinding(store, sp, sessionBeads, bead, name, nil, clk, stderr) {
+			changed++
+			continue
+		}
+
 		if err := sp.Stop(name); err != nil {
 			if runtime.IsSessionGone(err) {
 				continue
@@ -2010,9 +2035,9 @@ func reapRuntimesBoundToClosedBeads(
 			continue
 		}
 		fmt.Fprintf(stderr, "session reconciler: reaped runtime %q bound to closed session bead %s\n", name, liveID) //nolint:errcheck
-		reaped++
+		changed++
 	}
-	return reaped
+	return changed
 }
 
 func closeSessionBeadIfRuntimeStoppedAndUnassigned(
@@ -2110,6 +2135,20 @@ func staleReapStartBoundary(b beads.Bead) (time.Time, bool) {
 // the bead is safe to retire (or the close reason is unrelated to work
 // ownership, such as failed-create cleanup).
 func closeBead(store beads.Store, id, reason string, now time.Time, stderr io.Writer) bool {
+	closed := false
+	if err := session.WithSessionMutationLock(id, func() error {
+		closed = closeBeadLocked(store, id, reason, now, stderr)
+		return nil
+	}); err != nil {
+		if stderr != nil {
+			fmt.Fprintf(stderr, "session beads: locking close for %s: %v\n", id, err) //nolint:errcheck
+		}
+		return false
+	}
+	return closed
+}
+
+func closeBeadLocked(store beads.Store, id, reason string, now time.Time, stderr io.Writer) bool {
 	// Idempotence: closeBead is reached from three reconciler paths
 	// (closeSessionBeadIfUnassigned, closeSessionBeadIfRuntimeStoppedAndUnassigned,
 	// closeSessionBeadIfReachableStoreUnassigned). On an already-closed
@@ -2124,7 +2163,7 @@ func closeBead(store beads.Store, id, reason string, now time.Time, stderr io.Wr
 		return false
 	}
 	if reason == string(session.StateFailedCreate) {
-		return closeFailedCreateBead(store, id, now, stderr)
+		return closeFailedCreateBeadLocked(store, id, now, stderr)
 	}
 	if setMetaBatch(store, id, session.ClosePatch(now, reason), stderr) != nil {
 		return false
