@@ -29,9 +29,9 @@ func currentSessionRuntimeTarget() (sessionRuntimeTarget, error) {
 	if display == "" {
 		return sessionRuntimeTarget{}, fmt.Errorf("not in session context (GC_ALIAS/GC_SESSION_ID not set)")
 	}
-	sessionName := strings.TrimSpace(os.Getenv("GC_TMUX_SESSION"))
+	sessionName := strings.TrimSpace(os.Getenv("GC_SESSION_NAME"))
 	if sessionName == "" {
-		sessionName = strings.TrimSpace(os.Getenv("GC_SESSION_NAME"))
+		sessionName = strings.TrimSpace(os.Getenv("GC_TMUX_SESSION"))
 	}
 	if sessionName == "" {
 		return sessionRuntimeTarget{}, fmt.Errorf("not in session context (GC_SESSION_NAME not set)")
