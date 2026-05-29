@@ -2981,6 +2981,149 @@ func TestCommitAsyncStartResult_IgnoresClosedSessionSnapshot(t *testing.T) {
 	}
 }
 
+func TestCommitAsyncStartResult_RepairsClosedFailedCreateWithSameIdentity(t *testing.T) {
+	store := beads.NewMemStore()
+	clk := &clock.Fake{Time: time.Date(2026, 4, 26, 12, 2, 30, 0, time.UTC)}
+	session, err := store.Create(beads.Bead{
+		ID:     "gc-worker",
+		Title:  "worker",
+		Type:   sessionBeadType,
+		Labels: []string{sessionBeadLabel},
+		Metadata: creatingMeta(map[string]string{
+			"session_name":         "worker",
+			"template":             "worker",
+			"generation":           "2",
+			"continuation_epoch":   "1",
+			"instance_token":       "tok-worker",
+			"pending_create_claim": "true",
+			"last_woke_at":         clk.Now().Format(time.RFC3339),
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !closeFailedCreateBead(store, session.ID, clk.Now(), ioDiscard{}) {
+		t.Fatal("closeFailedCreateBead returned false")
+	}
+	sp := runtime.NewFake()
+	if err := sp.Start(context.Background(), "worker", runtime.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sp.SetMeta("worker", "GC_SESSION_ID", session.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := sp.SetMeta("worker", "GC_INSTANCE_TOKEN", "tok-worker"); err != nil {
+		t.Fatal(err)
+	}
+	result := startResult{
+		prepared: preparedStart{
+			candidate: startCandidate{
+				session: &session,
+				tp: TemplateParams{
+					Command:      "worker",
+					SessionName:  "worker",
+					TemplateName: "worker",
+				},
+			},
+			coreHash: "core",
+			liveHash: "live",
+		},
+		outcome:  "success",
+		started:  clk.Now(),
+		finished: clk.Now(),
+	}
+
+	if !commitAsyncStartResultWithContext(context.Background(), result, sp, store, clk, events.Discard, 0, ioDiscard{}, ioDiscard{}, nil) {
+		t.Fatal("closed failed-create async start result should repair and commit")
+	}
+	if !sp.IsRunning("worker") {
+		t.Fatal("matching live runtime should not be stopped during repair")
+	}
+	updated, err := store.Get(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != "open" {
+		t.Fatalf("status = %q, want open", updated.Status)
+	}
+	if got := updated.Metadata["state"]; got != "active" {
+		t.Fatalf("state = %q, want active", got)
+	}
+	if got := updated.Metadata["close_reason"]; got != "" {
+		t.Fatalf("close_reason = %q, want cleared", got)
+	}
+	if got := updated.Metadata["closed_at"]; got != "" {
+		t.Fatalf("closed_at = %q, want cleared", got)
+	}
+	if got := updated.Metadata["pending_create_claim"]; got != "" {
+		t.Fatalf("pending_create_claim = %q, want cleared", got)
+	}
+	if got := updated.Metadata["started_config_hash"]; got != "core" {
+		t.Fatalf("started_config_hash = %q, want core", got)
+	}
+	if got := updated.Metadata["creation_complete_at"]; got == "" {
+		t.Fatal("creation_complete_at is empty")
+	}
+}
+
+func TestRollbackPendingCreateSkipsWhenStartCommitAlreadyWon(t *testing.T) {
+	store := beads.NewMemStore()
+	now := time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)
+	session, err := store.Create(beads.Bead{
+		ID:     "gc-worker",
+		Title:  "worker",
+		Type:   sessionBeadType,
+		Labels: []string{sessionBeadLabel},
+		Metadata: creatingMeta(map[string]string{
+			"session_name":              "worker",
+			"template":                  "worker",
+			"generation":                "2",
+			"continuation_epoch":        "1",
+			"instance_token":            "tok-worker",
+			"pending_create_claim":      "true",
+			"pending_create_started_at": now.Add(-time.Minute).Format(time.RFC3339),
+			"last_woke_at":              now.Add(-time.Minute).Format(time.RFC3339),
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleRollbackSnapshot := session
+	metadata := sessionpkg.CommitStartedPatch(sessionpkg.CommitStartedPatchInput{
+		CoreHash:                "core",
+		LiveHash:                "live",
+		ConfirmState:            true,
+		ClearPendingCreateClaim: true,
+		Now:                     now,
+	})
+	committed, err := commitStartedSessionMetadata(&session, store, metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !committed {
+		t.Fatal("commitStartedSessionMetadata returned committed=false")
+	}
+
+	rollbackPendingCreate(&staleRollbackSnapshot, store, now.Add(time.Second), ioDiscard{})
+
+	updated, err := store.Get(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != "open" {
+		t.Fatalf("status = %q, want open", updated.Status)
+	}
+	if got := updated.Metadata["state"]; got != string(sessionpkg.StateActive) {
+		t.Fatalf("state = %q, want active", got)
+	}
+	if got := updated.Metadata["close_reason"]; got != "" {
+		t.Fatalf("close_reason = %q, want empty", got)
+	}
+	if got := updated.Metadata["creation_complete_at"]; got == "" {
+		t.Fatal("creation_complete_at is empty")
+	}
+}
+
 func TestCommitAsyncStartResult_StopsMatchingRuntimeForStaleSnapshot(t *testing.T) {
 	store := beads.NewMemStore()
 	clk := &clock.Fake{Time: time.Date(2026, 4, 26, 12, 2, 45, 0, time.UTC)}
