@@ -8,6 +8,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/gastownhall/gascity/internal/runtime"
+	"github.com/gastownhall/gascity/internal/shellquote"
 )
 
 func TestBuildPod_NodeSelector(t *testing.T) {
@@ -195,6 +196,81 @@ func TestBuildPodEntrypointLaunchesTmuxFromWorkDirAfterPreStart(t *testing.T) {
 	}
 }
 
+func TestBuildPodEntrypointDeliversPromptSuffixInLaunchCommand(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+	prompt := "Full startup prompt\nwith quoted ' text"
+	pod, err := buildPod("test-session", runtime.Config{
+		Command:      "codex --model gpt-5.5",
+		WorkDir:      "/city/rigs/frontend",
+		PromptSuffix: shellquote.Quote(prompt),
+		PromptFlag:   "--prompt",
+		Env: map[string]string{
+			"GC_CITY": "/city",
+		},
+	}, p)
+	if err != nil {
+		t.Fatalf("buildPod: %v", err)
+	}
+
+	args := pod.Spec.Containers[0].Args
+	if len(args) != 1 {
+		t.Fatalf("container args = %v, want one shell command", args)
+	}
+	entrypoint := args[0]
+	if strings.Contains(entrypoint, prompt) {
+		t.Fatalf("entrypoint leaked raw prompt text instead of base64 payload: %s", entrypoint)
+	}
+	if !strings.Contains(entrypoint, "mkdir -p '/workspace/rigs/frontend/.gc/tmp'") {
+		t.Fatalf("entrypoint does not create pod-local prompt dir: %s", entrypoint)
+	}
+	if want := base64.StdEncoding.EncodeToString([]byte(prompt)); !strings.Contains(entrypoint, want) {
+		t.Fatalf("entrypoint missing base64 prompt payload %q: %s", want, entrypoint)
+	}
+
+	cmd := decodedEntrypointCommand(t, entrypoint)
+	for _, want := range []string{
+		"sh -c ",
+		"/workspace/rigs/frontend/.gc/tmp/prompt-test-session.txt",
+		"exec codex --model gpt-5.5 --prompt \"$__gc_prompt\"",
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Fatalf("decoded launch command missing %q:\n%s", want, cmd)
+		}
+	}
+}
+
+func TestBuildPodEntrypointTransfersPromptFileOwnershipForDynamicUser(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+	pod, err := buildPod("test-session", runtime.Config{
+		Command:      "codex",
+		WorkDir:      "/city/rigs/frontend",
+		PromptSuffix: shellquote.Quote("full startup prompt"),
+		Env: map[string]string{
+			"GC_CITY":        "/city",
+			"LINUX_USERNAME": "agentuser",
+		},
+	}, p)
+	if err != nil {
+		t.Fatalf("buildPod: %v", err)
+	}
+
+	args := pod.Spec.Containers[0].Args
+	if len(args) != 1 {
+		t.Fatalf("container args = %v, want one shell command", args)
+	}
+	entrypoint := args[0]
+	if want := "chown -R 'agentuser' '/workspace/rigs/frontend/.gc/tmp'"; !strings.Contains(entrypoint, want) {
+		t.Fatalf("entrypoint does not transfer prompt dir ownership with %q:\n%s", want, entrypoint)
+	}
+	if want := `su - agentuser -c`; !strings.Contains(entrypoint, want) {
+		t.Fatalf("entrypoint does not drop to dynamic user with %q:\n%s", want, entrypoint)
+	}
+	script := decodedEntrypointScript(t, entrypoint)
+	if want := "rm -f '/workspace/rigs/frontend/.gc/tmp/prompt-test-session.txt'"; !strings.Contains(script, want) {
+		t.Fatalf("decoded launch script does not remove prompt file with %q:\n%s", want, script)
+	}
+}
+
 func TestBuildPodPersistentWorkspacePVCUsesMountedCityRoot(t *testing.T) {
 	p := newProviderWithOps(newFakeK8sOps())
 	p.workspacePVC = "demo-city-workspace"
@@ -280,6 +356,35 @@ func TestBuildPodPersistentWorkspacePVCUsesMountedCityRoot(t *testing.T) {
 			t.Fatalf("%s = %q, want %q", key, got, wantValue)
 		}
 	}
+}
+
+func decodedEntrypointCommand(t *testing.T, entrypoint string) string {
+	t.Helper()
+	const prefix = "CMD=$(echo '"
+	start := strings.Index(entrypoint, prefix)
+	if start == -1 {
+		t.Fatalf("entrypoint missing command base64 prefix %q: %s", prefix, entrypoint)
+	}
+	rest := entrypoint[start+len(prefix):]
+	end := strings.Index(rest, "' | base64 -d)")
+	if end == -1 {
+		t.Fatalf("entrypoint missing command base64 suffix: %s", entrypoint)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(rest[:end])
+	if err != nil {
+		t.Fatalf("decode command base64: %v", err)
+	}
+	return string(decoded)
+}
+
+func decodedEntrypointScript(t *testing.T, entrypoint string) string {
+	t.Helper()
+	cmd := decodedEntrypointCommand(t, entrypoint)
+	parts := shellquote.Split(cmd)
+	if len(parts) != 3 || parts[0] != "sh" || parts[1] != "-c" {
+		t.Fatalf("decoded launch command should be sh -c <script>, got %#v from %q", parts, cmd)
+	}
+	return parts[2]
 }
 
 func TestBuildPod_MountsProviderCredentialSecrets(t *testing.T) {
