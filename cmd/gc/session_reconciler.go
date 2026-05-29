@@ -1266,9 +1266,12 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		peek := cachedSessionPeek(cityPath, store, sp, cfg, session.ID, tp.Hints.ProcessNames)
 
 		// Zombie capture: session exists but process dead — grab scrollback for forensics.
-		if running && !alive {
+		zombieRuntime := running && !alive
+		zombieRateLimited := false
+		if zombieRuntime {
 			if output, err := peek(rateLimitPeekLines); err == nil && output != "" {
-				if !runtime.ContainsProviderRateLimitScreen(output) {
+				zombieRateLimited = runtime.ContainsProviderRateLimitScreen(output)
+				if !zombieRateLimited {
 					rec.Record(events.Event{
 						Type:    events.SessionCrashed,
 						Actor:   "gc",
@@ -1279,6 +1282,19 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					telemetry.RecordAgentCrash(context.Background(), tp.DisplayName(), output)
 				}
 			}
+		}
+		stopZombieRuntime := func(reason string) bool {
+			if !zombieRuntime || zombieRateLimited {
+				return false
+			}
+			if err := workerKillSessionTargetWithConfig("", store, sp, cfg, name); err != nil {
+				fmt.Fprintf(stderr, "session reconciler: stopping zombie runtime %s: %v\n", name, err) //nolint:errcheck
+				return true
+			}
+			if trace != nil {
+				trace.recordDecision("reconciler.session.zombie", tp.TemplateName, name, reason, "stop", nil, nil, "")
+			}
+			return true
 		}
 		if alive && shouldRollbackPendingCreate(session) && !runningSessionMatchesPendingCreate(session, name, sp) {
 			attemptRollbackPendingCreate(session, tp.TemplateName, name, "pending_create_rollback", "live runtime belongs to another session", false)
@@ -1493,6 +1509,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		// Stability check: detect rapid crash after state healing. Rate-limit
 		// detection intentionally ran above before healState.
 		if checkStability(session, cfg, alive, dt, store, clk, nil) {
+			stopZombieRuntime("stability")
 			continue // rapid exit recorded, skip further processing
 		}
 
@@ -1501,7 +1518,11 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		// died before churnProductivityThreshold — alive long enough to
 		// not be a rapid crash, but too short to be productive.
 		if checkChurn(session, cfg, alive, dt, store, clk) {
+			stopZombieRuntime("churn")
 			continue // churn recorded, skip further processing
+		}
+		if stopZombieRuntime("stale_runtime") {
+			continue
 		}
 
 		// Clear wake failures for sessions that have been stable long enough.
