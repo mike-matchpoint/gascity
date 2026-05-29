@@ -1766,40 +1766,62 @@ func shouldRollbackPendingCreate(session *beads.Bead) bool {
 	return strings.TrimSpace(session.Metadata["pending_create_claim"]) == "true"
 }
 
-func runningSessionMatchesPendingCreate(session *beads.Bead, sessionName string, sp runtime.Provider) bool {
+type pendingCreateRuntimeIdentityStatus int
+
+const (
+	pendingCreateRuntimeIdentityUnknown pendingCreateRuntimeIdentityStatus = iota
+	pendingCreateRuntimeIdentityMatch
+	pendingCreateRuntimeIdentityMismatch
+)
+
+// A false match can mean either "belongs elsewhere" or "not readable yet".
+// Keep those distinct so fresh provider starts are not rolled back before
+// their metadata becomes observable.
+func pendingCreateRuntimeIdentity(session *beads.Bead, sessionName string, sp runtime.Provider) pendingCreateRuntimeIdentityStatus {
 	if session == nil || sp == nil {
-		return false
+		return pendingCreateRuntimeIdentityUnknown
 	}
 	liveID := ""
+	liveIDSet := false
 	if value, err := sp.GetMeta(sessionName, "GC_SESSION_ID"); err == nil {
 		liveID = strings.TrimSpace(value)
+		liveIDSet = liveID != ""
 		if liveID != "" && liveID != session.ID {
-			return false
+			return pendingCreateRuntimeIdentityMismatch
 		}
 	}
 	expectedToken := strings.TrimSpace(session.Metadata["instance_token"])
 	liveToken := ""
+	liveTokenSet := false
 	if value, err := sp.GetMeta(sessionName, "GC_INSTANCE_TOKEN"); err == nil {
 		liveToken = value
 		liveToken = strings.TrimSpace(liveToken)
+		liveTokenSet = liveToken != ""
 		if liveToken != "" && liveToken != expectedToken {
 			liveGeneration, _ := sp.GetMeta(sessionName, "GC_RUNTIME_EPOCH")
 			expectedGeneration := strings.TrimSpace(session.Metadata["generation"])
 			if strings.TrimSpace(liveGeneration) != "" && expectedGeneration != "" && strings.TrimSpace(liveGeneration) != expectedGeneration {
-				return false
+				return pendingCreateRuntimeIdentityMismatch
 			}
 			if liveID == "" {
-				return false
+				return pendingCreateRuntimeIdentityMismatch
 			}
 		}
 	}
-	if liveID != "" {
-		return liveID == session.ID
+	if liveIDSet {
+		return pendingCreateRuntimeIdentityMatch
 	}
 	if expectedToken == "" {
-		return false
+		return pendingCreateRuntimeIdentityUnknown
 	}
-	return expectedToken != "" && liveToken == expectedToken
+	if liveTokenSet && liveToken == expectedToken {
+		return pendingCreateRuntimeIdentityMatch
+	}
+	return pendingCreateRuntimeIdentityUnknown
+}
+
+func runningSessionMatchesPendingCreate(session *beads.Bead, sessionName string, sp runtime.Provider) bool {
+	return pendingCreateRuntimeIdentity(session, sessionName, sp) == pendingCreateRuntimeIdentityMatch
 }
 
 func rollbackPendingCreate(session *beads.Bead, store beads.Store, now time.Time, stderr io.Writer) {

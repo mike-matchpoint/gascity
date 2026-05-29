@@ -755,6 +755,52 @@ func pendingCreateLeaseExpiredForRollback(session beads.Bead, clk clock.Clock, s
 	return pendingCreateAttemptStale(session, clk)
 }
 
+// Rollback is destructive, so re-read the bead before acting on a possibly
+// stale reconciler snapshot from an older tick or async start window.
+func refreshPendingCreateRollbackSession(session *beads.Bead, store beads.Store) (*beads.Bead, string, bool) {
+	if session == nil {
+		return nil, "missing_session", false
+	}
+	if store == nil {
+		return session, "missing_store", false
+	}
+	current, err := store.Get(session.ID)
+	if err != nil {
+		return session, "store_get_failed: " + err.Error(), false
+	}
+	if current.Status == "closed" {
+		return &current, "session_closed", false
+	}
+	if !isSessionBead(current) {
+		return &current, "not_session_bead", false
+	}
+	if !shouldRollbackPendingCreate(&current) {
+		return &current, "pending_create_already_cleared", false
+	}
+	if !pendingCreateSnapshotMatchesCurrent(*session, current) {
+		return &current, "stale_pending_create_snapshot", false
+	}
+	return &current, "", true
+}
+
+func pendingCreateSnapshotMatchesCurrent(snapshot, current beads.Bead) bool {
+	if strings.TrimSpace(snapshot.ID) == "" || snapshot.ID != current.ID {
+		return false
+	}
+	for _, key := range []string{
+		"session_name",
+		"generation",
+		"instance_token",
+		"pending_create_started_at",
+		"last_woke_at",
+	} {
+		if strings.TrimSpace(snapshot.Metadata[key]) != strings.TrimSpace(current.Metadata[key]) {
+			return false
+		}
+	}
+	return true
+}
+
 func pendingCreateQueuedOrCreatingState(state string) bool {
 	switch sessionpkg.State(strings.TrimSpace(state)) {
 	case sessionpkg.StateStartPending, sessionpkg.StateCreating:
@@ -1119,6 +1165,16 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 	const maxRollbacksPerTick = 5
 	rollbacksThisTick := 0
 	attemptRollbackPendingCreate := func(session *beads.Bead, templateName, name, action, detail string, clearClaim bool) {
+		currentSession, deferReason, rollbackCurrent := refreshPendingCreateRollbackSession(session, store)
+		if !rollbackCurrent {
+			if trace != nil {
+				trace.recordDecision("reconciler.session.pending_create", templateName, name, action, "rollback_deferred", traceRecordPayload{
+					"reason": deferReason,
+				}, nil, "")
+			}
+			return
+		}
+		session = currentSession
 		if rollbacksThisTick >= maxRollbacksPerTick {
 			fmt.Fprintf(stderr, "session reconciler: deferring rollback of %s (%s): rollback budget exhausted this tick\n", name, detail) //nolint:errcheck
 			if trace != nil {
@@ -1471,9 +1527,16 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			}
 			return true
 		}
-		if alive && shouldRollbackPendingCreate(session) && !runningSessionMatchesPendingCreate(session, name, sp) {
-			attemptRollbackPendingCreate(session, tp.TemplateName, name, "pending_create_rollback", "live runtime belongs to another session", false)
-			continue
+		if alive && shouldRollbackPendingCreate(session) {
+			identity := pendingCreateRuntimeIdentity(session, name, sp)
+			if identity == pendingCreateRuntimeIdentityUnknown && pendingCreateStartInFlight(*session, clk, startupTimeout) {
+				if trace != nil {
+					trace.recordDecision("reconciler.session.pending_create", tp.TemplateName, name, "pending_create_recovery_in_flight", "deferred", nil, nil, "")
+				}
+			} else if identity != pendingCreateRuntimeIdentityMatch {
+				attemptRollbackPendingCreate(session, tp.TemplateName, name, "pending_create_rollback", "live runtime belongs to another session", false)
+				continue
+			}
 		}
 		// Desired-branch counterpart to pendingCreateSessionStillLeased: a
 		// session bead in the desired set with pending_create_claim=true but
