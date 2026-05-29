@@ -1,13 +1,142 @@
 package main
 
 import (
+	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 )
+
+func setupTypedWorkCommandCity(t *testing.T) beads.Store {
+	t.Helper()
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+	resetFlags(t)
+	t.Setenv("GC_BEADS", "file")
+	t.Setenv("GC_BEADS_SCOPE_ROOT", "")
+	cityDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cityDir, ".gc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureScopedFileStoreLayout(cityDir); err != nil {
+		t.Fatalf("ensure scoped file store layout: %v", err)
+	}
+	if err := ensurePersistedScopeLocalFileStore(cityDir); err != nil {
+		t.Fatalf("ensure file store: %v", err)
+	}
+	cityToml := `[workspace]
+name = "typed-work-test"
+
+[[agent]]
+name = "worker"
+
+[agent.work_selector]
+type = "task"
+unassigned = true
+ready = true
+
+[agent.work_selector.metadata]
+"gc.routed_to" = "worker"
+`
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(cityToml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GC_CITY", cityDir)
+	store, err := openCityStoreAt(cityDir)
+	if err != nil {
+		t.Fatalf("open city store: %v", err)
+	}
+	return store
+}
+
+func TestCmdHookTypedSelectorReturnsAssignedInProgressWork(t *testing.T) {
+	store := setupTypedWorkCommandCity(t)
+	work, err := store.Create(beads.Bead{
+		Title:    "resume assigned work",
+		Type:     "task",
+		Assignee: "worker-session",
+	})
+	if err != nil {
+		t.Fatalf("create work: %v", err)
+	}
+	if err := store.Update(work.ID, beads.UpdateOpts{Status: stringPtr("in_progress")}); err != nil {
+		t.Fatalf("mark in_progress: %v", err)
+	}
+	t.Setenv("GC_TEMPLATE", "worker")
+	t.Setenv("GC_SESSION_NAME", "worker-session")
+
+	var stdout, stderr bytes.Buffer
+	code := cmdHook(nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("cmdHook() = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	if out := stdout.String(); !strings.Contains(out, work.ID) {
+		t.Fatalf("stdout = %q, want assigned work %s", out, work.ID)
+	}
+}
+
+func TestCmdWorkClaimTypedSelectorIsIdempotentForAssignedInProgressWork(t *testing.T) {
+	store := setupTypedWorkCommandCity(t)
+	work, err := store.Create(beads.Bead{
+		Title:    "already claimed",
+		Type:     "task",
+		Assignee: "worker-session",
+	})
+	if err != nil {
+		t.Fatalf("create work: %v", err)
+	}
+	if err := store.Update(work.ID, beads.UpdateOpts{Status: stringPtr("in_progress")}); err != nil {
+		t.Fatalf("mark in_progress: %v", err)
+	}
+	t.Setenv("GC_TEMPLATE", "worker")
+	t.Setenv("GC_SESSION_NAME", "worker-session")
+	t.Setenv("GC_ALIAS", "worker-alias")
+
+	var stdout, stderr bytes.Buffer
+	code := cmdWorkClaim(workCommandOptions{JSON: true, Status: "in_progress"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("cmdWorkClaim() = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	if out := stdout.String(); !strings.Contains(out, work.ID) {
+		t.Fatalf("stdout = %q, want assigned work %s", out, work.ID)
+	}
+	final, err := store.Get(work.ID)
+	if err != nil {
+		t.Fatalf("get final: %v", err)
+	}
+	if final.Status != "in_progress" || final.Assignee != "worker-session" {
+		t.Fatalf("final status=%q assignee=%q, want in_progress worker-session", final.Status, final.Assignee)
+	}
+}
+
+func TestCmdWorkNextTypedSelectorReturnsReadyAssignedStep(t *testing.T) {
+	store := setupTypedWorkCommandCity(t)
+	work, err := store.Create(beads.Bead{
+		Title:    "assigned formula step",
+		Type:     "step",
+		Assignee: "worker-session",
+	})
+	if err != nil {
+		t.Fatalf("create work: %v", err)
+	}
+	t.Setenv("GC_TEMPLATE", "worker")
+	t.Setenv("GC_SESSION_NAME", "worker-session")
+
+	var stdout, stderr bytes.Buffer
+	code := cmdWorkNext(workCommandOptions{JSON: true}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("cmdWorkNext() = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	if out := stdout.String(); !strings.Contains(out, work.ID) {
+		t.Fatalf("stdout = %q, want assigned step %s", out, work.ID)
+	}
+}
 
 func TestClaimNextWorkSingleWinner(t *testing.T) {
 	store := beads.NewMemStore()
