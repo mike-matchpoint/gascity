@@ -15,6 +15,7 @@ import (
 	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/pathutil"
 	"github.com/gastownhall/gascity/internal/runtime"
+	"github.com/gastownhall/gascity/internal/shellquote"
 )
 
 const (
@@ -207,6 +208,11 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 	if ctrlCity != "" {
 		agentCmd = strings.ReplaceAll(agentCmd, ctrlCity, podCityRoot)
 	}
+	// Dynamic user creation: when LINUX_USERNAME is set, the container starts
+	// as root (see securityContext below), creates the user, sets up workspace
+	// ownership, then drops privileges via su for the tmux session.
+	linuxUsername := cfg.Env["LINUX_USERNAME"]
+	promptSetup, agentCmd := podPromptStartupCommand(name, cfg, agentCmd, podWorkDir, linuxUsername)
 	cmdB64 := base64.StdEncoding.EncodeToString([]byte(agentCmd))
 
 	// Pod entrypoint: wait for workspace ready → pre_start → tmux → keepalive.
@@ -222,10 +228,6 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 		preStartCmds += fmt.Sprintf("echo '%s' | base64 -d | sh; ", b64)
 	}
 
-	// Dynamic user creation: when LINUX_USERNAME is set, the container starts
-	// as root (see securityContext below), creates the user, sets up workspace
-	// ownership, then drops privileges via su for the tmux session.
-	linuxUsername := cfg.Env["LINUX_USERNAME"]
 	var userSetup string
 	if linuxUsername != "" {
 		userSetup = fmt.Sprintf(
@@ -250,15 +252,15 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 	if linuxUsername != "" {
 		// Run tmux session as the dynamic user via su.
 		tmuxCmd = fmt.Sprintf(
-			"%s%s%s%sCMD=$(echo '%s' | base64 -d) && "+
+			"%s%s%s%s%sCMD=$(echo '%s' | base64 -d) && "+
 				`su - %s -c "cd %s && tmux new-session -d -s %s \"$CMD\" && sleep infinity"`,
-			userSetup, credCopy, wsWait, preStartCmds, cmdB64,
+			userSetup, credCopy, wsWait, preStartCmds, promptSetup, cmdB64,
 			linuxUsername, quotedPodWorkDir, tmuxSession,
 		)
 	} else {
 		tmuxCmd = fmt.Sprintf(
-			"%s%s%sCMD=$(echo '%s' | base64 -d) && cd %s && tmux new-session -d -s %s \"$CMD\" && sleep infinity",
-			credCopy, wsWait, preStartCmds, cmdB64, quotedPodWorkDir, tmuxSession,
+			"%s%s%s%sCMD=$(echo '%s' | base64 -d) && cd %s && tmux new-session -d -s %s \"$CMD\" && sleep infinity",
+			credCopy, wsWait, preStartCmds, promptSetup, cmdB64, quotedPodWorkDir, tmuxSession,
 		)
 	}
 
@@ -580,6 +582,46 @@ func buildResources(p *Provider) (corev1.ResourceRequirements, error) {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+func podPromptStartupCommand(sessionName string, cfg runtime.Config, command, podWorkDir, linuxUsername string) (string, string) {
+	if strings.TrimSpace(cfg.PromptSuffix) == "" {
+		return "", command
+	}
+	prompt := cfg.PromptSuffix
+	if parts := shellquote.Split(cfg.PromptSuffix); len(parts) > 0 {
+		prompt = parts[0]
+	}
+	promptDir := filepath.Join(podWorkDir, ".gc", "tmp")
+	promptPath := filepath.Join(promptDir, "prompt-"+SanitizeName(sessionName)+".txt")
+	promptB64 := base64.StdEncoding.EncodeToString([]byte(prompt))
+	promptDirQuoted := shellSingleQuote(promptDir)
+	promptPathQuoted := shellSingleQuote(promptPath)
+	promptSetupCmd := fmt.Sprintf(
+		"mkdir -p %s && echo '%s' | base64 -d > %s",
+		promptDirQuoted,
+		promptB64,
+		promptPathQuoted,
+	)
+	if linuxUsername != "" {
+		promptSetupCmd += fmt.Sprintf(" && chown -R %s %s", shellSingleQuote(linuxUsername), promptDirQuoted)
+	}
+	promptSetup := fmt.Sprintf(
+		"%s; ",
+		promptSetupCmd,
+	)
+	promptArg := `"$__gc_prompt"`
+	if strings.TrimSpace(cfg.PromptFlag) != "" {
+		promptArg = cfg.PromptFlag + " " + promptArg
+	}
+	script := fmt.Sprintf(
+		`__gc_prompt="$(cat %s && printf .)"; __gc_status=$?; rm -f %s; [ "$__gc_status" -eq 0 ] || exit "$__gc_status"; __gc_prompt="${__gc_prompt%%.}"; exec %s %s`,
+		promptPathQuoted,
+		promptPathQuoted,
+		command,
+		promptArg,
+	)
+	return promptSetup, "sh -c " + shellquote.Quote(script)
+}
 
 func shellSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
