@@ -217,6 +217,7 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 	if !p.prebaked {
 		wsWait = `while [ ! -f /workspace/.gc-workspace-ready ]; do sleep 0.5; done; `
 	}
+	quotedPodWorkDir := shellSingleQuote(podWorkDir)
 
 	var tmuxCmd string
 	if linuxUsername != "" {
@@ -225,12 +226,12 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 			"%s%s%s%sCMD=$(echo '%s' | base64 -d) && "+
 				`su - %s -c "cd %s && tmux new-session -d -s %s \"$CMD\" && sleep infinity"`,
 			userSetup, credCopy, wsWait, preStartCmds, cmdB64,
-			linuxUsername, podWorkDir, tmuxSession,
+			linuxUsername, quotedPodWorkDir, tmuxSession,
 		)
 	} else {
 		tmuxCmd = fmt.Sprintf(
-			"%s%s%sCMD=$(echo '%s' | base64 -d) && tmux new-session -d -s %s \"$CMD\" && sleep infinity",
-			credCopy, wsWait, preStartCmds, cmdB64, tmuxSession,
+			"%s%s%sCMD=$(echo '%s' | base64 -d) && cd %s && tmux new-session -d -s %s \"$CMD\" && sleep infinity",
+			credCopy, wsWait, preStartCmds, cmdB64, quotedPodWorkDir, tmuxSession,
 		)
 	}
 
@@ -532,3 +533,7 @@ func buildResources(p *Provider) (corev1.ResourceRequirements, error) {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+}

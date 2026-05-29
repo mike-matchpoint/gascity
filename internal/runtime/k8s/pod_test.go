@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -139,5 +140,37 @@ func TestBuildPod_ClonesSchedulingFields(t *testing.T) {
 	values := p.affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0].MatchExpressions[0].Values
 	if values[0] != "gpu" {
 		t.Fatalf("provider affinity value mutated to %q", values[0])
+	}
+}
+
+func TestBuildPodEntrypointLaunchesTmuxFromWorkDirAfterPreStart(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+	pod, err := buildPod("test-session", runtime.Config{
+		Command:  "codex",
+		WorkDir:  "/city/rigs/frontend",
+		PreStart: []string{"rm -rf /workspace/rigs/frontend && mkdir -p /workspace/rigs/frontend"},
+		Env: map[string]string{
+			"GC_CITY": "/city",
+		},
+	}, p)
+	if err != nil {
+		t.Fatalf("buildPod: %v", err)
+	}
+
+	args := pod.Spec.Containers[0].Args
+	if len(args) != 1 {
+		t.Fatalf("container args = %v, want one shell command", args)
+	}
+	entrypoint := args[0]
+	preStartIdx := strings.Index(entrypoint, "base64 -d | sh")
+	launchIdx := strings.Index(entrypoint, "cd '/workspace/rigs/frontend' && tmux new-session")
+	if preStartIdx == -1 {
+		t.Fatalf("entrypoint does not run pre_start via base64 shell: %s", entrypoint)
+	}
+	if launchIdx == -1 {
+		t.Fatalf("entrypoint does not cd to projected workdir before tmux: %s", entrypoint)
+	}
+	if preStartIdx > launchIdx {
+		t.Fatalf("entrypoint cd happens before pre_start; want pre_start then final cd: %s", entrypoint)
 	}
 }
