@@ -577,6 +577,122 @@ func TestStartCreatesPodsAndWaits(t *testing.T) {
 	if pod.Annotations["gc-session-name"] != "gc-test-agent" {
 		t.Errorf("annotation gc-session-name = %q, want gc-test-agent", pod.Annotations["gc-session-name"])
 	}
+	if pod.Annotations[providerRuntimeProviderAnnotation] != "k8s" {
+		t.Errorf("annotation %s = %q, want k8s", providerRuntimeProviderAnnotation, pod.Annotations[providerRuntimeProviderAnnotation])
+	}
+	if pod.Annotations[providerRuntimeFingerprintAnnotation] == "" {
+		t.Fatalf("missing %s annotation", providerRuntimeFingerprintAnnotation)
+	}
+	if pod.Annotations[providerRuntimeFingerprintVersionAnnotation] != providerRuntimeFingerprintVersion {
+		t.Errorf("annotation %s = %q, want %s", providerRuntimeFingerprintVersionAnnotation, pod.Annotations[providerRuntimeFingerprintVersionAnnotation], providerRuntimeFingerprintVersion)
+	}
+	if pod.Annotations[providerRuntimeImageAnnotation] != p.image {
+		t.Errorf("annotation %s = %q, want %s", providerRuntimeImageAnnotation, pod.Annotations[providerRuntimeImageAnnotation], p.image)
+	}
+}
+
+func TestObserveRuntimeCompatibilityClassifiesCompatibleAndLegacyPods(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	cfg := runtime.Config{
+		Command: "claude",
+		Env:     map[string]string{"GC_AGENT": "mayor", "GC_CITY": "/workspace"},
+	}
+
+	addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+	fake.setExecResult("gc-test-agent",
+		[]string{"tmux", "has-session", "-t", "main"}, "", nil)
+
+	legacy, err := p.ObserveRuntimeCompatibility(context.Background(), "gc-test-agent", cfg)
+	if err != nil {
+		t.Fatalf("ObserveRuntimeCompatibility legacy: %v", err)
+	}
+	if legacy.Compatible || legacy.Reason != "missing-runtime-identity" || !legacy.Alive {
+		t.Fatalf("legacy compatibility = %#v, want alive incompatible missing-runtime-identity", legacy)
+	}
+
+	annotatePodWithDesiredRuntimeIdentity(t, p, "gc-test-agent", cfg)
+	compatible, err := p.ObserveRuntimeCompatibility(context.Background(), "gc-test-agent", cfg)
+	if err != nil {
+		t.Fatalf("ObserveRuntimeCompatibility compatible: %v", err)
+	}
+	if !compatible.Compatible || compatible.Desired.Fingerprint == "" || compatible.Current.Fingerprint != compatible.Desired.Fingerprint {
+		t.Fatalf("compatible observation = %#v", compatible)
+	}
+}
+
+func TestProviderRuntimeFingerprintChangesForSubstrateFields(t *testing.T) {
+	baseProvider := newProviderWithOps(newFakeK8sOps())
+	baseCfg := runtime.Config{
+		Env: map[string]string{"GC_AGENT": "mayor", "GC_CITY": "/workspace"},
+	}
+	base := mustDesiredProviderRuntimeIdentity(t, baseProvider, baseCfg)
+
+	tests := []struct {
+		name   string
+		mutate func(*Provider, *runtime.Config)
+	}{
+		{
+			name: "main image",
+			mutate: func(p *Provider, _ *runtime.Config) {
+				p.image = "test-image:v2"
+			},
+		},
+		{
+			name: "service account",
+			mutate: func(p *Provider, _ *runtime.Config) {
+				p.serviceAccount = "agent-runtime"
+			},
+		},
+		{
+			name: "resources",
+			mutate: func(p *Provider, _ *runtime.Config) {
+				p.cpuRequest = "750m"
+				p.memLimit = "6Gi"
+			},
+		},
+		{
+			name: "prebaked workspace mode",
+			mutate: func(p *Provider, _ *runtime.Config) {
+				p.prebaked = true
+			},
+		},
+		{
+			name: "linux username home projection",
+			mutate: func(_ *Provider, cfg *runtime.Config) {
+				cfg.Env["LINUX_USERNAME"] = "gascity"
+			},
+		},
+		{
+			name: "scheduling",
+			mutate: func(p *Provider, _ *runtime.Config) {
+				p.nodeSelector = map[string]string{"workload": "gc-agents"}
+				p.priorityClassName = "gc-agent-high"
+			},
+		},
+		{
+			name: "managed dolt service env",
+			mutate: func(_ *Provider, cfg *runtime.Config) {
+				cfg.Env["GC_DOLT_HOST"] = "127.0.0.1"
+				cfg.Env["GC_DOLT_PORT"] = "3307"
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newProviderWithOps(newFakeK8sOps())
+			cfg := runtime.Config{Env: map[string]string{}}
+			for k, v := range baseCfg.Env {
+				cfg.Env[k] = v
+			}
+			tt.mutate(p, &cfg)
+			got := mustDesiredProviderRuntimeIdentity(t, p, cfg)
+			if got.Fingerprint == base.Fingerprint {
+				t.Fatalf("fingerprint did not change for %s: %s", tt.name, got.Fingerprint)
+			}
+		})
+	}
 }
 
 func TestStartDetectsStalePod(t *testing.T) {
@@ -636,12 +752,36 @@ func TestStartRejectsExistingLiveSession(t *testing.T) {
 		ProcessNames: []string{"claude"},
 		Env:          map[string]string{"GC_AGENT": "mayor", "GC_CITY": "/workspace"},
 	}
+	annotatePodWithDesiredRuntimeIdentity(t, p, "gc-test-agent", cfg)
 	err := p.Start(context.Background(), "gc-test-agent", cfg)
 	if err == nil {
 		t.Fatal("Start should fail for existing live session")
 	}
 	if want := "already exists"; !contains(err.Error(), want) {
 		t.Errorf("error = %q, want containing %q", err, want)
+	}
+}
+
+func TestStartRejectsIncompatibleLiveSessionWithoutDeletingPod(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+
+	addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+	fake.setExecResult("gc-test-agent",
+		[]string{"tmux", "has-session", "-t", "main"}, "", nil)
+
+	err := p.Start(context.Background(), "gc-test-agent", runtime.Config{
+		Command:      "claude",
+		ProcessNames: []string{"claude"},
+		Env:          map[string]string{"GC_AGENT": "mayor", "GC_CITY": "/workspace"},
+	})
+	if !errors.Is(err, runtime.ErrRuntimeIncompatible) {
+		t.Fatalf("Start error = %v, want ErrRuntimeIncompatible", err)
+	}
+	for _, c := range fake.calls {
+		if c.method == "deletePod" && c.pod == "gc-test-agent" {
+			t.Fatal("incompatible live pod was deleted by Start")
+		}
 	}
 }
 
@@ -668,6 +808,7 @@ func TestStartTreatsYoungPodWithDeadTmuxAsInitializing(t *testing.T) {
 		ProcessNames: []string{"claude"},
 		Env:          map[string]string{"GC_AGENT": "mayor", "GC_CITY": "/workspace"},
 	}
+	annotatePodWithDesiredRuntimeIdentity(t, p, "gc-test-agent", cfg)
 	err := p.Start(context.Background(), "gc-test-agent", cfg)
 	if err == nil {
 		t.Fatal("Start should return error for initializing pod")
@@ -681,6 +822,42 @@ func TestStartTreatsYoungPodWithDeadTmuxAsInitializing(t *testing.T) {
 		if c.method == "deletePod" && c.pod == "gc-test-agent" {
 			t.Error("young pod was deleted despite still initializing")
 		}
+	}
+}
+
+func TestStartReplacesYoungIncompatiblePodWithDeadTmux(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+
+	fake.pods["gc-test-agent"] = &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "gc-test-agent",
+			Labels:            map[string]string{"app": "gc-agent", "gc-session": "gc-test-agent"},
+			CreationTimestamp: metav1.Now(),
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	fake.setExecResult("gc-test-agent",
+		[]string{"tmux", "has-session", "-t", "main"}, "",
+		fmt.Errorf("no server running on /tmp/tmux-1000/default"))
+	fake.createErr = fmt.Errorf("intentional: verify incompatible replacement")
+
+	err := p.Start(context.Background(), "gc-test-agent", runtime.Config{
+		Command:      "claude",
+		ProcessNames: []string{"claude"},
+		Env:          map[string]string{"GC_AGENT": "mayor", "GC_CITY": "/workspace"},
+	})
+	if errors.Is(err, runtime.ErrSessionInitializing) {
+		t.Fatalf("Start error = %v, want replacement attempt, not ErrSessionInitializing", err)
+	}
+	foundDelete := false
+	for _, c := range fake.calls {
+		if c.method == "deletePod" && c.pod == "gc-test-agent" {
+			foundDelete = true
+		}
+	}
+	if !foundDelete {
+		t.Fatal("young incompatible pod with dead tmux was not deleted")
 	}
 }
 
@@ -2000,6 +2177,31 @@ func addRunningPodWithAnnotation(fake *fakeK8sOps, name, sessionLabel, sessionNa
 		},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
+}
+
+func annotatePodWithDesiredRuntimeIdentity(t *testing.T, p *Provider, podName string, cfg runtime.Config) {
+	t.Helper()
+	identity := mustDesiredProviderRuntimeIdentity(t, p, cfg)
+	pod := p.ops.(*fakeK8sOps).pods[podName]
+	if pod == nil {
+		t.Fatalf("pod %q not found", podName)
+	}
+	if pod.Annotations == nil {
+		pod.Annotations = map[string]string{}
+	}
+	pod.Annotations[providerRuntimeFingerprintAnnotation] = identity.Fingerprint
+	pod.Annotations[providerRuntimeFingerprintVersionAnnotation] = identity.Version
+	pod.Annotations[providerRuntimeImageAnnotation] = p.image
+	pod.Annotations[providerRuntimeProviderAnnotation] = "k8s"
+}
+
+func mustDesiredProviderRuntimeIdentity(t *testing.T, p *Provider, cfg runtime.Config) runtime.ProviderRuntimeIdentity {
+	t.Helper()
+	identity, err := p.desiredProviderRuntimeIdentity(cfg)
+	if err != nil {
+		t.Fatalf("desiredProviderRuntimeIdentity: %v", err)
+	}
+	return identity
 }
 
 func contains(s, substr string) bool {

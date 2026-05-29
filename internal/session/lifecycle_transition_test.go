@@ -427,6 +427,21 @@ func TestLifecycleTransitionPatchesSetCompleteMetadata(t *testing.T) {
 		},
 	}
 
+	for i := range tests {
+		switch tests[i].name {
+		case "pre wake fresh mode",
+			"continuation reset wake",
+			"acknowledge drain fresh mode",
+			"complete drain fresh mode",
+			"restart request",
+			"restart request without rotated key",
+			"config drift reset to creating",
+			"config drift reset to asleep",
+			"config drift reset to asleep without rotated key":
+			addProviderRuntimeResetExpectations(tests[i].want)
+		}
+	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if !reflect.DeepEqual(tt.patch, tt.want) {
@@ -434,6 +449,12 @@ func TestLifecycleTransitionPatchesSetCompleteMetadata(t *testing.T) {
 			}
 		})
 	}
+}
+
+func addProviderRuntimeResetExpectations(patch MetadataPatch) {
+	patch[StartedProviderRuntimeHashMetadataKey] = ""
+	patch[ProviderRuntimeHashBreakdownMetadataKey] = ""
+	patch[ProviderRuntimeHashVersionMetadataKey] = ""
 }
 
 func TestMetadataPatchApplyReturnsMergedCopy(t *testing.T) {

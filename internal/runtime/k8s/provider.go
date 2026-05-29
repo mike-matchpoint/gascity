@@ -170,17 +170,23 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 	existing, err := p.ops.listPods(ctx, "gc-session="+label, "")
 	if err == nil && len(existing) > 0 {
 		pod := &existing[0]
-		if pod.Status.Phase == corev1.PodRunning {
-			// Check if tmux is alive — stale pod detection.
-			_, tmuxErr := p.ops.execInPod(ctx, pod.Name, "agent",
-				[]string{"tmux", "has-session", "-t", tmuxSession}, nil)
-			if tmuxErr == nil {
+		desiredIdentity, err := p.desiredProviderRuntimeIdentity(cfg)
+		if err != nil {
+			return fmt.Errorf("computing runtime identity for session %q: %w", name, err)
+		}
+		compat := p.runtimeCompatibilityForPod(ctx, pod, desiredIdentity)
+		if compat.Running {
+			if compat.Alive {
+				if !compat.Compatible {
+					return fmt.Errorf("%w: session %q (pod: %s, reason: %s)", runtime.ErrRuntimeIncompatible, name, pod.Name, compat.Reason)
+				}
 				return fmt.Errorf("%w: session %q (pod: %s)", runtime.ErrSessionExists, name, pod.Name)
 			}
 			// tmux dead — but if the pod is young, workspace init may still
 			// be blocking the tmux server from starting. Don't delete pods
-			// that are still within the startup window.
-			if time.Since(pod.CreationTimestamp.Time) < startupGracePeriod {
+			// that are still within the startup window unless the pod
+			// substrate is already incompatible and cannot converge in place.
+			if compat.Compatible && time.Since(pod.CreationTimestamp.Time) < startupGracePeriod {
 				return fmt.Errorf("%w: session %q (pod: %s)", runtime.ErrSessionInitializing, name, pod.Name)
 			}
 			// Stale pod — tmux dead and past grace period, recreate.

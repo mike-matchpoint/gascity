@@ -155,11 +155,12 @@ func (c startCandidate) logicalTemplate(cfg *config.City) string {
 }
 
 type preparedStart struct {
-	candidate     startCandidate
-	cfg           runtime.Config
-	coreHash      string
-	coreBreakdown runtime.BreakdownV1
-	liveHash      string
+	candidate       startCandidate
+	cfg             runtime.Config
+	coreHash        string
+	coreBreakdown   runtime.BreakdownV1
+	liveHash        string
+	providerRuntime runtime.ProviderRuntimeIdentity
 }
 
 type startResult struct {
@@ -701,7 +702,7 @@ func prepareStartCandidateForCity(
 		return nil, err
 	}
 	candidate = refreshConfiguredNamedStartCandidate(candidate, cityPath, cityName, cfg, sp, store, clk, stderr)
-	return buildPreparedStartWithWorkDirResolver(candidate, cfg, store, workDirResolver)
+	return buildPreparedStartWithRuntimeProvider(candidate, cfg, store, workDirResolver, sp)
 }
 
 func refreshConfiguredNamedStartCandidate(
@@ -738,19 +739,12 @@ func refreshConfiguredNamedStartCandidate(
 	return candidate
 }
 
-func buildPreparedStart(
-	candidate startCandidate,
-	cfg *config.City,
-	store beads.Store,
-) (*preparedStart, error) {
-	return buildPreparedStartWithWorkDirResolver(candidate, cfg, store, nil)
-}
-
-func buildPreparedStartWithWorkDirResolver(
+func buildPreparedStartWithRuntimeProvider(
 	candidate startCandidate,
 	cfg *config.City,
 	store beads.Store,
 	workDirResolver taskWorkDirResolver,
+	sp runtime.Provider,
 ) (*preparedStart, error) {
 	session := candidate.session
 	tp := candidate.tp
@@ -903,12 +897,23 @@ func buildPreparedStartWithWorkDirResolver(
 		agentCfg.Env = mergeEnv(agentCfg.Env, map[string]string{"GC_PROVIDER": gcProvider})
 	}
 	agentCfg = runtime.SyncWorkDirEnv(agentCfg)
+	var providerRuntime runtime.ProviderRuntimeIdentity
+	if sp != nil {
+		identity, ok, err := runtime.DesiredProviderRuntimeIdentity(context.Background(), sp, candidate.name(), agentCfg)
+		if err != nil {
+			return nil, fmt.Errorf("computing provider runtime identity: %w", err)
+		}
+		if ok {
+			providerRuntime = identity
+		}
+	}
 	return &preparedStart{
-		candidate:     candidate,
-		cfg:           agentCfg,
-		coreHash:      coreHash,
-		coreBreakdown: coreBreakdown,
-		liveHash:      liveHash,
+		candidate:       candidate,
+		cfg:             agentCfg,
+		coreHash:        coreHash,
+		coreBreakdown:   coreBreakdown,
+		liveHash:        liveHash,
+		providerRuntime: providerRuntime,
 	}, nil
 }
 
@@ -1459,6 +1464,11 @@ func startPreparedStartCandidate(
 				return false, fmt.Errorf("%w: session %q", runtime.ErrSessionExists, name)
 			}
 			if alive {
+				if compat, ok, err := runtime.ObserveProviderRuntimeCompatibility(ctx, sp, name, item.cfg); err != nil {
+					return false, fmt.Errorf("observing provider runtime compatibility for session %q: %w", name, err)
+				} else if ok && compat.Exists && !compat.Compatible {
+					return false, fmt.Errorf("%w: session %q (%s)", runtime.ErrRuntimeIncompatible, name, compat.Reason)
+				}
 				return false, nil
 			}
 			return false, fmt.Errorf("session %q died during startup", name)
@@ -1608,13 +1618,16 @@ func commitStartResultTraced(
 	// post-create marker hasn't landed yet. See confirmPendingStart for
 	// the state gate.
 	metadata := sessionpkg.CommitStartedPatch(sessionpkg.CommitStartedPatchInput{
-		CoreHash:                result.prepared.coreHash,
-		LiveHash:                result.prepared.liveHash,
-		CoreBreakdown:           coreBreakdown,
-		ConfirmState:            confirmPendingStart(session.Metadata["state"]),
-		ClearSleepReason:        session.Metadata["sleep_reason"] != "",
-		ClearPendingCreateClaim: shouldRollbackPendingCreate(session),
-		Now:                     clk.Now(),
+		CoreHash:                 result.prepared.coreHash,
+		LiveHash:                 result.prepared.liveHash,
+		CoreBreakdown:            coreBreakdown,
+		ProviderRuntimeHash:      result.prepared.providerRuntime.Fingerprint,
+		ProviderRuntimeVersion:   result.prepared.providerRuntime.Version,
+		ProviderRuntimeBreakdown: result.prepared.providerRuntime.Breakdown,
+		ConfirmState:             confirmPendingStart(session.Metadata["state"]),
+		ClearSleepReason:         session.Metadata["sleep_reason"] != "",
+		ClearPendingCreateClaim:  shouldRollbackPendingCreate(session),
+		Now:                      clk.Now(),
 	})
 	storedMCPSnapshot, err := sessionpkg.EncodeMCPServersSnapshot(result.prepared.cfg.MCPServers)
 	if err != nil {
@@ -1679,6 +1692,7 @@ func recoverRunningPendingCreate(
 	session *beads.Bead,
 	tp TemplateParams,
 	cfg *config.City,
+	sp runtime.Provider,
 	store beads.Store,
 	clk clock.Clock,
 	trace *sessionReconcilerTraceCycle,
@@ -1686,7 +1700,7 @@ func recoverRunningPendingCreate(
 	if session == nil || store == nil {
 		return false
 	}
-	prepared, err := buildPreparedStart(startCandidate{session: session, tp: tp}, cfg, store)
+	prepared, err := buildPreparedStartWithRuntimeProvider(startCandidate{session: session, tp: tp}, cfg, store, nil, sp)
 	if err != nil {
 		if trace != nil {
 			trace.recordDecision("reconciler.session.pending_create", tp.TemplateName, tp.SessionName, "pending_create_rebuild_failed", "failed", traceRecordPayload{
@@ -1709,9 +1723,12 @@ func recoverRunningPendingCreate(
 		now = time.Now()
 	}
 	metadata := sessionpkg.CommitStartedPatch(sessionpkg.CommitStartedPatchInput{
-		CoreHash:      prepared.coreHash,
-		LiveHash:      prepared.liveHash,
-		CoreBreakdown: coreBreakdown,
+		CoreHash:                 prepared.coreHash,
+		LiveHash:                 prepared.liveHash,
+		CoreBreakdown:            coreBreakdown,
+		ProviderRuntimeHash:      prepared.providerRuntime.Fingerprint,
+		ProviderRuntimeVersion:   prepared.providerRuntime.Version,
+		ProviderRuntimeBreakdown: prepared.providerRuntime.Breakdown,
 		ConfirmState: confirmPendingStart(session.Metadata["state"]) ||
 			sessionpkg.State(strings.TrimSpace(session.Metadata["state"])) == sessionpkg.StateAwake,
 		ClearSleepReason: session.Metadata["sleep_reason"] != "",
