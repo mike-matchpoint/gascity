@@ -60,6 +60,9 @@ func stageFiles(ctx context.Context, ops k8sOps, podName string, cfg runtime.Con
 		if err := stageCityRootRuntimeInputsToPod(ctx, ops, podName, ctrlCity); err != nil {
 			return err
 		}
+		if err := stageControllerSourceRootsToPod(ctx, ops, podName, cfg, ctrlCity); err != nil {
+			return err
+		}
 	}
 	// Copy the session work_dir into the pod after city inputs so the active
 	// workdir wins where paths overlap.
@@ -174,6 +177,61 @@ func stageCityRootRuntimeInputPath(src, dst string) error {
 		return runtime.StagePath(src, dst)
 	}
 	return overlay.CopyDirWithSkip(src, dst, skipCityRootRuntimeInputPath, io.Discard)
+}
+
+type controllerSourceRootStagePath struct {
+	controllerPath string
+	podPath        string
+}
+
+func controllerSourceRootStagePaths(cfg runtime.Config, ctrlCity string) []controllerSourceRootStagePath {
+	ctrlCity = strings.TrimSpace(ctrlCity)
+	if ctrlCity == "" {
+		return nil
+	}
+
+	seen := map[string]bool{}
+	var paths []controllerSourceRootStagePath
+	for _, key := range []string{"GC_RIG_ROOT", "GC_STORE_ROOT", "GT_ROOT"} {
+		controllerPath := strings.TrimSpace(cfg.Env[key])
+		if controllerPath == "" {
+			continue
+		}
+		cleanControllerPath := filepath.Clean(controllerPath)
+		if seen[cleanControllerPath] {
+			continue
+		}
+		podPath, ok := projectedPodPathForControllerPath(ctrlCity, cleanControllerPath)
+		if !ok || podPath == "/workspace" {
+			continue
+		}
+		rel := strings.TrimPrefix(podPath, "/workspace/")
+		if rel == "" || rel == ".gc" || strings.HasPrefix(rel, ".gc/") {
+			continue
+		}
+		seen[cleanControllerPath] = true
+		paths = append(paths, controllerSourceRootStagePath{
+			controllerPath: cleanControllerPath,
+			podPath:        podPath,
+		})
+	}
+	return paths
+}
+
+func stageControllerSourceRootsToPod(ctx context.Context, ops k8sOps, podName string, cfg runtime.Config, ctrlCity string) error {
+	for _, stagePath := range controllerSourceRootStagePaths(cfg, ctrlCity) {
+		info, err := os.Stat(stagePath.controllerPath)
+		if err != nil {
+			return fmt.Errorf("checking controller source root %s: %w", stagePath.controllerPath, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("checking controller source root %s: not a directory", stagePath.controllerPath)
+		}
+		if err := copyDirToPod(ctx, ops, podName, "stage", stagePath.controllerPath, stagePath.podPath); err != nil {
+			return fmt.Errorf("staging controller source root %s to %s: %w", stagePath.controllerPath, stagePath.podPath, err)
+		}
+	}
+	return nil
 }
 
 func skipCityRootRuntimeInputPath(relPath string, isDir bool) bool {
