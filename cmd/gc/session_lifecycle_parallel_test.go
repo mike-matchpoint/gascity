@@ -6357,6 +6357,58 @@ func TestHandleProviderRuntimeDriftBeginsDrainWithDrainReplacePolicy(t *testing.
 	}
 }
 
+func TestHandleProviderRuntimeDriftStopsNonLiveIncompatibleRuntime(t *testing.T) {
+	t.Setenv("GC_K8S_RUNTIME_DRIFT_POLICY", "drain-replace")
+	store := beads.NewMemStore()
+	session, err := store.Create(beads.Bead{
+		Title:  "worker-session",
+		Type:   sessionBeadType,
+		Labels: []string{sessionBeadLabel},
+		Metadata: map[string]string{
+			"template":     "worker",
+			"session_name": "worker-1",
+			"state":        "asleep",
+			sessionpkg.StartedProviderRuntimeHashMetadataKey: "k8s-v1:old",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp := &incompatibleRuntimeObserverProvider{
+		Fake: runtime.NewFake(),
+		compat: runtime.CompatibilityObservation{
+			Supported:                 true,
+			Exists:                    true,
+			Running:                   true,
+			Alive:                     false,
+			Compatible:                false,
+			SafeToReplaceWithoutDrain: true,
+			Reason:                    "missing-runtime-identity",
+			Current:                   runtime.ProviderRuntimeIdentity{Fingerprint: "k8s-v1:old", Version: "k8s-v1"},
+			Desired:                   runtime.ProviderRuntimeIdentity{Fingerprint: "k8s-v1:new", Version: "k8s-v1"},
+		},
+	}
+	if err := sp.Start(context.Background(), "worker-1", runtime.Config{}); err != nil {
+		t.Fatalf("Start existing session: %v", err)
+	}
+	dt := newDrainTracker()
+	handled := handleProviderRuntimeDrift(
+		"", &config.City{}, sp, store, nil, &session,
+		TemplateParams{TemplateName: "worker", InstanceName: "worker-1"},
+		"worker-1", dt, &clock.Fake{Time: time.Unix(200, 0)}, defaultDrainTimeout, events.Discard,
+		ioDiscard{}, ioDiscard{}, nil,
+	)
+	if !handled {
+		t.Fatal("handleProviderRuntimeDrift returned false, want handled stop")
+	}
+	if sp.IsRunning("worker-1") {
+		t.Fatal("non-live incompatible runtime was not stopped")
+	}
+	if ds := dt.get(session.ID); ds != nil {
+		t.Fatalf("non-live incompatible runtime should stop without drain state, got %#v", ds)
+	}
+}
+
 func TestHandleProviderRuntimeDriftDefersDrainForLiveAssignedWork(t *testing.T) {
 	t.Setenv("GC_K8S_RUNTIME_DRIFT_POLICY", "drain-replace")
 	store := beads.NewMemStore()

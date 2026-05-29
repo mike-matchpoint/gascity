@@ -1524,6 +1524,11 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		if stopZombieRuntime("stale_runtime") {
 			continue
 		}
+		if !alive {
+			if handleProviderRuntimeDrift(cityPath, cfg, sp, store, rigStores, session, tp, name, dt, clk, driftDrainTimeout, rec, stdout, stderr, trace) {
+				continue
+			}
+		}
 
 		// Clear wake failures for sessions that have been stable long enough.
 		if alive && stableLongEnough(*session, clk) {
@@ -2906,6 +2911,17 @@ func handleProviderRuntimeDrift(
 			}
 		}
 		return false
+	}
+	if compat.Exists && !compat.Alive && compat.SafeToReplaceWithoutDrain {
+		if err := workerKillSessionTargetWithConfig("", store, sp, cfg, name); err != nil {
+			fmt.Fprintf(stderr, "session reconciler: stopping non-live provider-runtime-drift %s: %v\n", name, err) //nolint:errcheck
+			return true
+		}
+		if trace != nil {
+			trace.recordDecision("reconciler.session.provider_runtime_drift", tp.TemplateName, name, providerRuntimeDriftReason, "stop_nonlive", providerRuntimeDriftTracePayload(storedHash, compat, nil), nil, "")
+		}
+		fmt.Fprintf(stdout, "Stopped non-live provider-runtime-drift session '%s'\n", name) //nolint:errcheck
+		return true
 	}
 	if !compat.Exists || !compat.Alive {
 		return false
