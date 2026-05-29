@@ -46,14 +46,8 @@ func remapControllerPathToPod(val, ctrlCity string) string {
 }
 
 func projectedPodWorkDir(cfg runtime.Config) string {
-	podWorkDir := "/workspace"
 	ctrlCity := controllerCityPath(cfg.Env)
-	if ctrlCity != "" && cfg.WorkDir != "" && cfg.WorkDir != ctrlCity {
-		if rel, ok := strings.CutPrefix(cfg.WorkDir, ctrlCity+"/"); ok {
-			podWorkDir = "/workspace/" + rel
-		}
-	}
-	return podWorkDir
+	return projectedPodWorkDirForControllerPath(cfg.WorkDir, ctrlCity)
 }
 
 func projectedPodStoreRoot(cfg runtime.Config, podWorkDir string) string {
@@ -483,6 +477,9 @@ func needsStaging(cfg runtime.Config, ctrlCity string) bool {
 		return true
 	}
 	if len(cfg.CopyFiles) > 0 {
+		return true
+	}
+	if needsCityRootRuntimeInputStaging(cfg.WorkDir, ctrlCity) {
 		return true
 	}
 	// Rig agents have a work_dir subdirectory.

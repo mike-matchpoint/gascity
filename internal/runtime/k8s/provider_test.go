@@ -1459,10 +1459,15 @@ func TestNeedsStaging(t *testing.T) {
 		want     bool
 	}{
 		{
-			name:     "no staging",
+			name: "no controller city",
+			cfg:  runtime.Config{},
+			want: false,
+		},
+		{
+			name:     "city root workdir",
 			cfg:      runtime.Config{WorkDir: "/workspace"},
 			ctrlCity: "/workspace",
-			want:     false,
+			want:     true,
 		},
 		{
 			name: "overlay dir",
@@ -1490,7 +1495,7 @@ func TestNeedsStaging(t *testing.T) {
 			name:     "city agent (same work_dir)",
 			cfg:      runtime.Config{WorkDir: "/city"},
 			ctrlCity: "/city",
-			want:     false,
+			want:     true,
 		},
 	}
 	for _, tt := range tests {

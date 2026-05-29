@@ -21,8 +21,10 @@ import (
 )
 
 // Compile-time interface check.
-var _ runtime.Provider = (*Provider)(nil)
-var _ runtime.RuntimeArtifactLister = (*Provider)(nil)
+var (
+	_ runtime.Provider              = (*Provider)(nil)
+	_ runtime.RuntimeArtifactLister = (*Provider)(nil)
+)
 
 // Provider is a native Kubernetes session provider using client-go.
 // Eliminates subprocess overhead by making direct API calls over reused
@@ -216,7 +218,7 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 		_ = p.ops.deletePod(cleanupCtx, podName, 5)
 	}
 
-	ctrlCity := cfg.Env["GC_CITY"]
+	ctrlCity := controllerCityPath(cfg.Env)
 
 	if !p.prebaked {
 		// Stage files via init container if needed.
