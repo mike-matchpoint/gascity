@@ -194,6 +194,11 @@ func TestStageFilesStagesCityRootRuntimeInputsForNestedWorkDir(t *testing.T) {
 		"remote script",
 	)
 	mustWriteFile(t, filepath.Join(cityRoot, ".gc", "cache", "packs", "remote", ".git", "HEAD"), "git metadata")
+	rigRoot := filepath.Join(cityRoot, "rigs", "demo")
+	mustWriteFile(t, filepath.Join(rigRoot, ".git", "HEAD"), "ref: refs/heads/main")
+	mustWriteFile(t, filepath.Join(rigRoot, ".beads", "config.yaml"), "issue_prefix: demo\n")
+	mustWriteFile(t, filepath.Join(rigRoot, "README.md"), "rig source")
+	mustWriteFile(t, filepath.Join(cityRoot, "rigs", "other", "README.md"), "other rig")
 
 	mustWriteFile(t, filepath.Join(cityRoot, ".gc", "runtime", "secret.txt"), "runtime state")
 	mustWriteFile(t, filepath.Join(cityRoot, ".gc", "agents", "mayor", "state.txt"), "agent state")
@@ -204,6 +209,10 @@ func TestStageFilesStagesCityRootRuntimeInputsForNestedWorkDir(t *testing.T) {
 	ops := newCapturingStageOps()
 	err := stageFiles(context.Background(), ops, "gc-cartographer", runtime.Config{
 		WorkDir: workDir,
+		Env: map[string]string{
+			"GC_RIG_ROOT":   rigRoot,
+			"GC_STORE_ROOT": rigRoot,
+		},
 	}, cityRoot, io.Discard)
 	if err != nil {
 		t.Fatalf("stageFiles: %v", err)
@@ -227,12 +236,22 @@ func TestStageFilesStagesCityRootRuntimeInputsForNestedWorkDir(t *testing.T) {
 	if got := ops.files["/workspace/.gc/cache/packs/remote/assets/scripts/remote.sh"]; got != "remote script" {
 		t.Fatalf("staged cached pack script = %q, want cached pack asset", got)
 	}
+	if got := ops.files["/workspace/rigs/demo/.git/HEAD"]; got != "ref: refs/heads/main" {
+		t.Fatalf("staged rig git metadata = %q, want active source root git metadata", got)
+	}
+	if got := ops.files["/workspace/rigs/demo/.beads/config.yaml"]; got != "issue_prefix: demo\n" {
+		t.Fatalf("staged rig bead config = %q, want active source root bead config", got)
+	}
+	if got := ops.files["/workspace/rigs/demo/README.md"]; got != "rig source" {
+		t.Fatalf("staged rig source = %q, want active source root payload", got)
+	}
 
 	for _, unexpected := range []string{
 		"/workspace/.gc/runtime/secret.txt",
 		"/workspace/.gc/agents/mayor/state.txt",
 		"/workspace/.gc/worktrees/demo/other/state.txt",
 		"/workspace/.gc/cache/packs/remote/.git/HEAD",
+		"/workspace/rigs/other/README.md",
 		"/workspace/.beads/state.db",
 		"/workspace/.git/config",
 	} {
