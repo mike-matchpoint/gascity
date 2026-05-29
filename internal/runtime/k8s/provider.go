@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -52,6 +54,10 @@ type Provider struct {
 	priorityClassName  string              // GC_K8S_PRIORITY_CLASS_NAME
 	postStartSettle    time.Duration       // settle time before post-start liveness check
 	stderr             io.Writer           // warning output (default os.Stderr)
+	podCacheTTL        time.Duration
+	podCacheMu         sync.Mutex
+	podCachePods       []corev1.Pod
+	podCacheExpiresAt  time.Time
 }
 
 type schedulingFields struct {
@@ -76,6 +82,8 @@ type workspaceFields struct {
 //   - GC_K8S_WORKSPACE_ROOT — mount path for GC_K8S_WORKSPACE_PVC (default: /workspace)
 //   - GC_K8S_CPU_REQUEST, GC_K8S_MEM_REQUEST — resource requests
 //   - GC_K8S_CPU_LIMIT, GC_K8S_MEM_LIMIT — resource limits
+//   - GC_K8S_CLIENT_QPS, GC_K8S_CLIENT_BURST — Kubernetes API client limits
+//     (defaults: 50 QPS / 100 burst; set either to 0 to use client-go defaults)
 //
 // The in-cluster Dolt service alias defaults to the provider defaults
 // (dolt.gc.svc.cluster.local:3307). Pods receive projected GC_DOLT_* env;
@@ -264,6 +272,7 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 	if err != nil {
 		return fmt.Errorf("creating pod for session %q: %w", name, err)
 	}
+	p.invalidatePodCache()
 
 	// cleanup deletes the pod on any startup failure after creation.
 	// Uses a fresh background context so cleanup succeeds even if the
@@ -272,6 +281,7 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		_ = p.ops.deletePod(cleanupCtx, podName, 5)
+		p.invalidatePodCache()
 	}
 
 	ctrlCity := controllerCityPath(cfg.Env)
@@ -402,6 +412,9 @@ func (p *Provider) Stop(name string) error {
 	}
 	for i := range pods {
 		_ = p.ops.deletePod(ctx, pods[i].Name, 5)
+	}
+	if len(pods) > 0 {
+		p.invalidatePodCache()
 	}
 	return nil
 }
@@ -625,7 +638,7 @@ func (p *Provider) ListRunning(prefix string) ([]string, error) {
 // execing into tmux; stronger tmux/process proof remains on direct operations
 // such as get, peek, attach, stop, and reconciliation.
 func (p *Provider) Inventory(ctx context.Context, prefix string) (runtime.Inventory, error) {
-	pods, err := p.ops.listPods(ctx, "app=gc-agent", "status.phase=Running")
+	pods, err := p.agentPodSnapshot(ctx)
 	inventory := runtime.Inventory{
 		Complete:     err == nil,
 		Source:       "k8s",
@@ -667,7 +680,7 @@ func (p *Provider) StatusRunningSessions(prefix string) ([]string, error) {
 // the pod spec so cleanup can attribute init-stuck pods before tmux exists.
 func (p *Provider) ListRuntimeArtifacts(prefix string) ([]runtime.RuntimeArtifact, error) {
 	ctx := context.Background()
-	pods, err := p.ops.listPods(ctx, "app=gc-agent", "")
+	pods, err := p.agentPodSnapshot(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -785,28 +798,94 @@ func (p *Provider) CopyTo(name, src, relDst string) error {
 
 // findRunningPod finds a running pod by session label.
 func (p *Provider) findRunningPod(ctx context.Context, name string) (string, error) {
-	label := SanitizeLabel(name)
-	pods, err := p.ops.listPods(ctx, "gc-session="+label, "status.phase=Running")
+	pod, err := p.findPodObject(ctx, name, true)
 	if err != nil {
 		return "", err
 	}
-	if len(pods) == 0 {
+	if pod == nil {
 		return "", fmt.Errorf("no running pod for session %q", name)
 	}
-	return pods[0].Name, nil
+	return pod.Name, nil
 }
 
 // findPod finds a pod by session label (any phase).
 func (p *Provider) findPod(ctx context.Context, name string) (string, error) {
-	label := SanitizeLabel(name)
-	pods, err := p.ops.listPods(ctx, "gc-session="+label, "")
+	pod, err := p.findPodObject(ctx, name, false)
 	if err != nil {
 		return "", err
 	}
-	if len(pods) == 0 {
+	if pod == nil {
 		return "", fmt.Errorf("no pod for session %q", name)
 	}
-	return pods[0].Name, nil
+	return pod.Name, nil
+}
+
+func (p *Provider) findPodObject(ctx context.Context, name string, runningOnly bool) (*corev1.Pod, error) {
+	label := SanitizeLabel(name)
+	pods, err := p.agentPodSnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range pods {
+		pod := &pods[i]
+		if strings.TrimSpace(pod.Labels["gc-session"]) != label {
+			continue
+		}
+		if runningOnly {
+			if pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning {
+				continue
+			}
+		}
+		return pod.DeepCopy(), nil
+	}
+	return nil, nil
+}
+
+func (p *Provider) agentPodSnapshot(ctx context.Context) ([]corev1.Pod, error) {
+	ttl := p.podCacheTTL
+	if ttl == 0 {
+		ttl = 10 * time.Second
+	}
+	if ttl > 0 {
+		now := time.Now()
+		p.podCacheMu.Lock()
+		if len(p.podCachePods) > 0 && now.Before(p.podCacheExpiresAt) {
+			pods := clonePods(p.podCachePods)
+			p.podCacheMu.Unlock()
+			return pods, nil
+		}
+		p.podCacheMu.Unlock()
+	}
+
+	pods, err := p.ops.listPods(ctx, "app=gc-agent", "")
+	if err != nil {
+		return nil, err
+	}
+	if ttl > 0 {
+		p.podCacheMu.Lock()
+		p.podCachePods = clonePods(pods)
+		p.podCacheExpiresAt = time.Now().Add(ttl)
+		p.podCacheMu.Unlock()
+	}
+	return clonePods(pods), nil
+}
+
+func (p *Provider) invalidatePodCache() {
+	p.podCacheMu.Lock()
+	p.podCachePods = nil
+	p.podCacheExpiresAt = time.Time{}
+	p.podCacheMu.Unlock()
+}
+
+func clonePods(pods []corev1.Pod) []corev1.Pod {
+	if len(pods) == 0 {
+		return nil
+	}
+	out := make([]corev1.Pod, 0, len(pods))
+	for i := range pods {
+		out = append(out, *pods[i].DeepCopy())
+	}
+	return out
 }
 
 // waitForDeletion waits for a pod to be deleted.
@@ -992,6 +1071,9 @@ func buildRESTConfig(k8sContext string) (*rest.Config, error) {
 	// Try in-cluster first.
 	cfg, err := rest.InClusterConfig()
 	if err == nil {
+		if err := applyRESTConfigRateLimit(cfg); err != nil {
+			return nil, err
+		}
 		return cfg, nil
 	}
 	// Fall back to kubeconfig.
@@ -1000,7 +1082,59 @@ func buildRESTConfig(k8sContext string) (*rest.Config, error) {
 	if k8sContext != "" {
 		overrides.CurrentContext = k8sContext
 	}
-	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides).ClientConfig()
+	cfg, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides).ClientConfig()
+	if err != nil {
+		return nil, err
+	}
+	if err := applyRESTConfigRateLimit(cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func applyRESTConfigRateLimit(cfg *rest.Config) error {
+	if cfg == nil {
+		return errors.New("nil K8s REST config")
+	}
+	qps, err := parseNonNegativeFloatEnv("GC_K8S_CLIENT_QPS", 50)
+	if err != nil {
+		return err
+	}
+	burst, err := parseNonNegativeIntEnv("GC_K8S_CLIENT_BURST", 100)
+	if err != nil {
+		return err
+	}
+	if qps > 0 {
+		cfg.QPS = qps
+	}
+	if burst > 0 {
+		cfg.Burst = burst
+	}
+	return nil
+}
+
+func parseNonNegativeFloatEnv(key string, def float32) (float32, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def, nil
+	}
+	value, err := strconv.ParseFloat(raw, 32)
+	if err != nil || value < 0 {
+		return 0, fmt.Errorf("%s must be a non-negative number", key)
+	}
+	return float32(value), nil
+}
+
+func parseNonNegativeIntEnv(key string, def int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		return 0, fmt.Errorf("%s must be a non-negative integer", key)
+	}
+	return value, nil
 }
 
 func managedServiceAlias() (string, string, error) {

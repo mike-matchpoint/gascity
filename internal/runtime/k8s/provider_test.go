@@ -11,6 +11,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/rest"
 
 	"github.com/gastownhall/gascity/internal/runtime"
 )
@@ -64,6 +65,58 @@ func TestManagedServiceAliasRejectsPartialCompatOverride(t *testing.T) {
 	if got := err.Error(); got != "requires both GC_K8S_DOLT_HOST and GC_K8S_DOLT_PORT when either is set" {
 		t.Fatalf("managedServiceAlias() error = %q", got)
 	}
+}
+
+func TestApplyRESTConfigRateLimitDefaultsAndOverrides(t *testing.T) {
+	t.Run("defaults raise client-go controller budget", func(t *testing.T) {
+		t.Setenv("GC_K8S_CLIENT_QPS", "")
+		t.Setenv("GC_K8S_CLIENT_BURST", "")
+		cfg := &rest.Config{}
+		if err := applyRESTConfigRateLimit(cfg); err != nil {
+			t.Fatalf("applyRESTConfigRateLimit: %v", err)
+		}
+		if cfg.QPS != 50 {
+			t.Fatalf("QPS = %v, want 50", cfg.QPS)
+		}
+		if cfg.Burst != 100 {
+			t.Fatalf("Burst = %d, want 100", cfg.Burst)
+		}
+	})
+
+	t.Run("explicit zero preserves client-go defaults", func(t *testing.T) {
+		t.Setenv("GC_K8S_CLIENT_QPS", "0")
+		t.Setenv("GC_K8S_CLIENT_BURST", "0")
+		cfg := &rest.Config{}
+		if err := applyRESTConfigRateLimit(cfg); err != nil {
+			t.Fatalf("applyRESTConfigRateLimit: %v", err)
+		}
+		if cfg.QPS != 0 || cfg.Burst != 0 {
+			t.Fatalf("config = QPS %v Burst %d, want zero values", cfg.QPS, cfg.Burst)
+		}
+	})
+
+	t.Run("custom values", func(t *testing.T) {
+		t.Setenv("GC_K8S_CLIENT_QPS", "75.5")
+		t.Setenv("GC_K8S_CLIENT_BURST", "150")
+		cfg := &rest.Config{}
+		if err := applyRESTConfigRateLimit(cfg); err != nil {
+			t.Fatalf("applyRESTConfigRateLimit: %v", err)
+		}
+		if cfg.QPS != 75.5 {
+			t.Fatalf("QPS = %v, want 75.5", cfg.QPS)
+		}
+		if cfg.Burst != 150 {
+			t.Fatalf("Burst = %d, want 150", cfg.Burst)
+		}
+	})
+
+	t.Run("rejects invalid values", func(t *testing.T) {
+		t.Setenv("GC_K8S_CLIENT_QPS", "-1")
+		cfg := &rest.Config{}
+		if err := applyRESTConfigRateLimit(cfg); err == nil {
+			t.Fatal("expected negative QPS to fail")
+		}
+	})
 }
 
 func TestParseSchedulingEnvHappyPath(t *testing.T) {
@@ -405,8 +458,8 @@ func TestInventoryListsPodsOnceWithoutTmuxProbes(t *testing.T) {
 		switch c.method {
 		case "listPods":
 			listCalls++
-			if c.selector != "app=gc-agent" || c.fieldSelector != "status.phase=Running" {
-				t.Fatalf("listPods selector = (%q, %q), want app=gc-agent/status.phase=Running", c.selector, c.fieldSelector)
+			if c.selector != "app=gc-agent" || c.fieldSelector != "" {
+				t.Fatalf("listPods selector = (%q, %q), want app=gc-agent/all phases", c.selector, c.fieldSelector)
 			}
 		case "execInPod":
 			t.Fatalf("Inventory performed tmux exec: %+v", c)
@@ -414,6 +467,59 @@ func TestInventoryListsPodsOnceWithoutTmuxProbes(t *testing.T) {
 	}
 	if listCalls != 1 {
 		t.Fatalf("listPods calls = %d, want 1", listCalls)
+	}
+}
+
+func TestProviderCachesAgentPodSnapshotForRepeatedSessionReads(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+
+	addRunningPod(fake, "gc-test-agent-a", "gc-test-agent-a")
+	addRunningPod(fake, "gc-test-agent-b", "gc-test-agent-b")
+	fake.setExecResult("gc-test-agent-a",
+		[]string{"tmux", "has-session", "-t", "main"}, "", nil)
+	fake.setExecResult("gc-test-agent-a",
+		[]string{"tmux", "show-environment", "-t", "main", "GC_DRAIN"}, "GC_DRAIN=true\n", nil)
+	fake.setExecResult("gc-test-agent-b",
+		[]string{"tmux", "capture-pane", "-t", "main", "-p", "-S", "-5"}, "ready\n", nil)
+	fake.setExecResult("gc-test-agent-b",
+		[]string{"tmux", "display-message", "-t", "main", "-p", "#{session_activity}"}, "1709300000\n", nil)
+
+	if !p.IsRunning("gc-test-agent-a") {
+		t.Fatal("IsRunning returned false for running pod")
+	}
+	if got, err := p.GetMeta("gc-test-agent-a", "GC_DRAIN"); err != nil || got != "true" {
+		t.Fatalf("GetMeta = (%q, %v), want true/nil", got, err)
+	}
+	if got, err := p.Peek("gc-test-agent-b", 5); err != nil || got != "ready\n" {
+		t.Fatalf("Peek = (%q, %v), want ready/nil", got, err)
+	}
+	if got, err := p.GetLastActivity("gc-test-agent-b"); err != nil || !got.Equal(time.Unix(1709300000, 0)) {
+		t.Fatalf("GetLastActivity = (%v, %v), want epoch/nil", got, err)
+	}
+	compat, err := p.ObserveRuntimeCompatibility(context.Background(), "gc-test-agent-a", runtime.Config{
+		Command: "claude",
+		Env:     map[string]string{"GC_AGENT": "gc-test-agent-a", "GC_CITY": "/workspace"},
+	})
+	if err != nil {
+		t.Fatalf("ObserveRuntimeCompatibility: %v", err)
+	}
+	if !compat.Exists || !compat.Running || !compat.Alive {
+		t.Fatalf("compatibility observation = %#v, want existing running alive pod", compat)
+	}
+
+	listCalls := 0
+	for _, c := range fake.calls {
+		if c.method != "listPods" {
+			continue
+		}
+		listCalls++
+		if c.selector != "app=gc-agent" || c.fieldSelector != "" {
+			t.Fatalf("unexpected listPods selector = (%q, %q)", c.selector, c.fieldSelector)
+		}
+	}
+	if listCalls != 1 {
+		t.Fatalf("listPods calls = %d, want 1 cached agent-pod snapshot", listCalls)
 	}
 }
 
@@ -767,9 +873,18 @@ func TestObserveRuntimeCompatibilityClassifiesCompatibleAndLegacyPods(t *testing
 		Env:     map[string]string{"GC_AGENT": "mayor", "GC_CITY": "/workspace"},
 	}
 
+	absent, err := p.ObserveRuntimeCompatibility(context.Background(), "gc-test-agent", cfg)
+	if err != nil {
+		t.Fatalf("ObserveRuntimeCompatibility absent: %v", err)
+	}
+	if !absent.Supported || absent.Exists || !absent.Compatible || absent.Reason != "absent" {
+		t.Fatalf("absent compatibility = %#v, want supported compatible absent", absent)
+	}
+
 	addRunningPod(fake, "gc-test-agent", "gc-test-agent")
 	fake.setExecResult("gc-test-agent",
 		[]string{"tmux", "has-session", "-t", "main"}, "", nil)
+	p.invalidatePodCache()
 
 	legacy, err := p.ObserveRuntimeCompatibility(context.Background(), "gc-test-agent", cfg)
 	if err != nil {
@@ -780,6 +895,7 @@ func TestObserveRuntimeCompatibilityClassifiesCompatibleAndLegacyPods(t *testing
 	}
 
 	annotatePodWithDesiredRuntimeIdentity(t, p, "gc-test-agent", cfg)
+	p.invalidatePodCache()
 	compatible, err := p.ObserveRuntimeCompatibility(context.Background(), "gc-test-agent", cfg)
 	if err != nil {
 		t.Fatalf("ObserveRuntimeCompatibility compatible: %v", err)

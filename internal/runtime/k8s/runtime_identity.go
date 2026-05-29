@@ -78,12 +78,11 @@ func (p *Provider) observeRuntimeCompatibility(ctx context.Context, name string,
 	if err != nil {
 		return runtime.CompatibilityObservation{}, nil, err
 	}
-	label := SanitizeLabel(name)
-	pods, err := p.ops.listPods(ctx, "gc-session="+label, "")
+	pod, err := p.findPodObject(ctx, name, false)
 	if err != nil {
 		return runtime.CompatibilityObservation{}, nil, err
 	}
-	if len(pods) == 0 {
+	if pod == nil {
 		return runtime.CompatibilityObservation{
 			Supported:  true,
 			Exists:     false,
@@ -92,7 +91,6 @@ func (p *Provider) observeRuntimeCompatibility(ctx context.Context, name string,
 			Reason:     "absent",
 		}, nil, nil
 	}
-	pod := &pods[0]
 	compat := p.runtimeCompatibilityForPod(ctx, pod, desired)
 	return compat, pod, nil
 }

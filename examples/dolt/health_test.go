@@ -582,6 +582,57 @@ exit 0
 	}
 }
 
+func TestHealthScriptProbesConfiguredRemoteHost(t *testing.T) {
+	cityPath := t.TempDir()
+	fakeBin := t.TempDir()
+	port := "3307"
+	host := "dolt.city.svc.cluster.local"
+
+	writeExecutable(t, filepath.Join(fakeBin, "lsof"), `#!/bin/sh
+echo "lsof should not be used for remote Dolt host" >&2
+exit 1
+`)
+	writeExecutable(t, filepath.Join(fakeBin, "nc"), `#!/bin/sh
+if [ "$1" = "-z" ] && [ "$2" = "`+host+`" ] && [ "$3" = "`+port+`" ]; then
+  exit 0
+fi
+exit 1
+`)
+	writeExecutable(t, filepath.Join(fakeBin, "dolt"), `#!/bin/sh
+printf '%s\n' "$@" > "$FAKE_DOLT_ARGS"
+exit 0
+`)
+
+	argsFile := filepath.Join(t.TempDir(), "dolt-args")
+	root := repoRoot(t)
+	cmd := exec.Command("sh", filepath.Join(root, healthScript), "--json")
+	cmd.Env = append(filteredEnv("FAKE_DOLT_ARGS", "GC_CITY_PATH", "GC_PACK_DIR", "GC_DOLT_HOST", "GC_DOLT_PORT", "GC_DOLT_USER", "GC_DOLT_PASSWORD", "GC_HEALTH_SKIP_ZOMBIE_SCAN", "PATH"),
+		"FAKE_DOLT_ARGS="+argsFile,
+		"GC_CITY_PATH="+cityPath,
+		"GC_PACK_DIR="+root,
+		"GC_DOLT_HOST="+host,
+		"GC_DOLT_PORT="+port,
+		"GC_DOLT_USER=root",
+		"GC_DOLT_PASSWORD=",
+		"GC_HEALTH_SKIP_ZOMBIE_SCAN=1",
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("health.sh failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), `"running": true`) || !strings.Contains(string(out), `"reachable": true`) {
+		t.Fatalf("health output did not report remote server reachable:\n%s", out)
+	}
+	args, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("read dolt args: %v", err)
+	}
+	if !strings.Contains(string(args), "--host\n"+host+"\n") {
+		t.Fatalf("dolt was not called with configured remote host; args:\n%s", args)
+	}
+}
+
 func TestHealthScriptPortableTimestampFallbacksRemainNumeric(t *testing.T) {
 	tests := []struct {
 		name string

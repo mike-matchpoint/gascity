@@ -131,6 +131,40 @@ func TestResolveTemplateUsesWorkDirForCityScopedAgents(t *testing.T) {
 	}
 }
 
+func TestResolveTemplateProjectsCityStoreIdentity(t *testing.T) {
+	cityPath := t.TempDir()
+	writeTemplateResolveCityConfig(t, cityPath, "file")
+	cfg := &config.City{Workspace: config.Workspace{Name: "city", Prefix: "hq"}}
+
+	params := &agentBuildParams{
+		city:       cfg,
+		cityName:   "city",
+		cityPath:   cityPath,
+		workspace:  &cfg.Workspace,
+		providers:  map[string]config.ProviderSpec{"test": {Command: "echo", PromptMode: "none"}},
+		lookPath:   func(string) (string, error) { return "/bin/echo", nil },
+		fs:         fsys.OSFS{},
+		beaconTime: time.Unix(0, 0),
+		beadNames:  make(map[string]string),
+		stderr:     io.Discard,
+	}
+
+	agent := &config.Agent{Name: "mayor"}
+	tp, err := resolveTemplate(params, agent, agent.QualifiedName(), nil)
+	if err != nil {
+		t.Fatalf("resolveTemplate: %v", err)
+	}
+	if got := tp.Env["GC_STORE_ROOT"]; got != cityPath {
+		t.Fatalf("GC_STORE_ROOT = %q, want %q", got, cityPath)
+	}
+	if got := tp.Env["GC_STORE_SCOPE"]; got != "city" {
+		t.Fatalf("GC_STORE_SCOPE = %q, want city", got)
+	}
+	if got := tp.Env["GC_BEADS_PREFIX"]; got != "hq" {
+		t.Fatalf("GC_BEADS_PREFIX = %q, want hq", got)
+	}
+}
+
 func TestResolveTemplateDefaultsRigScopedAgentsToRigRootWithoutWorkDir(t *testing.T) {
 	cityPath := t.TempDir()
 	writeTemplateResolveCityConfig(t, cityPath, "file")
@@ -172,6 +206,48 @@ func TestResolveTemplateDefaultsRigScopedAgentsToRigRootWithoutWorkDir(t *testin
 	}
 	if tp.Env["GT_ROOT"] != cityPath {
 		t.Fatalf("GT_ROOT = %q, want city root %q", tp.Env["GT_ROOT"], cityPath)
+	}
+}
+
+func TestResolveTemplateProjectsRigStoreIdentity(t *testing.T) {
+	cityPath := t.TempDir()
+	writeTemplateResolveCityConfig(t, cityPath, "file")
+	rigRoot := filepath.Join(t.TempDir(), "frontend")
+	if err := os.MkdirAll(rigRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "city", Prefix: "hq"},
+		Rigs:      []config.Rig{{Name: "frontend", Path: rigRoot, Prefix: "fe"}},
+	}
+
+	params := &agentBuildParams{
+		city:       cfg,
+		cityName:   "city",
+		cityPath:   cityPath,
+		workspace:  &cfg.Workspace,
+		providers:  map[string]config.ProviderSpec{"test": {Command: "echo", PromptMode: "none"}},
+		lookPath:   func(string) (string, error) { return "/bin/echo", nil },
+		fs:         fsys.OSFS{},
+		rigs:       cfg.Rigs,
+		beaconTime: time.Unix(0, 0),
+		beadNames:  make(map[string]string),
+		stderr:     io.Discard,
+	}
+
+	agent := &config.Agent{Name: "refinery", Dir: "frontend"}
+	tp, err := resolveTemplate(params, agent, agent.QualifiedName(), nil)
+	if err != nil {
+		t.Fatalf("resolveTemplate: %v", err)
+	}
+	if got := tp.Env["GC_STORE_ROOT"]; got != rigRoot {
+		t.Fatalf("GC_STORE_ROOT = %q, want %q", got, rigRoot)
+	}
+	if got := tp.Env["GC_STORE_SCOPE"]; got != "rig" {
+		t.Fatalf("GC_STORE_SCOPE = %q, want rig", got)
+	}
+	if got := tp.Env["GC_BEADS_PREFIX"]; got != "fe" {
+		t.Fatalf("GC_BEADS_PREFIX = %q, want fe", got)
 	}
 }
 

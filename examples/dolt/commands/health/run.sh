@@ -71,6 +71,57 @@ done
 # Determine host for probing.
 host="${GC_DOLT_HOST:-127.0.0.1}"
 
+is_local_dolt_host() {
+  case "${1:-}" in
+    ""|localhost|127.0.0.1|0.0.0.0|::1)
+      return 0
+      ;;
+  esac
+  case "$1" in
+    127.*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+dolt_tcp_reachable() {
+  probe_host="$1"
+  probe_port="$2"
+  case "$probe_port" in
+    ''|*[!0-9]*)
+      return 1
+      ;;
+  esac
+
+  if is_local_dolt_host "$probe_host"; then
+    managed_runtime_tcp_reachable "$probe_port"
+    return $?
+  fi
+
+  (echo > /dev/tcp/"$probe_host"/"$probe_port") 2>/dev/null && return 0
+  if command -v nc >/dev/null 2>&1; then
+    nc -z "$probe_host" "$probe_port" >/dev/null 2>&1 && return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$probe_host" "$probe_port" <<'PY' >/dev/null 2>&1
+import socket
+import sys
+
+sock = socket.socket()
+sock.settimeout(0.25)
+try:
+    sock.connect((sys.argv[1], int(sys.argv[2])))
+except OSError:
+    raise SystemExit(1)
+finally:
+    sock.close()
+PY
+    return $?
+  fi
+  return 1
+}
+
 # Check if server is running.
 server_running=false
 server_pid=0
@@ -89,8 +140,11 @@ now_ms() {
 }
 
 # Find dolt PID by port.
-pid=$(managed_runtime_listener_pid "$GC_DOLT_PORT" || true)
-if [ -n "$pid" ] || managed_runtime_tcp_reachable "$GC_DOLT_PORT"; then
+pid=""
+if is_local_dolt_host "$host"; then
+  pid=$(managed_runtime_listener_pid "$GC_DOLT_PORT" || true)
+fi
+if [ -n "$pid" ] || dolt_tcp_reachable "$host" "$GC_DOLT_PORT"; then
   server_running=true
   [ -n "$pid" ] && server_pid="$pid"
   # Measure query latency.
