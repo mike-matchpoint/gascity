@@ -234,11 +234,11 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 			`id "%s" >/dev/null 2>&1 || useradd -m -s /bin/bash "%s"; `+
 				`echo "%s ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/"%s" && chmod 0440 /etc/sudoers.d/"%s"; `+
 				`mkdir -p "%s" && chown -R "%s" "%s"; `+
-				`export HOME="/home/%s"; `,
+				`export HOME="/home/%s" USER="%s" LOGNAME="%s" SHELL="/bin/bash"; `,
 			linuxUsername, linuxUsername,
 			linuxUsername, linuxUsername, linuxUsername,
 			podWorkDir, linuxUsername, podWorkDir,
-			linuxUsername,
+			linuxUsername, linuxUsername, linuxUsername,
 		)
 	}
 	credCopy := `mkdir -p $HOME/.claude && cp -rL /tmp/claude-secret/. $HOME/.claude/ 2>/dev/null; git config --global --add safe.directory '*' 2>/dev/null; `
@@ -253,7 +253,7 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 		// Run tmux session as the dynamic user via su.
 		tmuxCmd = fmt.Sprintf(
 			"%s%s%s%s%sCMD=$(echo '%s' | base64 -d) && "+
-				`su - %s -c "cd %s && tmux new-session -d -s %s \"$CMD\" && sleep infinity"`,
+				`su -m %s -c "cd %s && tmux new-session -d -s %s \"$CMD\" && sleep infinity"`,
 			userSetup, credCopy, wsWait, preStartCmds, promptSetup, cmdB64,
 			linuxUsername, quotedPodWorkDir, tmuxSession,
 		)
