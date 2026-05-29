@@ -177,6 +177,9 @@ func TestBuildPodEntrypointLaunchesTmuxFromWorkDirAfterPreStart(t *testing.T) {
 	if len(args) != 1 {
 		t.Fatalf("container args = %v, want one shell command", args)
 	}
+	if got := pod.Spec.Containers[0].WorkingDir; got != podEntrypointWorkDir {
+		t.Fatalf("container workingDir = %q, want stable entrypoint dir %q", got, podEntrypointWorkDir)
+	}
 	entrypoint := args[0]
 	preStartIdx := strings.Index(entrypoint, "base64 -d | sh")
 	launchIdx := strings.Index(entrypoint, "cd '/workspace/rigs/frontend' && tmux new-session")

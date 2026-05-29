@@ -987,9 +987,10 @@ func TestPodManifestCompatibility(t *testing.T) {
 		}
 	}
 
-	// Verify working directory is pod-mapped.
-	if pod.Spec.Containers[0].WorkingDir != "/workspace/demo-rig" {
-		t.Errorf("workingDir = %q, want /workspace/demo-rig",
+	// The shell starts from a stable workspace root; the entrypoint cd's into
+	// the projected agent worktree after pre-start scripts finish.
+	if pod.Spec.Containers[0].WorkingDir != "/workspace" {
+		t.Errorf("workingDir = %q, want /workspace",
 			pod.Spec.Containers[0].WorkingDir)
 	}
 }

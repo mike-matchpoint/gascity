@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -118,8 +119,11 @@ func TestSessionScriptStartRigManifestUsesPodPaths(t *testing.T) {
 	if got := result.manifestEnv["GC_DIR"]; got != "/workspace/frontend" {
 		t.Fatalf("manifest GC_DIR = %q, want /workspace/frontend", got)
 	}
-	if got := result.containerWorkingDir; got != "/workspace/frontend" {
-		t.Fatalf("container workingDir = %q, want /workspace/frontend", got)
+	if got := result.containerWorkingDir; got != "/workspace" {
+		t.Fatalf("container workingDir = %q, want stable /workspace entrypoint dir", got)
+	}
+	if len(result.containerArgs) != 1 || !strings.Contains(result.containerArgs[0], "cd /workspace/frontend && tmux new-session") {
+		t.Fatalf("container args do not cd to projected workdir before tmux: %#v", result.containerArgs)
 	}
 	if got := result.manifestMounts["ws"]; got != "/workspace" {
 		t.Fatalf("ws mount = %q, want /workspace", got)
@@ -144,6 +148,7 @@ type sessionScriptStartResult struct {
 	manifestEnv         map[string]string
 	manifestMounts      map[string]string
 	containerWorkingDir string
+	containerArgs       []string
 	callLog             string
 	output              string
 	err                 error
@@ -227,12 +232,14 @@ exit 1
 	manifestEnv := map[string]string{}
 	manifestMounts := map[string]string{}
 	containerWorkingDir := ""
+	containerArgs := []string{}
 	manifestBytes, readManifestErr := os.ReadFile(manifestPath)
 	if readManifestErr == nil && len(manifestBytes) > 0 {
 		var manifest struct {
 			Spec struct {
 				Containers []struct {
-					WorkingDir string `json:"workingDir"`
+					WorkingDir string   `json:"workingDir"`
+					Args       []string `json:"args"`
 					Env        []struct {
 						Name  string `json:"name"`
 						Value string `json:"value"`
@@ -249,6 +256,7 @@ exit 1
 		}
 		if len(manifest.Spec.Containers) > 0 {
 			containerWorkingDir = manifest.Spec.Containers[0].WorkingDir
+			containerArgs = manifest.Spec.Containers[0].Args
 			for _, item := range manifest.Spec.Containers[0].Env {
 				manifestEnv[item.Name] = item.Value
 			}
@@ -269,6 +277,7 @@ exit 1
 		manifestEnv:         manifestEnv,
 		manifestMounts:      manifestMounts,
 		containerWorkingDir: containerWorkingDir,
+		containerArgs:       containerArgs,
 		callLog:             string(callLogBytes),
 		output:              string(out),
 		err:                 err,
