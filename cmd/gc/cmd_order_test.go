@@ -1241,7 +1241,7 @@ func TestOrderRunResolvesPackBindingForPool(t *testing.T) {
 		t.Fatalf("gc.routed_to = %q, want maintenance.dog", got)
 	}
 	if got := results[0].Metadata[poolDemandMetadataKey]; got != poolDemandMetadataValue {
-		t.Fatalf("%s = %q, want %q (cron pool orders need this flag so defaultScaleCheckCounts can count the molecule wisp despite readyExcludeTypes filtering molecules out of Ready() — see cmd/gc/pool_demand.go for the non-numeric-value rationale)", poolDemandMetadataKey, got, poolDemandMetadataValue)
+		t.Fatalf("%s = %q, want %q", poolDemandMetadataKey, got, poolDemandMetadataValue)
 	}
 	if !strings.Contains(stdout.String(), "gc.routed_to=maintenance.dog") {
 		t.Fatalf("stdout = %q, want binding-qualified route", stdout.String())

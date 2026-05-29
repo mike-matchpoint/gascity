@@ -225,21 +225,63 @@ func claimNextWork(store beads.Store, selector config.WorkSelector, assignee str
 }
 
 func workSelectorCountForController(store beads.Store, selector config.WorkSelector) (int, error) {
+	items, err := workSelectorListForController(store, selector)
+	return len(items), err
+}
+
+func workSelectorListForController(store beads.Store, selector config.WorkSelector) ([]beads.Bead, error) {
+	if len(selector.Any) > 0 {
+		return workSelectorAnyListForController(store, selector)
+	}
 	compiled, err := workselect.Compile(selector, 0)
 	if err != nil {
-		return 0, err
+		return nil, err
+	}
+	if compiled.Ready && !compiled.ExplicitType {
+		ready, readyErr := readyForControllerDemand(store)
+		if readyErr != nil {
+			return nil, readyErr
+		}
+		matching := make([]beads.Bead, 0, len(ready))
+		for _, item := range ready {
+			if compiled.Query.Matches(item) {
+				matching = append(matching, item)
+			}
+		}
+		return workselect.ApplyPostFilters(matching, compiled), nil
 	}
 	items, err := listForControllerDemand(store, compiled.Query)
 	if err != nil {
 		if !beads.IsPartialResult(err) || len(items) == 0 {
-			return 0, err
+			return nil, err
 		}
 	}
 	filtered, filterErr := workselect.ApplyStorePostFilters(store, items, compiled)
 	if filterErr != nil {
-		return 0, filterErr
+		return nil, filterErr
 	}
-	return len(filtered), err
+	return filtered, err
+}
+
+func workSelectorAnyListForController(store beads.Store, selector config.WorkSelector) ([]beads.Bead, error) {
+	seen := make(map[string]struct{})
+	items := make([]beads.Bead, 0)
+	var firstErr error
+	for _, clause := range selector.Any {
+		clauseItems, err := workSelectorListForController(store, clause)
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+		for _, item := range clauseItems {
+			if _, ok := seen[item.ID]; ok {
+				continue
+			}
+			seen[item.ID] = struct{}{}
+			items = append(items, item)
+		}
+	}
+	workselect.SortSelectorResults(selector, items)
+	return items, firstErr
 }
 
 func parseWorkMetadata(values []string) (map[string]string, error) {
@@ -303,26 +345,38 @@ func expandWorkSelectorTemplates(
 	selector config.WorkSelector,
 	stderr io.Writer,
 ) config.WorkSelector {
-	expand := func(name, value string) string {
-		if strings.TrimSpace(value) == "" {
-			return value
+	var expandSelector func(string, config.WorkSelector) config.WorkSelector
+	expandSelector = func(field string, selector config.WorkSelector) config.WorkSelector {
+		expand := func(name, value string) string {
+			if strings.TrimSpace(value) == "" {
+				return value
+			}
+			return expandAgentCommandTemplate(cityPath, cityName, agentCfg, rigs, field+"."+name, value, stderr)
 		}
-		return expandAgentCommandTemplate(cityPath, cityName, agentCfg, rigs, field+"."+name, value, stderr)
-	}
-	selector.Status = expand("status", selector.Status)
-	selector.Type = expand("type", selector.Type)
-	selector.ExcludeType = expand("exclude_type", selector.ExcludeType)
-	selector.Label = expand("label", selector.Label)
-	selector.Assignee = expand("assignee", selector.Assignee)
-	selector.Parent = expand("parent", selector.Parent)
-	selector.Tier = expand("tier", selector.Tier)
-	selector.Sort = expand("sort", selector.Sort)
-	if len(selector.Metadata) > 0 {
-		metadata := make(map[string]string, len(selector.Metadata))
-		for k, v := range selector.Metadata {
-			metadata[k] = expand("metadata."+k, v)
+		if len(selector.Any) > 0 {
+			clauses := make([]config.WorkSelector, len(selector.Any))
+			for i, clause := range selector.Any {
+				clauses[i] = expandSelector(fmt.Sprintf("%s.any[%d]", field, i), clause)
+			}
+			selector.Any = clauses
+			return selector
 		}
-		selector.Metadata = metadata
+		selector.Status = expand("status", selector.Status)
+		selector.Type = expand("type", selector.Type)
+		selector.ExcludeType = expand("exclude_type", selector.ExcludeType)
+		selector.Label = expand("label", selector.Label)
+		selector.Assignee = expand("assignee", selector.Assignee)
+		selector.Parent = expand("parent", selector.Parent)
+		selector.Tier = expand("tier", selector.Tier)
+		selector.Sort = expand("sort", selector.Sort)
+		if len(selector.Metadata) > 0 {
+			metadata := make(map[string]string, len(selector.Metadata))
+			for k, v := range selector.Metadata {
+				metadata[k] = expand("metadata."+k, v)
+			}
+			selector.Metadata = metadata
+		}
+		return selector
 	}
-	return selector
+	return expandSelector(field, selector)
 }

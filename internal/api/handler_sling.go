@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gastownhall/gascity/internal/agentutil"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/execenv"
+	"github.com/gastownhall/gascity/internal/routedwork"
 	"github.com/gastownhall/gascity/internal/sling"
 	"github.com/gastownhall/gascity/internal/sourceworkflow"
 )
@@ -435,9 +435,10 @@ func (r apiBeadRouter) Route(_ context.Context, req sling.RouteRequest) error {
 	}
 	routedTo := req.Target
 	if cfg != nil {
-		routedTo = agentutil.NormalizePoolRouteTarget(cfg, req.Target)
+		routedTo = routedwork.NormalizeTarget(cfg, req.Target)
 	}
-	if err := r.store.SetMetadata(req.BeadID, "gc.routed_to", routedTo); err != nil {
+	metadata := routedwork.RouteMetadata(routedTo)
+	if err := r.store.SetMetadata(req.BeadID, routedwork.RoutedToMetadataKey, metadata[routedwork.RoutedToMetadataKey]); err != nil {
 		if req.Force && errors.Is(err, beads.ErrNotFound) {
 			return nil
 		}

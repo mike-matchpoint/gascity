@@ -373,6 +373,12 @@ func cloneWorkSelector(src config.WorkSelector) config.WorkSelector {
 			dst.Metadata[k] = v
 		}
 	}
+	if len(src.Any) > 0 {
+		dst.Any = make([]config.WorkSelector, len(src.Any))
+		for i, clause := range src.Any {
+			dst.Any[i] = cloneWorkSelector(clause)
+		}
+	}
 	return dst
 }
 

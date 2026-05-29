@@ -977,6 +977,9 @@ func TestOrderDispatchResolvesImportedPackPoolAgainstCityShadow(t *testing.T) {
 	if got := work.Metadata["gc.routed_to"]; got != "maintenance.dog" {
 		t.Fatalf("gc.routed_to = %q, want maintenance.dog", got)
 	}
+	if got := work.Metadata[poolDemandMetadataKey]; got != poolDemandMetadataValue {
+		t.Fatalf("%s = %q, want %q", poolDemandMetadataKey, got, poolDemandMetadataValue)
+	}
 }
 
 func TestOrderDispatchResolvesImportedPackPoolAgainstSiblingImportCollision(t *testing.T) {

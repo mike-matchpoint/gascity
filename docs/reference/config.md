@@ -700,6 +700,7 @@ WorkSelector is a declarative bead predicate shared by controller demand, worker
 | `metadata` | map[string]string |  |  | Metadata selects beads whose metadata contains every key/value pair. |
 | `tier` | string |  |  | Tier selects the physical bead tier: issues (default), wisps, or both. Enum: `issues`, `wisps`, `both` |
 | `sort` | string |  |  | Sort selects deterministic result order. Enum: `created_asc`, `created_desc` |
+| `any` | []WorkSelector |  |  | Any selects beads matching at least one clause. When set, the top-level selector fields above must stay empty; each clause is a complete selector. |
 
 ## Workspace
 

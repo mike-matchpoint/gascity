@@ -130,6 +130,62 @@ func TestClaimNextWorkSingleWinner(t *testing.T) {
 	}
 }
 
+func TestClaimNextWorkAnyUsesUnionOrdering(t *testing.T) {
+	store := beads.NewMemStore()
+	step, err := store.Create(beads.Bead{
+		Title: "first step",
+		Type:  "step",
+		Metadata: map[string]string{
+			"gc.routed_to": "gastown.dog",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create step: %v", err)
+	}
+	task, err := store.Create(beads.Bead{
+		Title:  "second warrant",
+		Type:   "task",
+		Labels: []string{"warrant"},
+		Metadata: map[string]string{
+			"gc.routed_to":        "gastown.dog",
+			"gc.attached_formula": "mol-shutdown-dance",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	selector := config.WorkSelector{Any: []config.WorkSelector{
+		{
+			Type:       "task",
+			Label:      "warrant",
+			Unassigned: true,
+			Metadata: map[string]string{
+				"gc.routed_to":        "gastown.dog",
+				"gc.attached_formula": "mol-shutdown-dance",
+			},
+		},
+		{
+			Type:       "step",
+			Unassigned: true,
+			Metadata:   map[string]string{"gc.routed_to": "gastown.dog"},
+		},
+	}}
+	count, err := workSelectorCountForController(store, selector)
+	if err != nil {
+		t.Fatalf("workSelectorCountForController: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("workSelectorCountForController = %d, want 2", count)
+	}
+	claimed, err := claimNextWork(store, selector, "dog-1", nil)
+	if err != nil {
+		t.Fatalf("claimNextWork: %v", err)
+	}
+	if claimed.ID != step.ID {
+		t.Fatalf("claimed ID = %s, want earliest union member %s; task was %s", claimed.ID, step.ID, task.ID)
+	}
+}
+
 func TestNormalizeWorkClaimStatus(t *testing.T) {
 	for _, raw := range []string{"", "in_progress", "  in_progress  "} {
 		got, err := normalizeWorkClaimStatus(raw)

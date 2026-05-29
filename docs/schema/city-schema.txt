@@ -2381,6 +2381,13 @@
             "created_desc"
           ],
           "description": "Sort selects deterministic result order."
+        },
+        "any": {
+          "items": {
+            "$ref": "#/$defs/WorkSelector"
+          },
+          "type": "array",
+          "description": "Any selects beads matching at least one clause. When set, the top-level\nselector fields above must stay empty; each clause is a complete selector."
         }
       },
       "additionalProperties": false,

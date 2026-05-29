@@ -412,21 +412,28 @@ type WorkSelector struct {
 	Tier string `toml:"tier,omitempty" jsonschema:"enum=issues,enum=wisps,enum=both"`
 	// Sort selects deterministic result order.
 	Sort string `toml:"sort,omitempty" jsonschema:"enum=created_asc,enum=created_desc"`
+	// Any selects beads matching at least one clause. When set, the top-level
+	// selector fields above must stay empty; each clause is a complete selector.
+	Any []WorkSelector `toml:"any,omitempty"`
 }
 
 // IsZero reports whether the selector has no configured fields.
 func (s WorkSelector) IsZero() bool {
-	return strings.TrimSpace(s.Status) == "" &&
-		strings.TrimSpace(s.Type) == "" &&
-		strings.TrimSpace(s.ExcludeType) == "" &&
-		strings.TrimSpace(s.Label) == "" &&
-		strings.TrimSpace(s.Assignee) == "" &&
-		!s.Unassigned &&
-		!s.Ready &&
-		strings.TrimSpace(s.Parent) == "" &&
-		len(s.Metadata) == 0 &&
-		strings.TrimSpace(s.Tier) == "" &&
-		strings.TrimSpace(s.Sort) == ""
+	return !s.hasTopLevelFields() && len(s.Any) == 0
+}
+
+func (s WorkSelector) hasTopLevelFields() bool {
+	return strings.TrimSpace(s.Status) != "" ||
+		strings.TrimSpace(s.Type) != "" ||
+		strings.TrimSpace(s.ExcludeType) != "" ||
+		strings.TrimSpace(s.Label) != "" ||
+		strings.TrimSpace(s.Assignee) != "" ||
+		s.Unassigned ||
+		s.Ready ||
+		strings.TrimSpace(s.Parent) != "" ||
+		len(s.Metadata) > 0 ||
+		strings.TrimSpace(s.Tier) != "" ||
+		strings.TrimSpace(s.Sort) != ""
 }
 
 // Equivalent reports whether two selectors normalize to the same predicate.
@@ -446,9 +453,13 @@ type normalizedWorkSelector struct {
 	metadata    string
 	tier        string
 	sort        string
+	any         string
 }
 
 func (s WorkSelector) normalized() normalizedWorkSelector {
+	if len(s.Any) > 0 {
+		return normalizedWorkSelector{any: normalizedAnySelector(s.Any)}
+	}
 	return normalizedWorkSelector{
 		status:      strings.TrimSpace(s.Status),
 		typ:         strings.TrimSpace(s.Type),
@@ -462,6 +473,31 @@ func (s WorkSelector) normalized() normalizedWorkSelector {
 		tier:        strings.TrimSpace(s.Tier),
 		sort:        strings.TrimSpace(s.Sort),
 	}
+}
+
+func normalizedAnySelector(clauses []WorkSelector) string {
+	if len(clauses) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(clauses))
+	for _, clause := range clauses {
+		n := clause.normalized()
+		parts = append(parts, fmt.Sprintf("%q|%q|%q|%q|%q|%t|%t|%q|%q|%q|%q",
+			n.status,
+			n.typ,
+			n.excludeType,
+			n.label,
+			n.assignee,
+			n.unassigned,
+			n.ready,
+			n.parent,
+			n.metadata,
+			n.tier,
+			n.sort,
+		))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "\n")
 }
 
 func normalizedMetadataSelector(metadata map[string]string) string {
@@ -3498,6 +3534,28 @@ func validateWorkSelector(agentName, field string, selector WorkSelector) error 
 	if selector.IsZero() {
 		return nil
 	}
+	if len(selector.Any) > 0 {
+		if selector.hasTopLevelFields() {
+			return fmt.Errorf("agent %q: %s cannot combine top-level fields with any", agentName, field)
+		}
+		for i, clause := range selector.Any {
+			clauseField := fmt.Sprintf("%s.any[%d]", field, i)
+			if len(clause.Any) > 0 {
+				return fmt.Errorf("agent %q: %s cannot contain nested any", agentName, clauseField)
+			}
+			if clause.IsZero() {
+				return fmt.Errorf("agent %q: %s must not be empty", agentName, clauseField)
+			}
+			if err := validateWorkSelectorClause(agentName, clauseField, clause); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return validateWorkSelectorClause(agentName, field, selector)
+}
+
+func validateWorkSelectorClause(agentName, field string, selector WorkSelector) error {
 	switch strings.TrimSpace(selector.Status) {
 	case "", "open", "in_progress", "closed":
 	default:

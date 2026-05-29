@@ -29,6 +29,7 @@ import (
 	"github.com/gastownhall/gascity/internal/orderdiscovery"
 	"github.com/gastownhall/gascity/internal/orders"
 	"github.com/gastownhall/gascity/internal/processgroup"
+	"github.com/gastownhall/gascity/internal/routedwork"
 )
 
 const (
@@ -1027,18 +1028,7 @@ func (m *memoryOrderDispatcher) dispatchWisp(ctx context.Context, store beads.St
 		)
 	}
 	if a.Pool != "" {
-		// Same metadata-pair the CLI path (cmd_order.go:doOrderRunWithJSON)
-		// writes — gc.routed_to so the worker's Tier-3 work_query and bd
-		// CLI tooling see the routing, plus poolDemandMetadataPair() so
-		// the supervisor's defaultScaleCheckCounts can count the wisp as
-		// scale_check demand. Without the second pair, supervisor-cron
-		// dispatched orders silently never spawn a pool worker because
-		// the molecule wisp is filtered out of Ready() by
-		// readyExcludeTypes (per PR #1154). See cmd/gc/pool_demand.go.
-		update.Metadata = map[string]string{"gc.routed_to": pool}
-		for k, v := range poolDemandMetadataPair() {
-			update.Metadata[k] = v
-		}
+		update.Metadata = routedwork.FormulaOrderPoolDemandMetadata(pool)
 	}
 	if err := store.Update(rootID, update); err != nil {
 		// Label failure is critical for duplicate-dispatch prevention.

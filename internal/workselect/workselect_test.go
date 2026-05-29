@@ -2,6 +2,7 @@ package workselect
 
 import (
 	"testing"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
@@ -116,4 +117,83 @@ func TestSelectorReadyFiltersExplicitSteps(t *testing.T) {
 	if !ok || next.ID != first.ID {
 		t.Fatalf("Next = (%+v, %v), want %s", next, ok, first.ID)
 	}
+}
+
+func TestWorkSelectorAnyUnionDedupsAndOrders(t *testing.T) {
+	store := beads.NewMemStore()
+	first, err := store.Create(beads.Bead{
+		Title: "warrant",
+		Type:  "task",
+		Labels: []string{
+			"warrant",
+		},
+		Metadata: map[string]string{
+			"gc.routed_to":        "gastown.dog",
+			"gc.attached_formula": "mol-shutdown-dance",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create warrant: %v", err)
+	}
+	time.Sleep(time.Millisecond)
+	second, err := store.Create(beads.Bead{
+		Title: "step",
+		Type:  "step",
+		Metadata: map[string]string{
+			"gc.routed_to": "gastown.dog",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create step: %v", err)
+	}
+	selector := config.WorkSelector{Any: []config.WorkSelector{
+		{
+			Type:       "step",
+			Unassigned: true,
+			Metadata:   map[string]string{"gc.routed_to": "gastown.dog"},
+		},
+		{
+			Type:       "task",
+			Label:      "warrant",
+			Unassigned: true,
+			Metadata: map[string]string{
+				"gc.routed_to":        "gastown.dog",
+				"gc.attached_formula": "mol-shutdown-dance",
+			},
+		},
+		{
+			Type:       "task",
+			Unassigned: true,
+			Metadata:   map[string]string{"gc.routed_to": "gastown.dog"},
+		},
+	}}
+	count, err := Count(store, selector)
+	if err != nil {
+		t.Fatalf("Count: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("Count = %d, want 2 unique beads", count)
+	}
+	items, err := List(store, selector, 0)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(items) != 2 || items[0].ID != first.ID || items[1].ID != second.ID {
+		t.Fatalf("List IDs = %v, want [%s %s]", beadIDs(items), first.ID, second.ID)
+	}
+	next, ok, err := Next(store, selector)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if !ok || next.ID != first.ID {
+		t.Fatalf("Next = (%+v, %v), want %s", next, ok, first.ID)
+	}
+}
+
+func beadIDs(items []beads.Bead) []string {
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.ID)
+	}
+	return ids
 }

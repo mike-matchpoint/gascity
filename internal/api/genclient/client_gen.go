@@ -4426,11 +4426,25 @@ type UnboundEventPayload struct {
 
 // WorkSelector defines model for WorkSelector.
 type WorkSelector struct {
+	Any *[]struct {
+		Assignee    string            `json:"Assignee"`
+		ExcludeType string            `json:"ExcludeType"`
+		Label       string            `json:"Label"`
+		Metadata    map[string]string `json:"Metadata"`
+		Parent      string            `json:"Parent"`
+		Ready       bool              `json:"Ready"`
+		Sort        string            `json:"Sort"`
+		Status      string            `json:"Status"`
+		Tier        string            `json:"Tier"`
+		Type        string            `json:"Type"`
+		Unassigned  bool              `json:"Unassigned"`
+	} `json:"Any"`
 	Assignee    string            `json:"Assignee"`
 	ExcludeType string            `json:"ExcludeType"`
 	Label       string            `json:"Label"`
 	Metadata    map[string]string `json:"Metadata"`
 	Parent      string            `json:"Parent"`
+	Ready       bool              `json:"Ready"`
 	Sort        string            `json:"Sort"`
 	Status      string            `json:"Status"`
 	Tier        string            `json:"Tier"`
