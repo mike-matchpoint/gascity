@@ -2697,6 +2697,168 @@ func TestReconcileSessionBeads_SkipsPendingCreateStartAlreadyInFlight(t *testing
 	sp.ensureNoFurtherStart(t, 100*time.Millisecond)
 }
 
+func TestReconcileSessionBeads_DefersLivePendingCreateRollbackDuringStartupLease(t *testing.T) {
+	store := beads.NewMemStore()
+	clk := &clock.Fake{Time: time.Date(2026, 4, 26, 12, 0, 45, 0, time.UTC)}
+	session, err := store.Create(beads.Bead{
+		ID:     "gc-worker",
+		Title:  "worker",
+		Type:   sessionBeadType,
+		Labels: []string{sessionBeadLabel},
+		Metadata: creatingMeta(map[string]string{
+			"session_name":         "worker",
+			"template":             "worker",
+			"generation":           "2",
+			"continuation_epoch":   "1",
+			"instance_token":       "tok-worker",
+			"pending_create_claim": "true",
+			"last_woke_at":         clk.Now().Add(-10 * time.Second).UTC().Format(time.RFC3339),
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp := runtime.NewFake()
+	if err := sp.Start(context.Background(), "worker", runtime.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.City{
+		Agents: []config.Agent{{Name: "worker"}},
+	}
+	tp := TemplateParams{
+		Command:      "worker",
+		SessionName:  "worker",
+		TemplateName: "worker",
+	}
+
+	woken := reconcileSessionBeads(
+		context.Background(),
+		[]beads.Bead{session},
+		map[string]TemplateParams{"worker": tp},
+		configuredSessionNames(cfg, "", store),
+		cfg,
+		sp,
+		store,
+		nil,
+		nil,
+		nil,
+		newDrainTracker(),
+		map[string]int{"worker": 1},
+		false,
+		map[string]bool{"worker": true},
+		"test-city",
+		nil,
+		clk,
+		events.Discard,
+		time.Minute,
+		0,
+		ioDiscard{},
+		ioDiscard{},
+	)
+	if woken != 0 {
+		t.Fatalf("woken = %d, want 0 while pending-create startup lease is active", woken)
+	}
+	updated, err := store.Get(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status == "closed" {
+		t.Fatal("status = closed, want rollback deferred while live startup lease is active")
+	}
+	if updated.Metadata["pending_create_claim"] != "true" {
+		t.Fatalf("pending_create_claim = %q, want true while startup lease is active", updated.Metadata["pending_create_claim"])
+	}
+	if !sp.IsRunning("worker") {
+		t.Fatal("runtime was stopped, want live runtime preserved during startup lease")
+	}
+}
+
+func TestReconcileSessionBeads_SkipsPendingCreateRollbackAfterStoreConverged(t *testing.T) {
+	store := beads.NewMemStore()
+	clk := &clock.Fake{Time: time.Date(2026, 4, 26, 12, 3, 0, 0, time.UTC)}
+	session, err := store.Create(beads.Bead{
+		ID:     "gc-worker",
+		Title:  "worker",
+		Type:   sessionBeadType,
+		Labels: []string{sessionBeadLabel},
+		Metadata: creatingMeta(map[string]string{
+			"session_name":         "worker",
+			"template":             "worker",
+			"generation":           "2",
+			"continuation_epoch":   "1",
+			"instance_token":       "tok-worker",
+			"pending_create_claim": "true",
+			"last_woke_at":         clk.Now().Add(-5 * time.Minute).UTC().Format(time.RFC3339),
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetMetadataBatch(session.ID, map[string]string{
+		"state":                     "active",
+		"state_reason":              "creation_complete",
+		"pending_create_claim":      "",
+		"pending_create_started_at": "",
+		"creation_complete_at":      clk.Now().UTC().Format(time.RFC3339),
+		"started_config_hash":       "hash-current",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sp := runtime.NewFake()
+	if err := sp.Start(context.Background(), "worker", runtime.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.City{
+		Agents: []config.Agent{{Name: "worker"}},
+	}
+	tp := TemplateParams{
+		Command:      "worker",
+		SessionName:  "worker",
+		TemplateName: "worker",
+	}
+
+	reconcileSessionBeads(
+		context.Background(),
+		[]beads.Bead{session},
+		map[string]TemplateParams{"worker": tp},
+		configuredSessionNames(cfg, "", store),
+		cfg,
+		sp,
+		store,
+		nil,
+		nil,
+		nil,
+		newDrainTracker(),
+		map[string]int{"worker": 1},
+		false,
+		map[string]bool{"worker": true},
+		"test-city",
+		nil,
+		clk,
+		events.Discard,
+		time.Minute,
+		0,
+		ioDiscard{},
+		ioDiscard{},
+	)
+	updated, err := store.Get(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status == "closed" {
+		t.Fatal("status = closed, want rollback skipped after store already converged")
+	}
+	if updated.Metadata["state"] != "active" {
+		t.Fatalf("state = %q, want active", updated.Metadata["state"])
+	}
+	if updated.Metadata["pending_create_claim"] != "" {
+		t.Fatalf("pending_create_claim = %q, want already-cleared claim preserved", updated.Metadata["pending_create_claim"])
+	}
+	if !sp.IsRunning("worker") {
+		t.Fatal("runtime was stopped, want converged runtime preserved")
+	}
+}
+
 func TestCommitAsyncStartResult_IgnoresStaleSessionSnapshot(t *testing.T) {
 	store := beads.NewMemStore()
 	clk := &clock.Fake{Time: time.Date(2026, 4, 26, 12, 2, 0, 0, time.UTC)}
