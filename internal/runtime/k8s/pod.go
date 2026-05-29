@@ -320,6 +320,10 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 	if err != nil {
 		return nil, err
 	}
+	runtimeIdentity, err := p.desiredProviderRuntimeIdentity(cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -331,7 +335,11 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 				"gc-agent":   agentLabel,
 			},
 			Annotations: map[string]string{
-				"gc-session-name": name,
+				"gc-session-name":                           name,
+				providerRuntimeFingerprintAnnotation:        runtimeIdentity.Fingerprint,
+				providerRuntimeFingerprintVersionAnnotation: runtimeIdentity.Version,
+				providerRuntimeImageAnnotation:              p.image,
+				providerRuntimeProviderAnnotation:           "k8s",
 			},
 		},
 		Spec: corev1.PodSpec{
