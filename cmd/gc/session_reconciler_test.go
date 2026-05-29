@@ -1914,6 +1914,7 @@ func TestFinalizeDrainAckStoppedSessionDoesNotEmitEventsWhenFinalMetadataFails(t
 	failingStore := &failSetMetadataBatchStore{Store: env.store, err: errors.New("metadata write failed")}
 	finalizeDrainAckStoppedSession(
 		"", env.cfg, failingStore, nil, &session, "worker", false,
+		sessionpkg.StopBoundaryAgentAck,
 		newFakeDrainOps(), env.dt, env.clk, env.rec, &env.stderr,
 	)
 
@@ -1941,6 +1942,7 @@ func TestFinalizeDrainAckStoppedSessionFallsThroughWhenCloseGateRacesWithAssignm
 	racingStore := &assignOnListStore{Store: env.store, sessionID: session.ID}
 	finalizeDrainAckStoppedSession(
 		"", env.cfg, racingStore, nil, &session, "worker", true,
+		sessionpkg.StopBoundaryAgentAck,
 		newFakeDrainOps(), env.dt, env.clk, env.rec, &env.stderr,
 	)
 

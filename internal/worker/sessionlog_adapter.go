@@ -340,14 +340,16 @@ func normalizeBlocks(entry *sessionlog.Entry) []HistoryBlock {
 				toolUseID = ""
 			}
 			result = append(result, HistoryBlock{
-				Kind:        kind,
-				Text:        block.Text,
-				ToolUseID:   toolUseID,
-				Name:        block.Name,
-				Input:       cloneRaw(block.Input),
-				Content:     cloneRaw(block.Content),
-				IsError:     block.IsError,
-				Interaction: interaction,
+				Kind:            kind,
+				Text:            block.Text,
+				Raw:             providerPrivateBlockRaw(block),
+				ProviderPrivate: sessionlog.IsProviderPrivateBlockType(block.Type),
+				ToolUseID:       toolUseID,
+				Name:            block.Name,
+				Input:           cloneRaw(block.Input),
+				Content:         cloneRaw(block.Content),
+				IsError:         block.IsError,
+				Interaction:     interaction,
 			})
 		}
 		return result
@@ -404,6 +406,8 @@ func normalizeBlockKind(kind string) BlockKind {
 		return BlockKindText
 	case "thinking":
 		return BlockKindThinking
+	case "redacted_thinking":
+		return BlockKindRedactedThinking
 	case "tool_use":
 		return BlockKindToolUse
 	case "tool_result":
@@ -415,6 +419,13 @@ func normalizeBlockKind(kind string) BlockKind {
 	default:
 		return BlockKindUnknown
 	}
+}
+
+func providerPrivateBlockRaw(block sessionlog.ContentBlock) json.RawMessage {
+	if !sessionlog.IsProviderPrivateBlockType(block.Type) || len(block.Raw) == 0 {
+		return nil
+	}
+	return cloneRaw(block.Raw)
 }
 
 func tailActivity(meta *sessionlog.TailMeta) TailActivity {

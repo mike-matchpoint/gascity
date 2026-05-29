@@ -339,6 +339,7 @@ func finalizeDrainAckStoppedSession(
 	session *beads.Bead,
 	template string,
 	closeIfUnassigned bool,
+	boundary sessionpkg.StopBoundary,
 	dops drainOps,
 	dt *drainTracker,
 	clk clock.Clock,
@@ -354,6 +355,9 @@ func finalizeDrainAckStoppedSession(
 	}
 	if template == "" {
 		template = session.Metadata["template"]
+	}
+	if boundary == "" {
+		boundary = sessionpkg.StopBoundaryAgentAck
 	}
 	recordStopped := func() {
 		if rec == nil {
@@ -413,9 +417,11 @@ func finalizeDrainAckStoppedSession(
 			hasAssignedWork = true
 		}
 	}
-	batch := sessionpkg.AcknowledgeDrainPatch(session.Metadata["wake_mode"] == "fresh")
+	stop := stopContinuationInputForSession(*session, nil, "drain-ack", boundary)
+	batch := sessionpkg.AcknowledgeDrainContinuationPatch(clk.Now().UTC(), session.Metadata["wake_mode"] == "fresh", stop)
 	if hasAssignedWork {
-		batch = sessionpkg.CompleteDrainPatch(clk.Now().UTC(), "idle", session.Metadata["wake_mode"] == "fresh")
+		stop.Reason = "idle"
+		batch = sessionpkg.CompleteDrainContinuationPatch(clk.Now().UTC(), "idle", session.Metadata["wake_mode"] == "fresh", stop)
 	}
 	if err := store.SetMetadataBatch(session.ID, batch); err != nil {
 		fmt.Fprintf(stderr, "session reconciler: finalizing drain-ack stopped %s: %v\n", name, err) //nolint:errcheck
@@ -468,6 +474,7 @@ func reconcileDrainAckStopPending(
 	finalizeDrainAckStoppedSession(
 		cityPath, cfg, store, rigStores, session, tp.TemplateName,
 		!desired || isPoolManagedSessionBead(*session),
+		sessionpkg.StopBoundaryAgentAck,
 		dops, dt, clk, rec, stderr,
 	)
 	return true
@@ -509,6 +516,7 @@ func finalizeDrainAckStopPendingSessions(
 			cityPath, cfg, store, rigStores, session,
 			normalizedSessionTemplate(*session, cfg),
 			isPoolManagedSessionBead(*session),
+			sessionpkg.StopBoundaryAgentAck,
 			dops, dt, clk, rec, stderr,
 		)
 		finalized++
@@ -1413,7 +1421,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 						}
 						finalizeDrainAckStoppedSession(
 							cityPath, cfg, store, rigStores, session, template,
-							true, dops, dt, clk, rec, stderr,
+							true, sessionpkg.StopBoundaryAgentAck, dops, dt, clk, rec, stderr,
 						)
 						continue
 					}
@@ -1495,6 +1503,35 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		// and activity are probed by the narrower branches that use them.
 		running, alive := observeRuntimeProviderLiveness(sp, name, tp.Hints.ProcessNames)
 		peek := cachedSessionPeek(cityPath, store, sp, cfg, session.ID, tp.Hints.ProcessNames)
+		if (running || alive) && providerFatalResumeConfigured(tp.ResolvedProvider, session.Metadata, config.ProviderFatalResumeClaudeThinkingBlockMutation) {
+			if output, err := peek(rateLimitPeekLines); err == nil && providerHistoryInvalidDetected(tp.ResolvedProvider, session.Metadata, output) {
+				now := clk.Now().UTC()
+				stop := stopContinuationInputForSession(*session, tp.ResolvedProvider, "provider-history-invalid", sessionpkg.StopBoundaryUnknown)
+				stop.ResetReason = "provider-history-invalid"
+				batch := sessionpkg.ContinuationResetWakePatch(now)
+				for key, value := range sessionpkg.StopContinuationPatch(now, stop) {
+					batch[key] = value
+				}
+				if err := store.SetMetadataBatch(session.ID, batch); err != nil {
+					fmt.Fprintf(stderr, "session reconciler: marking provider-history-invalid reset for %s: %v\n", name, err) //nolint:errcheck
+					continue
+				}
+				for key, value := range batch {
+					session.Metadata[key] = value
+				}
+				if err := workerKillSessionTargetWithConfig("", store, sp, cfg, session.ID); err != nil && !runtime.IsSessionGone(err) {
+					fmt.Fprintf(stderr, "session reconciler: stopping provider-history-invalid runtime %s: %v\n", name, err) //nolint:errcheck
+				}
+				rec.Record(events.Event{
+					Type:    events.SessionCrashed,
+					Actor:   "gc",
+					Subject: tp.DisplayName(),
+					Message: "provider history invalid; fresh continuation requested",
+					Payload: api.SessionLifecyclePayloadJSON(session.ID, tp.TemplateName, "provider-history-invalid"),
+				})
+				continue
+			}
+		}
 
 		// Zombie capture: session exists but process dead — grab scrollback for forensics.
 		zombieRuntime := running && !alive
@@ -1640,6 +1677,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					finalizeDrainAckStoppedSession(
 						cityPath, cfg, store, rigStores, session, tp.TemplateName,
 						isPoolManagedSessionBead(*session),
+						drainAckStopBoundary(*session, reconcilerOwnedAck),
 						dops, finalizeDT,
 						clk, rec, stderr,
 					)

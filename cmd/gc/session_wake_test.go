@@ -1263,7 +1263,7 @@ func TestCompleteDrain_ClearsLastWokeAt(t *testing.T) {
 	})
 
 	ds := &drainState{reason: "idle"}
-	completeDrain(&b, store, ds, clk)
+	completeDrain(&b, store, ds, clk, sessionpkg.StopBoundaryUnknown)
 
 	got, _ := store.Get(b.ID)
 	if got.Metadata["last_woke_at"] != "" {
@@ -1294,7 +1294,7 @@ func TestCompleteDrain_FreshModeClearsIdentity(t *testing.T) {
 	})
 
 	ds := &drainState{reason: "idle"}
-	completeDrain(&b, store, ds, clk)
+	completeDrain(&b, store, ds, clk, sessionpkg.StopBoundaryUnknown)
 
 	got, _ := store.Get(b.ID)
 	if got.Metadata["session_key"] != "" {
@@ -1328,7 +1328,7 @@ func TestCompleteDrain_ResumeModePreservesIdentity(t *testing.T) {
 	})
 
 	ds := &drainState{reason: "idle"}
-	completeDrain(&b, store, ds, clk)
+	completeDrain(&b, store, ds, clk, sessionpkg.StopBoundaryUnknown)
 
 	got, _ := store.Get(b.ID)
 	if got.Metadata["session_key"] != "resume-key" {
@@ -1356,7 +1356,7 @@ func TestCompleteDrain_ClearsPendingCreateClaim(t *testing.T) {
 	})
 
 	ds := &drainState{reason: "idle"}
-	completeDrain(&b, store, ds, clk)
+	completeDrain(&b, store, ds, clk, sessionpkg.StopBoundaryUnknown)
 
 	got, _ := store.Get(b.ID)
 	if got.Metadata["pending_create_claim"] != "" {
