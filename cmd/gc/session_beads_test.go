@@ -114,6 +114,22 @@ func (p *deadRuntimeArtifactProvider) Stop(name string) error {
 	return nil
 }
 
+type runtimeArtifactListProvider struct {
+	*deadRuntimeArtifactProvider
+	artifacts []runtime.RuntimeArtifact
+	listErr   error
+}
+
+func (p *runtimeArtifactListProvider) ListRuntimeArtifacts(prefix string) ([]runtime.RuntimeArtifact, error) {
+	var out []runtime.RuntimeArtifact
+	for _, artifact := range p.artifacts {
+		if prefix == "" || strings.HasPrefix(artifact.Name, prefix) {
+			out = append(out, artifact)
+		}
+	}
+	return out, p.listErr
+}
+
 func (s *failingCloseStore) Close(_ string) error {
 	return errors.New("close failed")
 }
@@ -5826,6 +5842,29 @@ func TestReapRuntimesBoundToClosedBeadsStopsLiveRuntime(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "reaped runtime \"mayor\" bound to closed session bead gm-closed") {
 		t.Fatalf("stderr = %q, want reap message", stderr.String())
+	}
+}
+
+func TestReapRuntimesBoundToClosedBeadsUsesArtifactSessionID(t *testing.T) {
+	sp := &runtimeArtifactListProvider{
+		deadRuntimeArtifactProvider: newDeadRuntimeArtifactProvider(),
+		artifacts: []runtime.RuntimeArtifact{{
+			Name:      "pending-worker",
+			SessionID: "gm-closed",
+		}},
+	}
+	sp.visible["pending-worker"] = true
+
+	store := beads.NewMemStoreFrom(0, []beads.Bead{{ID: "gm-closed", Status: "closed"}}, nil)
+	snapshot := newSessionBeadSnapshot(nil)
+
+	var stderr bytes.Buffer
+	got := reapRuntimesBoundToClosedBeads(store, snapshot, nil, sp, &stderr)
+	if got != 1 {
+		t.Fatalf("reapRuntimesBoundToClosedBeads() = %d, want 1; stderr=%q", got, stderr.String())
+	}
+	if sp.stopCalls["pending-worker"] != 1 {
+		t.Fatalf("Stop(pending-worker) calls = %d, want 1", sp.stopCalls["pending-worker"])
 	}
 }
 

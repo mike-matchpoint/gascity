@@ -1942,14 +1942,14 @@ func reapRuntimesBoundToClosedBeads(
 	if stderr == nil {
 		stderr = io.Discard
 	}
-	visible, err := sp.ListRunning("")
+	visible, err := runtime.ListRuntimeArtifacts(sp, "")
 	partialList := runtime.IsPartialListError(err)
 	if err != nil && !partialList {
-		fmt.Fprintf(stderr, "session reconciler: listing runtime sessions for closed-bead reap: %v\n", err) //nolint:errcheck
+		fmt.Fprintf(stderr, "session reconciler: listing runtime artifacts for closed-bead reap: %v\n", err) //nolint:errcheck
 		return 0
 	}
 	if partialList {
-		fmt.Fprintf(stderr, "session reconciler: listing runtime sessions partially failed for closed-bead reap; checking %d visible session(s): %v\n", len(visible), err) //nolint:errcheck
+		fmt.Fprintf(stderr, "session reconciler: listing runtime artifacts partially failed for closed-bead reap; checking %d visible artifact(s): %v\n", len(visible), err) //nolint:errcheck
 	}
 	if len(visible) == 0 {
 		return 0
@@ -1957,22 +1957,28 @@ func reapRuntimesBoundToClosedBeads(
 
 	reaped := 0
 	seen := make(map[string]bool, len(visible))
-	for _, name := range visible {
-		name = strings.TrimSpace(name)
+	for _, artifact := range visible {
+		name := strings.TrimSpace(artifact.Name)
 		if name == "" || seen[name] {
 			continue
 		}
 		seen[name] = true
 
-		// Attribute the runtime to a bead via GC_SESSION_ID. Without it we
-		// cannot tell which bead owns the runtime, so we leave it alone.
-		liveID, err := sp.GetMeta(name, "GC_SESSION_ID")
-		if err != nil {
-			continue
-		}
+		// Attribute the runtime to a bead via GC_SESSION_ID. Artifact listers
+		// can provide the ID from durable runtime specs before tmux exists; fall
+		// back to live runtime metadata for providers without that capability.
+		liveID := artifact.SessionID
 		liveID = strings.TrimSpace(liveID)
 		if liveID == "" {
-			continue
+			var metaErr error
+			liveID, metaErr = sp.GetMeta(name, "GC_SESSION_ID")
+			if metaErr != nil {
+				continue
+			}
+			liveID = strings.TrimSpace(liveID)
+			if liveID == "" {
+				continue
+			}
 		}
 
 		// A runtime whose bead is still open is healthy (or is mid-wake and

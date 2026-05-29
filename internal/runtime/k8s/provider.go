@@ -22,6 +22,7 @@ import (
 
 // Compile-time interface check.
 var _ runtime.Provider = (*Provider)(nil)
+var _ runtime.RuntimeArtifactLister = (*Provider)(nil)
 
 // Provider is a native Kubernetes session provider using client-go.
 // Eliminates subprocess overhead by making direct API calls over reused
@@ -570,6 +571,61 @@ func (p *Provider) ListRunning(prefix string) ([]string, error) {
 		}
 	}
 	return names, nil
+}
+
+// ListRuntimeArtifacts returns all provider-owned agent pod artifacts,
+// including pods that have not reached Running. The session ID is read from
+// the pod spec so cleanup can attribute init-stuck pods before tmux exists.
+func (p *Provider) ListRuntimeArtifacts(prefix string) ([]runtime.RuntimeArtifact, error) {
+	ctx := context.Background()
+	pods, err := p.ops.listPods(ctx, "app=gc-agent", "")
+	if err != nil {
+		return nil, err
+	}
+	artifacts := make([]runtime.RuntimeArtifact, 0, len(pods))
+	for i := range pods {
+		pod := &pods[i]
+		name := podRuntimeSessionName(pod)
+		if name == "" {
+			continue
+		}
+		if prefix != "" && !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		artifacts = append(artifacts, runtime.RuntimeArtifact{
+			Name:      name,
+			SessionID: podAgentEnvValue(pod, "GC_SESSION_ID"),
+		})
+	}
+	return artifacts, nil
+}
+
+func podRuntimeSessionName(pod *corev1.Pod) string {
+	if pod == nil {
+		return ""
+	}
+	if name := strings.TrimSpace(pod.Annotations["gc-session-name"]); name != "" {
+		return name
+	}
+	return strings.TrimSpace(pod.Labels["gc-session"])
+}
+
+func podAgentEnvValue(pod *corev1.Pod, key string) string {
+	if pod == nil || key == "" {
+		return ""
+	}
+	for i := range pod.Spec.Containers {
+		container := &pod.Spec.Containers[i]
+		if container.Name != "agent" {
+			continue
+		}
+		for _, env := range container.Env {
+			if env.Name == key {
+				return strings.TrimSpace(env.Value)
+			}
+		}
+	}
+	return ""
 }
 
 // GetLastActivity returns the time of the last I/O in the tmux session.

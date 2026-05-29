@@ -285,6 +285,42 @@ func TestListRunning(t *testing.T) {
 	}
 }
 
+func TestListRuntimeArtifactsIncludesPendingPodsWithSessionID(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+
+	addRunningPodWithAnnotation(fake, "gc-test-live", "gc-test-live", "gc-test-live")
+	fake.pods["gc-test-pending"] = &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "gc-test-pending",
+			Labels:      map[string]string{"app": "gc-agent", "gc-session": "gc-test-pending"},
+			Annotations: map[string]string{"gc-session-name": "gc-test-pending-full"},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name: "agent",
+				Env:  []corev1.EnvVar{{Name: "GC_SESSION_ID", Value: "gc-session-pending"}},
+			}},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodPending},
+	}
+
+	artifacts, err := p.ListRuntimeArtifacts("gc-test-")
+	if err != nil {
+		t.Fatalf("ListRuntimeArtifacts: %v", err)
+	}
+	got := map[string]string{}
+	for _, artifact := range artifacts {
+		got[artifact.Name] = artifact.SessionID
+	}
+	if _, ok := got["gc-test-live"]; !ok {
+		t.Fatalf("ListRuntimeArtifacts missing running pod: %#v", got)
+	}
+	if got["gc-test-pending-full"] != "gc-session-pending" {
+		t.Fatalf("pending artifact session ID = %q, want gc-session-pending; all=%#v", got["gc-test-pending-full"], got)
+	}
+}
+
 func TestNudge(t *testing.T) {
 	fake := newFakeK8sOps()
 	p := newProviderWithOps(fake)
