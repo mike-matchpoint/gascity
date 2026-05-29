@@ -21,11 +21,12 @@ const (
 	podManagedDoltHost = "dolt.gc.svc.cluster.local"
 	podManagedDoltPort = "3307"
 
-	defaultContainerHome = "/home/gcagent"
-	podEntrypointWorkDir = "/workspace"
-	claudeSecretName     = "claude-credentials"
-	codexSecretName      = "codex-credentials"
-	gitSecretName        = "git-credentials"
+	defaultContainerHome    = "/home/gcagent"
+	defaultPodWorkspaceRoot = "/workspace"
+	podEntrypointWorkDir    = "/workspace"
+	claudeSecretName        = "claude-credentials"
+	codexSecretName         = "codex-credentials"
+	gitSecretName           = "git-credentials"
 )
 
 func controllerCityPath(cfgEnv map[string]string) string {
@@ -39,24 +40,43 @@ func controllerCityPath(cfgEnv map[string]string) string {
 	return ctrlCity
 }
 
-func remapControllerPathToPod(val, ctrlCity string) string {
+func remapControllerPathToPodRoot(val, ctrlCity, podCityRoot string) string {
 	val = strings.TrimSpace(val)
 	ctrlCity = strings.TrimSpace(ctrlCity)
+	podCityRoot = strings.TrimRight(strings.TrimSpace(podCityRoot), "/")
+	if podCityRoot == "" {
+		podCityRoot = defaultPodWorkspaceRoot
+	}
 	if val == "" || ctrlCity == "" {
 		return val
 	}
 	if val == ctrlCity || strings.HasPrefix(val, ctrlCity+"/") {
-		return "/workspace" + val[len(ctrlCity):]
+		suffix := val[len(ctrlCity):]
+		if podCityRoot == "/" {
+			if suffix == "" {
+				return "/"
+			}
+			return suffix
+		}
+		return podCityRoot + suffix
 	}
 	return val
 }
 
 func projectedPodWorkDir(cfg runtime.Config) string {
+	return projectedPodWorkDirForControllerPath(cfg.WorkDir, controllerCityPath(cfg.Env))
+}
+
+func projectedPodWorkDirForProvider(cfg runtime.Config, p *Provider) string {
 	ctrlCity := controllerCityPath(cfg.Env)
-	return projectedPodWorkDirForControllerPath(cfg.WorkDir, ctrlCity)
+	return projectedPodWorkDirForControllerPathRoot(cfg.WorkDir, ctrlCity, p.podWorkspaceRoot())
 }
 
 func projectedPodStoreRoot(cfg runtime.Config, podWorkDir string) string {
+	return projectedPodStoreRootForRoot(cfg, podWorkDir, defaultPodWorkspaceRoot)
+}
+
+func projectedPodStoreRootForRoot(cfg runtime.Config, podWorkDir, podCityRoot string) string {
 	storeRoot := strings.TrimSpace(cfg.Env["GC_STORE_ROOT"])
 	if storeRoot == "" {
 		storeRoot = strings.TrimSpace(cfg.WorkDir)
@@ -64,32 +84,35 @@ func projectedPodStoreRoot(cfg runtime.Config, podWorkDir string) string {
 	if storeRoot == "" {
 		storeRoot = controllerCityPath(cfg.Env)
 	}
-	storeRoot = remapControllerPathToPod(storeRoot, controllerCityPath(cfg.Env))
+	storeRoot = remapControllerPathToPodRoot(storeRoot, controllerCityPath(cfg.Env), podCityRoot)
 	if storeRoot == "" {
 		return podWorkDir
 	}
 	return storeRoot
 }
 
-func projectedPodRuntimeDir(cfgEnv map[string]string, ctrlCity string) string {
-	podCity := "/workspace"
+func projectedPodRuntimeDirForRoot(cfgEnv map[string]string, ctrlCity, podCityRoot string) string {
+	podCity := strings.TrimRight(strings.TrimSpace(podCityRoot), "/")
+	if podCity == "" {
+		podCity = defaultPodWorkspaceRoot
+	}
 	runtimeDir := strings.TrimSpace(cfgEnv["GC_CITY_RUNTIME_DIR"])
 	if runtimeDir == "" {
 		return citylayout.RuntimeDataDir(podCity)
 	}
-	remapped := remapControllerPathToPod(runtimeDir, ctrlCity)
+	remapped := remapControllerPathToPodRoot(runtimeDir, ctrlCity, podCity)
 	if remapped != runtimeDir {
 		return remapped
 	}
 	return citylayout.RuntimeDataDir(podCity)
 }
 
-func projectControllerRuntimePathToPod(path, ctrlCity, ctrlRuntimeDir, podRuntimeDir string) string {
+func projectControllerRuntimePathToPodRoot(path, ctrlCity, ctrlRuntimeDir, podRuntimeDir, podCityRoot string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return path
 	}
-	if remapped := remapControllerPathToPod(path, ctrlCity); remapped != path {
+	if remapped := remapControllerPathToPodRoot(path, ctrlCity, podCityRoot); remapped != path {
 		return remapped
 	}
 	if ctrlRuntimeDir != "" && pathutil.PathWithin(ctrlRuntimeDir, path) {
@@ -171,8 +194,10 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 	agentLabel := SanitizeLabel(agentName)
 
 	// Resolve pod-side working directory.
-	// Controller resolves dirs relative to its city path; pods use /workspace.
-	podWorkDir := projectedPodWorkDir(cfg)
+	// Controller resolves dirs relative to its city path; pods use either the
+	// staged workspace root or an explicitly mounted persistent workspace.
+	podCityRoot := p.podWorkspaceRoot()
+	podWorkDir := projectedPodWorkDirForProvider(cfg, p)
 	ctrlCity := controllerCityPath(cfg.Env)
 
 	// Build the command the agent runs. Base64-encode to avoid quoting issues.
@@ -184,7 +209,7 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 	// The controller expands {{.ConfigDir}} templates using its own city path
 	// (e.g. /city/packs/...) but pods have files at /workspace/....
 	if ctrlCity != "" {
-		agentCmd = strings.ReplaceAll(agentCmd, ctrlCity, "/workspace")
+		agentCmd = strings.ReplaceAll(agentCmd, ctrlCity, podCityRoot)
 	}
 	cmdB64 := base64.StdEncoding.EncodeToString([]byte(agentCmd))
 
@@ -195,7 +220,7 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 	for _, cmd := range cfg.PreStart {
 		c := cmd
 		if ctrlCity != "" {
-			c = strings.ReplaceAll(c, ctrlCity, "/workspace")
+			c = strings.ReplaceAll(c, ctrlCity, podCityRoot)
 		}
 		b64 := base64.StdEncoding.EncodeToString([]byte(c))
 		preStartCmds += fmt.Sprintf("echo '%s' | base64 -d | sh; ", b64)
@@ -225,7 +250,7 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 		`git config --global --add safe.directory '*' 2>/dev/null || true; ` +
 		`if [ -n "${GITHUB_TOKEN:-}" ]; then export GH_TOKEN="${GH_TOKEN:-$GITHUB_TOKEN}"; gh auth setup-git >/dev/null 2>&1 || true; fi; `
 	wsWait := ""
-	if !p.prebaked {
+	if !p.prebaked && !p.usesPersistentWorkspace() {
 		wsWait = `while [ ! -f /workspace/.gc-workspace-ready ] && [ ! -f /workspace/.gc-ready ]; do sleep 0.5; done; `
 	}
 	quotedPodWorkDir := shellSingleQuote(podWorkDir)
@@ -247,7 +272,7 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 	}
 
 	// Build environment, remapping K8s-specific vars.
-	env, err := buildPodEnv(cfg.Env, podWorkDir, p.managedServiceHost, p.managedServicePort)
+	env, err := buildPodEnvForRoot(cfg.Env, podCityRoot, podWorkDir, p.managedServiceHost, p.managedServicePort)
 	if err != nil {
 		return nil, err
 	}
@@ -257,7 +282,19 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 	var mainVolMounts []corev1.VolumeMount
 	var volumes []corev1.Volume
 
-	if !p.prebaked {
+	if p.usesPersistentWorkspace() {
+		mainVolMounts = append(mainVolMounts, corev1.VolumeMount{
+			Name: "workspace", MountPath: podCityRoot,
+		})
+		volumes = append(volumes, corev1.Volume{
+			Name: "workspace",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: p.workspacePVC,
+				},
+			},
+		})
+	} else if !p.prebaked {
 		mainVolMounts = append(mainVolMounts, corev1.VolumeMount{
 			Name: "ws", MountPath: "/workspace",
 		})
@@ -301,7 +338,7 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 	})
 
 	// If GC_CITY differs from work_dir, add a city volume (not needed when prebaked).
-	if !p.prebaked && ctrlCity != "" && ctrlCity != cfg.WorkDir {
+	if !p.prebaked && !p.usesPersistentWorkspace() && ctrlCity != "" && ctrlCity != cfg.WorkDir {
 		mainVolMounts = append(mainVolMounts, corev1.VolumeMount{
 			Name: "city", MountPath: ctrlCity,
 		})
@@ -368,7 +405,7 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 	pod.Spec.PriorityClassName = p.priorityClassName
 
 	// Add init container when staging is needed (skip when prebaked).
-	if !p.prebaked && needsStaging(cfg, ctrlCity) {
+	if !p.prebaked && !p.usesPersistentWorkspace() && needsStaging(cfg, ctrlCity) {
 		initVolMounts := []corev1.VolumeMount{
 			{Name: "ws", MountPath: "/workspace"},
 		}
@@ -421,6 +458,10 @@ func agentSecurityContext(linuxUsername string) *corev1.SecurityContext {
 // Removes controller-only vars, strips deprecated K8s compatibility inputs,
 // and remaps pod-visible ones.
 func buildPodEnv(cfgEnv map[string]string, podWorkDir, managedServiceHost, managedServicePort string) ([]corev1.EnvVar, error) {
+	return buildPodEnvForRoot(cfgEnv, defaultPodWorkspaceRoot, podWorkDir, managedServiceHost, managedServicePort)
+}
+
+func buildPodEnvForRoot(cfgEnv map[string]string, podCityRoot, podWorkDir, managedServiceHost, managedServicePort string) ([]corev1.EnvVar, error) {
 	// Start with cfg.Env, removing controller-only vars.
 	// Auth creds (GC_DOLT_USER, GC_DOLT_PASSWORD, BEADS_DOLT_*_USER/PASSWORD) intentionally pass through.
 	skip := map[string]bool{
@@ -437,7 +478,11 @@ func buildPodEnv(cfgEnv map[string]string, podWorkDir, managedServiceHost, manag
 
 	ctrlCity := controllerCityPath(cfgEnv)
 	ctrlRuntimeDir := strings.TrimSpace(cfgEnv["GC_CITY_RUNTIME_DIR"])
-	podRuntimeDir := projectedPodRuntimeDir(cfgEnv, ctrlCity)
+	podCityRoot = strings.TrimRight(strings.TrimSpace(podCityRoot), "/")
+	if podCityRoot == "" {
+		podCityRoot = defaultPodWorkspaceRoot
+	}
+	podRuntimeDir := projectedPodRuntimeDirForRoot(cfgEnv, ctrlCity, podCityRoot)
 
 	var env []corev1.EnvVar
 	for k, v := range cfgEnv {
@@ -448,15 +493,15 @@ func buildPodEnv(cfgEnv map[string]string, podWorkDir, managedServiceHost, manag
 		// Remap city/workdir vars to pod-visible paths.
 		switch k {
 		case "GC_CITY", "GC_CITY_PATH", "GC_CITY_ROOT":
-			val = "/workspace"
+			val = podCityRoot
 		case "GC_DIR":
 			val = podWorkDir
 		case "GC_CITY_RUNTIME_DIR":
 			val = podRuntimeDir
 		case "GC_CONTROL_DISPATCHER_TRACE_DEFAULT", "GC_PACK_STATE_DIR":
-			val = projectControllerRuntimePathToPod(val, ctrlCity, ctrlRuntimeDir, podRuntimeDir)
+			val = projectControllerRuntimePathToPodRoot(val, ctrlCity, ctrlRuntimeDir, podRuntimeDir, podCityRoot)
 		case "GC_STORE_ROOT", "GC_RIG_ROOT", "BEADS_DIR", "GT_ROOT", "GC_PACK_DIR":
-			val = remapControllerPathToPod(val, ctrlCity)
+			val = remapControllerPathToPodRoot(val, ctrlCity, podCityRoot)
 		}
 		env = append(env, corev1.EnvVar{Name: k, Value: val})
 	}

@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -191,6 +192,93 @@ func TestBuildPodEntrypointLaunchesTmuxFromWorkDirAfterPreStart(t *testing.T) {
 	}
 	if preStartIdx > launchIdx {
 		t.Fatalf("entrypoint cd happens before pre_start; want pre_start then final cd: %s", entrypoint)
+	}
+}
+
+func TestBuildPodPersistentWorkspacePVCUsesMountedCityRoot(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+	p.workspacePVC = "demo-city-workspace"
+	p.workspaceRoot = "/workspace/cities/demo-city"
+
+	cfg := runtime.Config{
+		Command:  "gc agent-script --script /host/city/packs/demo/agent.yaml",
+		WorkDir:  "/host/city/.gc/worktrees/demo/cartographer",
+		PreStart: []string{"test -d /host/city/rigs/demo"},
+		Env: map[string]string{
+			"GC_AGENT":             "demo/cartographer",
+			"GC_CITY":              "/host/city",
+			"GC_CITY_PATH":         "/host/city",
+			"GC_DIR":               "/host/city/.gc/worktrees/demo/cartographer",
+			"GC_RIG_ROOT":          "/host/city/rigs/demo",
+			"GC_STORE_ROOT":        "/host/city/rigs/demo",
+			"BEADS_DIR":            "/host/city/rigs/demo/.beads",
+			"GC_CITY_RUNTIME_DIR":  "/host/city/.gc/runtime",
+			"GC_K8S_WORKSPACE_PVC": "demo-city-workspace",
+		},
+	}
+
+	pod, err := buildPod("test-session", cfg, p)
+	if err != nil {
+		t.Fatalf("buildPod: %v", err)
+	}
+	if len(pod.Spec.InitContainers) != 0 {
+		t.Fatalf("persistent workspace pod should not use init staging containers: %#v", pod.Spec.InitContainers)
+	}
+
+	workspaceMount, ok := volumeMountByName(pod.Spec.Containers[0].VolumeMounts, "workspace")
+	if !ok {
+		t.Fatal("missing persistent workspace volume mount")
+	}
+	if workspaceMount.MountPath != "/workspace/cities/demo-city" {
+		t.Fatalf("workspace mount path = %q, want /workspace/cities/demo-city", workspaceMount.MountPath)
+	}
+	workspaceVolume, ok := volumeByName(pod.Spec.Volumes, "workspace")
+	if !ok || workspaceVolume.PersistentVolumeClaim == nil {
+		t.Fatalf("missing persistent workspace PVC volume: %#v", workspaceVolume)
+	}
+	if workspaceVolume.PersistentVolumeClaim.ClaimName != "demo-city-workspace" {
+		t.Fatalf("workspace claim = %q, want demo-city-workspace", workspaceVolume.PersistentVolumeClaim.ClaimName)
+	}
+	if _, ok := volumeMountByName(pod.Spec.Containers[0].VolumeMounts, "ws"); ok {
+		t.Fatal("persistent workspace pod should not mount staged ws EmptyDir")
+	}
+	if _, ok := volumeByName(pod.Spec.Volumes, "city"); ok {
+		t.Fatal("persistent workspace pod should not create compatibility city EmptyDir")
+	}
+
+	entrypoint := pod.Spec.Containers[0].Args[0]
+	if strings.Contains(entrypoint, ".gc-workspace-ready") || strings.Contains(entrypoint, ".gc-ready") {
+		t.Fatalf("persistent workspace entrypoint should not wait for staged workspace markers: %s", entrypoint)
+	}
+	if !strings.Contains(entrypoint, "cd '/workspace/cities/demo-city/.gc/worktrees/demo/cartographer' && tmux new-session") {
+		t.Fatalf("entrypoint does not launch from persistent workdir: %s", entrypoint)
+	}
+	wantPreStartB64 := base64.StdEncoding.EncodeToString([]byte("test -d /workspace/cities/demo-city/rigs/demo"))
+	if !strings.Contains(entrypoint, wantPreStartB64) {
+		t.Fatalf("pre_start command was not remapped to persistent workspace root: %s", entrypoint)
+	}
+	wantCommandB64 := base64.StdEncoding.EncodeToString([]byte("gc agent-script --script /workspace/cities/demo-city/packs/demo/agent.yaml"))
+	if !strings.Contains(entrypoint, wantCommandB64) {
+		t.Fatalf("agent command was not remapped to persistent workspace root: %s", entrypoint)
+	}
+
+	envMap := map[string]string{}
+	for _, e := range pod.Spec.Containers[0].Env {
+		envMap[e.Name] = e.Value
+	}
+	want := map[string]string{
+		"GC_CITY":             "/workspace/cities/demo-city",
+		"GC_CITY_PATH":        "/workspace/cities/demo-city",
+		"GC_DIR":              "/workspace/cities/demo-city/.gc/worktrees/demo/cartographer",
+		"GC_RIG_ROOT":         "/workspace/cities/demo-city/rigs/demo",
+		"GC_STORE_ROOT":       "/workspace/cities/demo-city/rigs/demo",
+		"BEADS_DIR":           "/workspace/cities/demo-city/rigs/demo/.beads",
+		"GC_CITY_RUNTIME_DIR": "/workspace/cities/demo-city/.gc/runtime",
+	}
+	for key, wantValue := range want {
+		if got := envMap[key]; got != wantValue {
+			t.Fatalf("%s = %q, want %q", key, got, wantValue)
+		}
 	}
 }
 

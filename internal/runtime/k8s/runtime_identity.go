@@ -28,6 +28,8 @@ type runtimeIdentitySpec struct {
 	ServiceAccount        string                 `json:"service_account,omitempty"`
 	Resources             runtimeResourceSpec    `json:"resources"`
 	WorkspaceMode         string                 `json:"workspace_mode"`
+	WorkspacePVC          string                 `json:"workspace_pvc,omitempty"`
+	WorkspaceRoot         string                 `json:"workspace_root,omitempty"`
 	WorkspaceReadyMarkers []string               `json:"workspace_ready_markers,omitempty"`
 	CredentialSecrets     []runtimeSecretSpec    `json:"credential_secrets,omitempty"`
 	CredentialEnv         []runtimeSecretEnvSpec `json:"credential_env,omitempty"`
@@ -166,12 +168,16 @@ func (p *Provider) runtimeIdentitySpec(cfg runtime.Config) (runtimeIdentitySpec,
 	if p.prebaked {
 		workspaceMode = "prebaked"
 	}
+	if p.usesPersistentWorkspace() {
+		staging = false
+		workspaceMode = "persistent-pvc"
+	}
 	var initImage string
 	if staging {
 		initImage = p.image
 	}
 	var readyMarkers []string
-	if !p.prebaked {
+	if !p.prebaked && !p.usesPersistentWorkspace() {
 		readyMarkers = []string{"/workspace/.gc-workspace-ready", "/workspace/.gc-ready"}
 	}
 	managedDoltEnv, err := projectedPodDoltEnv(cfg.Env, p.managedServiceHost, p.managedServicePort)
@@ -185,6 +191,8 @@ func (p *Provider) runtimeIdentitySpec(cfg runtime.Config) (runtimeIdentitySpec,
 		ServiceAccount:        p.serviceAccount,
 		Resources:             providerRuntimeResources(p),
 		WorkspaceMode:         workspaceMode,
+		WorkspacePVC:          strings.TrimSpace(p.workspacePVC),
+		WorkspaceRoot:         workspaceIdentityRoot(p),
 		WorkspaceReadyMarkers: readyMarkers,
 		CredentialSecrets: []runtimeSecretSpec{
 			{Name: "claude-config", SecretName: claudeSecretName, Optional: true},
@@ -225,6 +233,13 @@ func providerRuntimeResources(p *Provider) runtimeResourceSpec {
 		}
 	}
 	return resources
+}
+
+func workspaceIdentityRoot(p *Provider) string {
+	if !p.usesPersistentWorkspace() {
+		return ""
+	}
+	return p.podWorkspaceRoot()
 }
 
 func cloneStringMap(in map[string]string) map[string]string {

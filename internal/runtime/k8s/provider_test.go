@@ -172,6 +172,68 @@ func TestParseSchedulingEnvEmptyAndNullAffinitySemantics(t *testing.T) {
 	})
 }
 
+func TestParseWorkspaceEnvIsOptInByPVC(t *testing.T) {
+	t.Run("root without pvc is ignored", func(t *testing.T) {
+		clearWorkspaceEnv(t)
+		t.Setenv("GC_K8S_WORKSPACE_ROOT", "/workspace/cities/demo-city")
+
+		workspace, err := parseWorkspaceEnv()
+		if err != nil {
+			t.Fatalf("parseWorkspaceEnv: %v", err)
+		}
+		if workspace.pvc != "" {
+			t.Fatalf("workspace pvc = %q, want empty", workspace.pvc)
+		}
+		if workspace.root != defaultPodWorkspaceRoot {
+			t.Fatalf("workspace root = %q, want default %q", workspace.root, defaultPodWorkspaceRoot)
+		}
+	})
+
+	t.Run("pvc defaults root", func(t *testing.T) {
+		clearWorkspaceEnv(t)
+		t.Setenv("GC_K8S_WORKSPACE_PVC", "demo-city-workspace")
+
+		workspace, err := parseWorkspaceEnv()
+		if err != nil {
+			t.Fatalf("parseWorkspaceEnv: %v", err)
+		}
+		if workspace.pvc != "demo-city-workspace" {
+			t.Fatalf("workspace pvc = %q, want demo-city-workspace", workspace.pvc)
+		}
+		if workspace.root != defaultPodWorkspaceRoot {
+			t.Fatalf("workspace root = %q, want default %q", workspace.root, defaultPodWorkspaceRoot)
+		}
+	})
+
+	t.Run("pvc trims absolute root", func(t *testing.T) {
+		clearWorkspaceEnv(t)
+		t.Setenv("GC_K8S_WORKSPACE_PVC", "demo-city-workspace")
+		t.Setenv("GC_K8S_WORKSPACE_ROOT", "/workspace/cities/demo-city/")
+
+		workspace, err := parseWorkspaceEnv()
+		if err != nil {
+			t.Fatalf("parseWorkspaceEnv: %v", err)
+		}
+		if workspace.root != "/workspace/cities/demo-city" {
+			t.Fatalf("workspace root = %q, want /workspace/cities/demo-city", workspace.root)
+		}
+	})
+
+	t.Run("pvc rejects relative root", func(t *testing.T) {
+		clearWorkspaceEnv(t)
+		t.Setenv("GC_K8S_WORKSPACE_PVC", "demo-city-workspace")
+		t.Setenv("GC_K8S_WORKSPACE_ROOT", "workspace/cities/demo-city")
+
+		_, err := parseWorkspaceEnv()
+		if err == nil {
+			t.Fatal("expected relative workspace root to fail")
+		}
+		if !strings.Contains(err.Error(), "GC_K8S_WORKSPACE_ROOT") {
+			t.Fatalf("error = %q, want GC_K8S_WORKSPACE_ROOT context", err)
+		}
+	})
+}
+
 func clearSchedulingEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{
@@ -179,6 +241,16 @@ func clearSchedulingEnv(t *testing.T) {
 		"GC_K8S_TOLERATIONS",
 		"GC_K8S_AFFINITY",
 		"GC_K8S_PRIORITY_CLASS_NAME",
+	} {
+		t.Setenv(key, "")
+	}
+}
+
+func clearWorkspaceEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"GC_K8S_WORKSPACE_PVC",
+		"GC_K8S_WORKSPACE_ROOT",
 	} {
 		t.Setenv(key, "")
 	}
@@ -691,6 +763,13 @@ func TestProviderRuntimeFingerprintChangesForSubstrateFields(t *testing.T) {
 			name: "prebaked workspace mode",
 			mutate: func(p *Provider, _ *runtime.Config) {
 				p.prebaked = true
+			},
+		},
+		{
+			name: "persistent workspace pvc",
+			mutate: func(p *Provider, _ *runtime.Config) {
+				p.workspacePVC = "demo-city-workspace"
+				p.workspaceRoot = "/workspace/cities/demo-city"
 			},
 		},
 		{
@@ -1608,7 +1687,7 @@ func TestInitBeadsInPodUsesProjectedStoreRootAndPrefix(t *testing.T) {
 		},
 	}
 	podWorkDir := projectedPodWorkDir(cfg)
-	if err := initBeadsInPod(context.Background(), fake, "gc-test-pod", cfg, podWorkDir, podManagedDoltHost, podManagedDoltPort); err != nil {
+	if err := initBeadsInPod(context.Background(), fake, "gc-test-pod", cfg, podWorkDir, defaultPodWorkspaceRoot, podManagedDoltHost, podManagedDoltPort); err != nil {
 		t.Fatalf("initBeadsInPod: %v", err)
 	}
 	wantStoreRootB64 := base64.StdEncoding.EncodeToString([]byte("/workspace/custom-scope"))
@@ -1637,6 +1716,49 @@ func TestInitBeadsInPodUsesProjectedStoreRootAndPrefix(t *testing.T) {
 	if !found {
 		t.Fatal("initBeadsInPod did not use projected store root and prefix")
 	}
+}
+
+func TestInitBeadsInPodUsesPersistentWorkspaceStoreRoot(t *testing.T) {
+	fake := newFakeK8sOps()
+	cfg := runtime.Config{
+		WorkDir: "/host/city/rigs/frontend",
+		Env: map[string]string{
+			"GC_CITY":         "/host/city",
+			"GC_STORE_ROOT":   "/host/city/rigs/frontend",
+			"GC_BEADS_PREFIX": "fe",
+			"GC_DOLT_HOST":    "canonical-dolt.example.com",
+			"GC_DOLT_PORT":    "3308",
+		},
+	}
+
+	err := initBeadsInPod(
+		context.Background(),
+		fake,
+		"gc-test-pod",
+		cfg,
+		"/workspace/cities/demo-city/rigs/frontend",
+		"/workspace/cities/demo-city",
+		podManagedDoltHost,
+		podManagedDoltPort,
+	)
+	if err != nil {
+		t.Fatalf("initBeadsInPod: %v", err)
+	}
+	wantStoreRootB64 := base64.StdEncoding.EncodeToString([]byte("/workspace/cities/demo-city/rigs/frontend"))
+	wrongStoreRootB64 := base64.StdEncoding.EncodeToString([]byte("/workspace/rigs/frontend"))
+	for _, c := range fake.calls {
+		if c.method != "execInPod" || len(c.cmd) < 3 {
+			continue
+		}
+		script := c.cmd[2]
+		if strings.Contains(script, wantStoreRootB64) {
+			if strings.Contains(script, wrongStoreRootB64) {
+				t.Fatalf("repair script included default staged root in persistent mode: %s", script)
+			}
+			return
+		}
+	}
+	t.Fatal("initBeadsInPod did not use persistent workspace store root")
 }
 
 func TestVerifyBeadsInPodChecksCanonicalFiles(t *testing.T) {
@@ -1806,7 +1928,7 @@ func TestInitBeadsInPodBdInitSetsBEADSDIR(t *testing.T) {
 			"GC_BEADS_PREFIX": "demo",
 		},
 	}
-	if err := initBeadsInPod(context.Background(), fake, "gc-test-pod", cfg, "/workspace/demo-repo", podManagedDoltHost, podManagedDoltPort); err != nil {
+	if err := initBeadsInPod(context.Background(), fake, "gc-test-pod", cfg, "/workspace/demo-repo", defaultPodWorkspaceRoot, podManagedDoltHost, podManagedDoltPort); err != nil {
 		t.Fatalf("initBeadsInPod: %v", err)
 	}
 	var script string
@@ -1840,7 +1962,7 @@ func TestInitBeadsInPodStripsProjectIDFromMetadata(t *testing.T) {
 		},
 	}
 
-	if err := initBeadsInPod(context.Background(), fake, "gc-test-pod", cfg, "/workspace/demo-repo", podManagedDoltHost, podManagedDoltPort); err != nil {
+	if err := initBeadsInPod(context.Background(), fake, "gc-test-pod", cfg, "/workspace/demo-repo", defaultPodWorkspaceRoot, podManagedDoltHost, podManagedDoltPort); err != nil {
 		t.Fatalf("initBeadsInPod: %v", err)
 	}
 
