@@ -110,6 +110,34 @@ func (s *skipLabelsRecordingStore) lastListQuery(t *testing.T) ListQuery {
 	return s.listQueries[len(s.listQueries)-1]
 }
 
+type labelCoverageIndexedStore struct {
+	Store
+	listIndexedQueries []ListQuery
+}
+
+func (s *labelCoverageIndexedStore) ListIndexed(_ context.Context, query ListQuery) (IndexedListResult, error) {
+	s.listIndexedQueries = append(s.listIndexedQueries, query)
+	row := Bead{
+		ID:     "vg-warrant",
+		Title:  "dog warrant",
+		Type:   "task",
+		Status: "open",
+		Labels: []string{"warrant"},
+		Metadata: map[string]string{
+			"gc.routed_to":        "gastown.dog",
+			"gc.attached_formula": "mol-shutdown-dance",
+		},
+	}
+	if query.SkipLabels {
+		row.Labels = nil
+	}
+	return IndexedListResult{
+		Beads:              []Bead{row},
+		DependencyCoverage: true,
+		LabelsCoverage:     !query.SkipLabels,
+	}, nil
+}
+
 func TestCachingStoreListInProgressUsesCacheByDefault(t *testing.T) {
 	t.Parallel()
 
@@ -1158,6 +1186,84 @@ func TestCachingStoreRuntimeListHotAuthoritativeUsesCompleteCache(t *testing.T) 
 	}
 }
 
+func TestCachingStoreRuntimeListLabelQueryUsesIndexedCoverage(t *testing.T) {
+	t.Parallel()
+
+	backing := &labelCoverageIndexedStore{Store: NewMemStore()}
+	cache := NewCachingStoreForTest(backing, nil)
+	if err := cache.PrimeActive(); err != nil {
+		t.Fatalf("PrimeActive: %v", err)
+	}
+	if len(backing.listIndexedQueries) != 1 {
+		t.Fatalf("prime ListIndexed calls = %d, want 1", len(backing.listIndexedQueries))
+	}
+	if !backing.listIndexedQueries[0].SkipLabels {
+		t.Fatalf("prime query SkipLabels = false, want true")
+	}
+
+	rows, err := cache.RuntimeList(context.Background(), ListQuery{
+		Status: "open",
+		Type:   "task",
+		Label:  "warrant",
+		Metadata: map[string]string{
+			"gc.routed_to":        "gastown.dog",
+			"gc.attached_formula": "mol-shutdown-dance",
+		},
+	}, RuntimeReadPolicy(ReadClassHotDegradedOK, "test.label-indexed-coverage"))
+	if err != nil {
+		t.Fatalf("RuntimeList: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != "vg-warrant" {
+		t.Fatalf("RuntimeList rows = %#v, want indexed warrant", rows)
+	}
+	if len(backing.listIndexedQueries) != 2 {
+		t.Fatalf("ListIndexed calls = %d, want prime plus label-filtered hot read", len(backing.listIndexedQueries))
+	}
+	if backing.listIndexedQueries[1].SkipLabels {
+		t.Fatalf("runtime label query SkipLabels = true, want label coverage")
+	}
+	if backing.listIndexedQueries[1].Label != "warrant" {
+		t.Fatalf("runtime label query Label = %q, want warrant", backing.listIndexedQueries[1].Label)
+	}
+}
+
+func TestCachingStoreListByLabelBypassesLabelSparseCache(t *testing.T) {
+	t.Parallel()
+
+	backing := &skipLabelsRecordingStore{Store: NewMemStore(), dropLabels: true}
+	bead, err := backing.Create(Bead{
+		Title:  "dog warrant",
+		Type:   "task",
+		Status: "open",
+		Labels: []string{"warrant"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	cache := NewCachingStoreForTest(backing, nil)
+	if err := cache.Prime(context.Background()); err != nil {
+		t.Fatalf("Prime: %v", err)
+	}
+	if got := backing.lastListQuery(t); !got.SkipLabels {
+		t.Fatalf("prime query SkipLabels = false, want true")
+	}
+
+	rows, err := cache.ListByLabel("warrant", 0)
+	if err != nil {
+		t.Fatalf("ListByLabel: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != bead.ID {
+		t.Fatalf("ListByLabel rows = %#v, want %s from backing store", rows, bead.ID)
+	}
+	got := backing.lastListQuery(t)
+	if got.Label != "warrant" {
+		t.Fatalf("backing label query Label = %q, want warrant", got.Label)
+	}
+	if got.SkipLabels {
+		t.Fatalf("backing label query SkipLabels = true, want label coverage")
+	}
+}
+
 func TestCachingStorePrimePartialDoesNotServeActiveListAsComplete(t *testing.T) {
 	t.Parallel()
 
@@ -1654,6 +1760,9 @@ func TestCachingStoreCachedListRefusesNonIssuesTierQueries(t *testing.T) {
 		if rows, ok := cache.CachedList(ListQuery{Label: "k", TierMode: tier}); ok {
 			t.Fatalf("CachedList tier %v ok=true rows=%#v, want ok=false", tier, rows)
 		}
+	}
+	if rows, ok := cache.CachedList(ListQuery{Label: "k"}); ok {
+		t.Fatalf("CachedList label query ok=true rows=%#v, want ok=false for label-sparse cache", rows)
 	}
 }
 

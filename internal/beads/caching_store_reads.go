@@ -23,7 +23,7 @@ func (c *CachingStore) List(query ListQuery) ([]Bead, error) {
 	if query.TierMode != TierIssues {
 		return c.backing.List(query)
 	}
-	if query.Live || query.ParentID != "" {
+	if query.Live || query.ParentID != "" || query.Label != "" {
 		c.mu.RLock()
 		startSeq := c.mutationSeq
 		c.mu.RUnlock()
@@ -117,6 +117,9 @@ func (c *CachingStore) RuntimeList(ctx context.Context, query ListQuery, policy 
 		return nil, degradedRead(policy, "list", "cache", "unavailable", ErrIndexedListUnsupported)
 	}
 	indexedQuery := liveListQuery(query)
+	if indexedQuery.Label != "" {
+		indexedQuery.SkipLabels = false
+	}
 	if policy.MaxRows > 0 && indexedQuery.Limit <= 0 {
 		indexedQuery.Limit = policy.MaxRows
 	}
@@ -138,6 +141,12 @@ func (c *CachingStore) RuntimeList(ctx context.Context, query ListQuery, policy 
 
 func (c *CachingStore) runtimeCachedList(query ListQuery) ([]Bead, bool) {
 	if query.TierMode != TierIssues || query.Live {
+		return nil, false
+	}
+	if query.Label != "" {
+		// Active cache primes/reconciles intentionally skip label hydration.
+		// Label-filtered hot reads need indexed label coverage instead of
+		// treating missing cached labels as negative evidence.
 		return nil, false
 	}
 	c.mu.RLock()
@@ -194,6 +203,9 @@ func (c *CachingStore) CountIndexed(ctx context.Context, query ListQuery) (int, 
 // reconciliation by one tick.
 func (c *CachingStore) CachedList(query ListQuery) ([]Bead, bool) {
 	if query.TierMode != TierIssues {
+		return nil, false
+	}
+	if query.Label != "" {
 		return nil, false
 	}
 	c.mu.RLock()
@@ -709,9 +721,9 @@ func (c *CachingStore) Children(parentID string, opts ...QueryOpt) ([]Bead, erro
 	})
 }
 
-// ListByLabel returns beads matching the given label. By default, serves from
-// cache only (non-closed beads). Pass IncludeClosed to also query the backing
-// store for closed beads and merge results.
+// ListByLabel returns beads matching the given label. The active cache may be
+// label-sparse, so label filters are answered by the backing store directly.
+// Pass IncludeClosed to include closed beads.
 func (c *CachingStore) ListByLabel(label string, limit int, opts ...QueryOpt) ([]Bead, error) {
 	return c.List(ListQuery{
 		Label:         label,
