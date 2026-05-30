@@ -231,6 +231,7 @@ func lookupProvider(name string, cityProviders map[string]ProviderSpec, lookPath
 // suppresses the feature even when inherited from a built-in with &true.
 func MergeProviderOverBuiltin(base, city ProviderSpec) ProviderSpec {
 	result := base
+	result.K8sCredentials = cloneProviderK8sCredentials(base.K8sCredentials)
 
 	// Inheritance control fields: presence-aware for Base.
 	if city.Base != nil {
@@ -273,6 +274,9 @@ func MergeProviderOverBuiltin(base, city ProviderSpec) ProviderSpec {
 	}
 	if city.PathCheck != "" {
 		result.PathCheck = city.PathCheck
+	}
+	if city.K8sCredentials != nil {
+		result.K8sCredentials = cloneProviderK8sCredentials(city.K8sCredentials)
 	}
 	if city.SupportsACP != nil {
 		result.SupportsACP = city.SupportsACP
@@ -569,6 +573,7 @@ func specToResolved(name string, spec *ProviderSpec) *ResolvedProvider {
 		ReadyPromptPrefix:      spec.ReadyPromptPrefix,
 		EmitsPermissionWarning: derefBool(spec.EmitsPermissionWarning),
 		AcceptStartupDialogs:   cloneBoolPtr(spec.AcceptStartupDialogs),
+		K8sCredentials:         cloneProviderK8sCredentials(spec.K8sCredentials),
 		SupportsACP:            derefBool(spec.SupportsACP),
 		SupportsHooks:          derefBool(spec.SupportsHooks),
 		InstructionsFile:       spec.InstructionsFile,
@@ -824,6 +829,9 @@ func resolvedChainToSpec(r ResolvedProvider, leaf ProviderSpec) ProviderSpec {
 		for k, v := range r.Env {
 			out.Env[k] = v
 		}
+	}
+	if r.K8sCredentials != nil {
+		out.K8sCredentials = cloneProviderK8sCredentials(r.K8sCredentials)
 	}
 	if r.PermissionModes != nil {
 		out.PermissionModes = make(map[string]string, len(r.PermissionModes))

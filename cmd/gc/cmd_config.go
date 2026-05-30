@@ -704,6 +704,17 @@ func renderProviderExplainText(w io.Writer, r config.ResolvedProvider, name stri
 	explainResolvedBool(w, "supports_acp", r.SupportsACP, r.Provenance.FieldLayer["supports_acp"])
 	explainResolvedBool(w, "emits_permission_warning", r.EmitsPermissionWarning, r.Provenance.FieldLayer["emits_permission_warning"])
 	explainResolvedBoolPtr(w, "accept_startup_dialogs", r.AcceptStartupDialogs, r.Provenance.FieldLayer["accept_startup_dialogs"])
+	if r.K8sCredentials != nil {
+		layer := r.Provenance.FieldLayer["k8s_credentials"]
+		explainProviderField(w, "k8s_credentials.name", r.K8sCredentials.Name, layer)
+		explainProviderField(w, "k8s_credentials.secret_name", r.K8sCredentials.SecretName, layer)
+		explainProviderField(w, "k8s_credentials.mount_path", r.K8sCredentials.MountPath, layer)
+		explainProviderField(w, "k8s_credentials.target_dir", r.K8sCredentials.TargetDir, layer)
+		if r.K8sCredentials.Optional != nil {
+			explainResolvedBoolPtr(w, "k8s_credentials.optional", r.K8sCredentials.Optional, layer)
+		}
+		explainProviderMap(w, "k8s_credentials.env", r.K8sCredentials.Env, nil)
+	}
 
 	explainProviderMap(w, "env", r.Env, r.Provenance.MapKeyLayer["env"])
 	explainProviderMap(w, "permission_modes", r.PermissionModes, r.Provenance.MapKeyLayer["permission_modes"])
@@ -811,6 +822,7 @@ func renderProviderExplainJSON(r config.ResolvedProvider, name string, stdout, s
 			"emits_permission_warning": triStateFromProvenance("emits_permission_warning", r.EmitsPermissionWarning),
 			"accept_startup_dialogs":   r.AcceptStartupDialogs,
 			"env":                      r.Env,
+			"k8s_credentials":          providerK8sCredentialsExplainJSON(r.K8sCredentials),
 			"permission_modes":         r.PermissionModes,
 			"option_defaults":          r.EffectiveDefaults,
 		},
@@ -824,6 +836,38 @@ func renderProviderExplainJSON(r config.ResolvedProvider, name string, stdout, s
 		return 1
 	}
 	return 0
+}
+
+func providerK8sCredentialsExplainJSON(creds *config.ProviderK8sCredentials) any {
+	if creds == nil {
+		return nil
+	}
+	envFromSecret := make([]map[string]any, 0, len(creds.EnvFromSecret))
+	for _, item := range creds.EnvFromSecret {
+		envFromSecret = append(envFromSecret, map[string]any{
+			"name":        item.Name,
+			"secret_name": item.SecretName,
+			"key":         item.Key,
+			"optional":    item.Optional,
+		})
+	}
+	copies := make([]map[string]any, 0, len(creds.Copy))
+	for _, item := range creds.Copy {
+		copies = append(copies, map[string]any{
+			"source": item.Source,
+			"target": item.Target,
+		})
+	}
+	return map[string]any{
+		"name":            creds.Name,
+		"secret_name":     creds.SecretName,
+		"mount_path":      creds.MountPath,
+		"target_dir":      creds.TargetDir,
+		"optional":        creds.Optional,
+		"env":             creds.Env,
+		"env_from_secret": envFromSecret,
+		"copy":            copies,
+	}
 }
 
 // explainField prints a single field with its provenance source.

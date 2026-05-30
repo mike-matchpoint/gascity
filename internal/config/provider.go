@@ -21,6 +21,51 @@ type ProviderOption struct {
 	Omit bool `toml:"omit,omitempty" json:"omit,omitempty"`
 }
 
+// ProviderK8sCredentials describes how the native Kubernetes session provider
+// materializes provider credential/config files into an agent pod.
+//
+// SecretName names the Kubernetes Secret to mount. TargetDir is where the
+// secret contents are copied inside the writable provider home before the
+// provider command starts. Relative TargetDir and Copy.Target paths are
+// resolved under the pod HOME.
+type ProviderK8sCredentials struct {
+	// Name is a non-secret profile label used in runtime identity output.
+	// Defaults to the provider name when omitted.
+	Name string `toml:"name,omitempty"`
+	// SecretName is the Kubernetes Secret name to mount.
+	SecretName string `toml:"secret_name,omitempty"`
+	// MountPath is the read-only pod path for the Secret volume. Empty uses
+	// /tmp/gc-provider-secrets/<profile-or-secret-name>.
+	MountPath string `toml:"mount_path,omitempty"`
+	// TargetDir receives the mounted secret contents before startup. Empty
+	// means the profile is mounted but not copied as a directory.
+	TargetDir string `toml:"target_dir,omitempty"`
+	// Optional controls the Kubernetes Secret optional flag. Nil defaults to true.
+	Optional *bool `toml:"optional,omitempty"`
+	// Env forces pod-local provider env after inherited env is sanitized.
+	Env map[string]string `toml:"env,omitempty"`
+	// EnvFromSecret projects individual keys from SecretName as environment
+	// variables. Entries may override SecretName for split credential packages.
+	EnvFromSecret []ProviderK8sSecretEnv `toml:"env_from_secret,omitempty"`
+	// Copy copies specific files from the mounted secret to pod-local paths.
+	Copy []ProviderK8sCredentialCopy `toml:"copy,omitempty"`
+}
+
+// ProviderK8sSecretEnv describes one environment variable sourced from a
+// Kubernetes Secret key for the native K8s session provider.
+type ProviderK8sSecretEnv struct {
+	Name       string `toml:"name,omitempty"`
+	SecretName string `toml:"secret_name,omitempty"`
+	Key        string `toml:"key,omitempty"`
+	Optional   *bool  `toml:"optional,omitempty"`
+}
+
+// ProviderK8sCredentialCopy copies one mounted secret file to a pod-local path.
+type ProviderK8sCredentialCopy struct {
+	Source string `toml:"source,omitempty"`
+	Target string `toml:"target,omitempty"`
+}
+
 // OptionChoice is one allowed value for a "select" option.
 type OptionChoice struct {
 	Value string `toml:"value"     json:"value"`
@@ -80,6 +125,9 @@ type ProviderSpec struct {
 	AcceptStartupDialogs *bool `toml:"accept_startup_dialogs,omitempty"`
 	// Env sets additional environment variables for the provider process.
 	Env map[string]string `toml:"env,omitempty"`
+	// K8sCredentials configures provider credential materialization for the
+	// native Kubernetes session provider. It is ignored by local providers.
+	K8sCredentials *ProviderK8sCredentials `toml:"k8s_credentials,omitempty"`
 	// PathCheck overrides the binary name used for PATH detection.
 	// When set, lookupProvider and detectProviderName use this instead
 	// of Command for exec.LookPath checks. Useful when Command is a
@@ -201,6 +249,7 @@ type ResolvedProvider struct {
 	EmitsPermissionWarning bool
 	AcceptStartupDialogs   *bool
 	Env                    map[string]string
+	K8sCredentials         *ProviderK8sCredentials
 	SupportsACP            bool
 	SupportsHooks          bool
 	InstructionsFile       string
@@ -491,6 +540,35 @@ func cloneBoolPtr(value *bool) *bool {
 	}
 	cloned := *value
 	return &cloned
+}
+
+func cloneProviderK8sCredentials(value *ProviderK8sCredentials) *ProviderK8sCredentials {
+	if value == nil {
+		return nil
+	}
+	cloned := &ProviderK8sCredentials{
+		Name:       value.Name,
+		SecretName: value.SecretName,
+		MountPath:  value.MountPath,
+		TargetDir:  value.TargetDir,
+		Optional:   cloneBoolPtr(value.Optional),
+		Env:        cloneStringMap(value.Env),
+	}
+	if value.EnvFromSecret != nil {
+		cloned.EnvFromSecret = make([]ProviderK8sSecretEnv, len(value.EnvFromSecret))
+		for i, env := range value.EnvFromSecret {
+			cloned.EnvFromSecret[i] = ProviderK8sSecretEnv{
+				Name:       env.Name,
+				SecretName: env.SecretName,
+				Key:        env.Key,
+				Optional:   cloneBoolPtr(env.Optional),
+			}
+		}
+	}
+	if value.Copy != nil {
+		cloned.Copy = append([]ProviderK8sCredentialCopy(nil), value.Copy...)
+	}
+	return cloned
 }
 
 func cloneStrings(values []string) []string {

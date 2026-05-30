@@ -44,7 +44,8 @@ const FingerprintVersion = "v2"
 //
 // Included: Command, Lifecycle, Env, FingerprintExtra (pool config, etc.),
 // PreStart, SessionSetup, SessionSetupScript, OverlayDir, effective provider
-// overlay slots, CopyFiles, AcceptStartupDialogs, SessionLive.
+// overlay slots, ProviderCredentials, CopyFiles, AcceptStartupDialogs,
+// SessionLive.
 //
 // Excluded (observation-only hints): WorkDir, ReadyPromptPrefix,
 // ReadyDelayMs, ProcessNames, EmitsPermissionWarning.
@@ -234,6 +235,7 @@ func hashCoreFields(h hash.Hash, cfg Config) {
 	h.Write([]byte{0})              //nolint:errcheck // hash.Write never errors
 
 	hashOverlayProviders(h, OverlayProviderNames(cfg))
+	hashProviderCredentials(h, cfg.ProviderCredentials)
 	hashOptionalBool(h, "accept_startup_dialogs", cfg.AcceptStartupDialogs)
 
 	// CopyFiles — probed entries use ContentHash (stable when content
@@ -338,6 +340,54 @@ func hashMCPServers(h hash.Hash, servers []MCPServerConfig) {
 	}
 }
 
+func hashProviderCredentials(h hash.Hash, profiles []ProviderCredentialProfile) {
+	if len(profiles) == 0 {
+		return
+	}
+	h.Write([]byte("provider-credentials")) //nolint:errcheck // hash.Write never errors
+	h.Write([]byte{0})                      //nolint:errcheck // hash.Write never errors
+	for _, profile := range profiles {
+		h.Write([]byte(profile.Name))       //nolint:errcheck
+		h.Write([]byte{0})                  //nolint:errcheck
+		h.Write([]byte(profile.SecretName)) //nolint:errcheck
+		h.Write([]byte{0})                  //nolint:errcheck
+		h.Write([]byte(profile.MountPath))  //nolint:errcheck
+		h.Write([]byte{0})                  //nolint:errcheck
+		h.Write([]byte(profile.TargetDir))  //nolint:errcheck
+		h.Write([]byte{0})                  //nolint:errcheck
+		if profile.Optional {
+			h.Write([]byte("optional")) //nolint:errcheck
+		} else {
+			h.Write([]byte("required")) //nolint:errcheck
+		}
+		h.Write([]byte{0}) //nolint:errcheck
+		hashSortedMap(h, profile.Env)
+		h.Write([]byte{1}) //nolint:errcheck
+		for _, env := range profile.EnvFromSecret {
+			h.Write([]byte(env.Name))       //nolint:errcheck
+			h.Write([]byte{0})              //nolint:errcheck
+			h.Write([]byte(env.SecretName)) //nolint:errcheck
+			h.Write([]byte{0})              //nolint:errcheck
+			h.Write([]byte(env.Key))        //nolint:errcheck
+			h.Write([]byte{0})              //nolint:errcheck
+			if env.Optional {
+				h.Write([]byte("optional")) //nolint:errcheck
+			} else {
+				h.Write([]byte("required")) //nolint:errcheck
+			}
+			h.Write([]byte{0}) //nolint:errcheck
+		}
+		h.Write([]byte{1}) //nolint:errcheck
+		for _, cp := range profile.Copy {
+			h.Write([]byte(cp.Source)) //nolint:errcheck
+			h.Write([]byte{0})         //nolint:errcheck
+			h.Write([]byte(cp.Target)) //nolint:errcheck
+			h.Write([]byte{0})         //nolint:errcheck
+		}
+		h.Write([]byte{2}) //nolint:errcheck
+	}
+}
+
 func hashOverlayProviders(h hash.Hash, providers []string) {
 	HashOverlayProviderNames(h, providers)
 }
@@ -409,6 +459,9 @@ func CoreFingerprintBreakdown(cfg Config) BreakdownV1 {
 		}),
 		"OverlayProviders": fieldHash(func(h hash.Hash) {
 			hashOverlayProviders(h, OverlayProviderNames(cfg))
+		}),
+		"ProviderCredentials": fieldHash(func(h hash.Hash) {
+			hashProviderCredentials(h, cfg.ProviderCredentials)
 		}),
 		"AcceptStartupDialogs": fieldHash(func(h hash.Hash) {
 			hashOptionalBool(h, "accept_startup_dialogs", cfg.AcceptStartupDialogs)

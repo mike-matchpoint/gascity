@@ -489,6 +489,41 @@ PoolOverride modifies legacy [pool] fields that map to session scaling.
 | `on_death` | string |  |  | OnDeath overrides the on_death command template. Supports the same Go template placeholders as Agent.on_death. |
 | `on_boot` | string |  |  | OnBoot overrides the on_boot command template. Supports the same Go template placeholders as Agent.on_boot. |
 
+## ProviderK8sCredentialCopy
+
+ProviderK8sCredentialCopy copies one mounted secret file to a pod-local path.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `source` | string |  |  |  |
+| `target` | string |  |  |  |
+
+## ProviderK8sCredentials
+
+ProviderK8sCredentials describes how the native Kubernetes session provider materializes provider credential/config files into an agent pod.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `name` | string |  |  | Name is a non-secret profile label used in runtime identity output. Defaults to the provider name when omitted. |
+| `secret_name` | string |  |  | SecretName is the Kubernetes Secret name to mount. |
+| `mount_path` | string |  |  | MountPath is the read-only pod path for the Secret volume. Empty uses /tmp/gc-provider-secrets/&lt;profile-or-secret-name&gt;. |
+| `target_dir` | string |  |  | TargetDir receives the mounted secret contents before startup. Empty means the profile is mounted but not copied as a directory. |
+| `optional` | boolean |  |  | Optional controls the Kubernetes Secret optional flag. Nil defaults to true. |
+| `env` | map[string]string |  |  | Env forces pod-local provider env after inherited env is sanitized. |
+| `env_from_secret` | []ProviderK8sSecretEnv |  |  | EnvFromSecret projects individual keys from SecretName as environment variables. Entries may override SecretName for split credential packages. |
+| `copy` | []ProviderK8sCredentialCopy |  |  | Copy copies specific files from the mounted secret to pod-local paths. |
+
+## ProviderK8sSecretEnv
+
+ProviderK8sSecretEnv describes one environment variable sourced from a Kubernetes Secret key for the native K8s session provider.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `name` | string |  |  |  |
+| `secret_name` | string |  |  |  |
+| `key` | string |  |  |  |
+| `optional` | boolean |  |  |  |
+
 ## ProviderOption
 
 ProviderOption declares a single configurable option for a provider.
@@ -544,6 +579,7 @@ ProviderSpec defines a named provider's startup parameters.
 | `emits_permission_warning` | boolean |  |  | EmitsPermissionWarning is tri-state: nil = inherit, &true = enable, &false = explicit disable. |
 | `accept_startup_dialogs` | boolean |  |  | AcceptStartupDialogs is tri-state: nil = default startup dialog handling, &true = force dialog acceptance, &false = suppress it for providers that handle permissions entirely through launch flags. |
 | `env` | map[string]string |  |  | Env sets additional environment variables for the provider process. |
+| `k8s_credentials` | ProviderK8sCredentials |  |  | K8sCredentials configures provider credential materialization for the native Kubernetes session provider. It is ignored by local providers. |
 | `path_check` | string |  |  | PathCheck overrides the binary name used for PATH detection. When set, lookupProvider and detectProviderName use this instead of Command for exec.LookPath checks. Useful when Command is a shell wrapper (e.g. sh -c '...') but we need to verify the real binary is installed. |
 | `supports_acp` | boolean |  |  | SupportsACP indicates the binary speaks the Agent Client Protocol (JSON-RPC 2.0 over stdio). When an agent sets session = "acp", its resolved provider must have SupportsACP = true. |
 | `supports_hooks` | boolean |  |  | SupportsHooks indicates the provider has an executable hook mechanism (settings.json, plugins, etc.) for lifecycle events. |

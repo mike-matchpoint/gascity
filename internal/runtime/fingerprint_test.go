@@ -131,6 +131,43 @@ func TestConfigFingerprintIncludesLifecycle(t *testing.T) {
 	}
 }
 
+func TestConfigFingerprintIncludesProviderCredentials(t *testing.T) {
+	base := Config{Command: "codex"}
+	withProfile := Config{
+		Command: "codex",
+		ProviderCredentials: []ProviderCredentialProfile{{
+			Name:       "codex-polecat",
+			SecretName: "codex-polecat-credentials",
+			TargetDir:  ".codex-polecat",
+			Optional:   false,
+			Env:        map[string]string{"CODEX_HOME": "{{.TargetDir}}"},
+			EnvFromSecret: []ProviderSecretEnv{{
+				Name:     "CODEX_SESSION_TOKEN",
+				Key:      "session-token",
+				Optional: false,
+			}},
+		}},
+	}
+	rotatedProfile := withProfile
+	rotatedProfile.ProviderCredentials = []ProviderCredentialProfile{{
+		Name:       "codex-polecat",
+		SecretName: "codex-polecat-credentials-v2",
+		TargetDir:  ".codex-polecat",
+		Optional:   false,
+		Env:        map[string]string{"CODEX_HOME": "{{.TargetDir}}"},
+	}}
+
+	if CoreFingerprint(base) == CoreFingerprint(withProfile) {
+		t.Fatal("provider credential profile should affect core fingerprint")
+	}
+	if CoreFingerprint(withProfile) == CoreFingerprint(rotatedProfile) {
+		t.Fatal("provider credential secret rotation should affect core fingerprint")
+	}
+	if got := CoreFingerprintDriftFields(CoreFingerprintBreakdown(base), withProfile); len(got) != 1 || got[0] != "ProviderCredentials" {
+		t.Fatalf("CoreFingerprintDriftFields = %v, want [ProviderCredentials]", got)
+	}
+}
+
 func TestConfigFingerprintIgnoresWorkDir(t *testing.T) {
 	a := Config{Command: "claude", WorkDir: "/tmp"}
 	b := Config{Command: "claude", WorkDir: "/home/user"}

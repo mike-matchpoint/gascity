@@ -18,6 +18,11 @@ func TestRenderProviderExplainText_ShowsChainAndProvenance(t *testing.T) {
 			Args:          []string{"run", "codex"},
 			ReadyDelayMs:  5000,
 			ResumeCommand: "aimux run codex -- resume {{.SessionKey}}",
+			K8sCredentials: &config.ProviderK8sCredentials{
+				Name:       "codex-max",
+				SecretName: "codex-max-credentials",
+				TargetDir:  ".codex-max",
+			},
 		},
 	}
 	resolved, err := config.ResolveProviderChain("codex-max", city["codex-max"], city)
@@ -41,6 +46,9 @@ func TestRenderProviderExplainText_ShowsChainAndProvenance(t *testing.T) {
 	if !strings.Contains(got, "# providers.codex-max") {
 		t.Errorf("missing provenance annotation for leaf: %s", got)
 	}
+	if !strings.Contains(got, "k8s_credentials.secret_name") || !strings.Contains(got, "codex-max-credentials") {
+		t.Errorf("missing k8s credential provenance: %s", got)
+	}
 }
 
 func TestRenderProviderExplainJSON_PayloadShape(t *testing.T) {
@@ -54,6 +62,12 @@ func TestRenderProviderExplainJSON_PayloadShape(t *testing.T) {
 				"effort": "xhigh",
 			},
 			ResumeCommand: "aimux run codex -- resume {{.SessionKey}}",
+			K8sCredentials: &config.ProviderK8sCredentials{
+				Name:       "codex-max",
+				SecretName: "codex-max-credentials",
+				TargetDir:  ".codex-max",
+				Env:        map[string]string{"CODEX_HOME": "{{.TargetDir}}"},
+			},
 		},
 	}
 	resolved, err := config.ResolveProviderChain("codex-max", city["codex-max"], city)
@@ -87,5 +101,19 @@ func TestRenderProviderExplainJSON_PayloadShape(t *testing.T) {
 	}
 	if got := fieldLayer["command"]; got != "providers.codex-max" {
 		t.Errorf("field_layer.command = %v, want providers.codex-max", got)
+	}
+	resolvedMap, ok := payload["resolved"].(map[string]any)
+	if !ok {
+		t.Fatalf("resolved not a map: %T", payload["resolved"])
+	}
+	k8sCreds, ok := resolvedMap["k8s_credentials"].(map[string]any)
+	if !ok {
+		t.Fatalf("k8s_credentials not a map: %T", resolvedMap["k8s_credentials"])
+	}
+	if got := k8sCreds["secret_name"]; got != "codex-max-credentials" {
+		t.Errorf("k8s_credentials.secret_name = %v", got)
+	}
+	if got := fieldLayer["k8s_credentials"]; got != "providers.codex-max" {
+		t.Errorf("field_layer.k8s_credentials = %v, want providers.codex-max", got)
 	}
 }

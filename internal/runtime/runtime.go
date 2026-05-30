@@ -391,6 +391,34 @@ const (
 	LifecycleOneShot Lifecycle = "one_shot"
 )
 
+// ProviderCredentialProfile describes provider credential/config material that
+// a remote runtime provider should mount and copy before launching a session.
+// Local providers ignore this field unless they explicitly opt in.
+type ProviderCredentialProfile struct {
+	Name          string
+	SecretName    string
+	MountPath     string
+	TargetDir     string
+	Optional      bool
+	Env           map[string]string
+	EnvFromSecret []ProviderSecretEnv
+	Copy          []ProviderCredentialCopy
+}
+
+// ProviderSecretEnv projects one Kubernetes Secret key as an env var.
+type ProviderSecretEnv struct {
+	Name       string
+	SecretName string
+	Key        string
+	Optional   bool
+}
+
+// ProviderCredentialCopy copies one mounted secret file to a pod-local path.
+type ProviderCredentialCopy struct {
+	Source string
+	Target string
+}
+
 // Config holds the parameters for starting a new session.
 type Config struct {
 	// WorkDir is the working directory for the session process.
@@ -458,6 +486,12 @@ type Config struct {
 	// ProviderOverlayName is the concrete provider name used for per-provider
 	// overlay filtering. When empty, ProviderName is used for compatibility.
 	ProviderOverlayName string
+
+	// ProviderCredentials carries provider credential materialization profiles
+	// resolved from provider config. The native K8s runtime uses these to mount
+	// provider-specific secrets and force pod-local provider env. Empty keeps
+	// provider-runtime compatibility defaults.
+	ProviderCredentials []ProviderCredentialProfile
 
 	// InstallAgentHooks lists additional provider hook slots whose
 	// overlay/per-provider/<name>/ content should be staged alongside

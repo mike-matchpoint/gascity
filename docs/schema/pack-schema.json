@@ -940,6 +940,86 @@
       "type": "object",
       "description": "PoolOverride modifies legacy [pool] fields that map to session scaling."
     },
+    "ProviderK8sCredentialCopy": {
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "description": "ProviderK8sCredentialCopy copies one mounted secret file to a pod-local path."
+    },
+    "ProviderK8sCredentials": {
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name is a non-secret profile label used in runtime identity output.\nDefaults to the provider name when omitted."
+        },
+        "secret_name": {
+          "type": "string",
+          "description": "SecretName is the Kubernetes Secret name to mount."
+        },
+        "mount_path": {
+          "type": "string",
+          "description": "MountPath is the read-only pod path for the Secret volume. Empty uses\n/tmp/gc-provider-secrets/\u003cprofile-or-secret-name\u003e."
+        },
+        "target_dir": {
+          "type": "string",
+          "description": "TargetDir receives the mounted secret contents before startup. Empty\nmeans the profile is mounted but not copied as a directory."
+        },
+        "optional": {
+          "type": "boolean",
+          "description": "Optional controls the Kubernetes Secret optional flag. Nil defaults to true."
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object",
+          "description": "Env forces pod-local provider env after inherited env is sanitized."
+        },
+        "env_from_secret": {
+          "items": {
+            "$ref": "#/$defs/ProviderK8sSecretEnv"
+          },
+          "type": "array",
+          "description": "EnvFromSecret projects individual keys from SecretName as environment\nvariables. Entries may override SecretName for split credential packages."
+        },
+        "copy": {
+          "items": {
+            "$ref": "#/$defs/ProviderK8sCredentialCopy"
+          },
+          "type": "array",
+          "description": "Copy copies specific files from the mounted secret to pod-local paths."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "description": "ProviderK8sCredentials describes how the native Kubernetes session provider materializes provider credential/config files into an agent pod."
+    },
+    "ProviderK8sSecretEnv": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "secret_name": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "optional": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "description": "ProviderK8sSecretEnv describes one environment variable sourced from a Kubernetes Secret key for the native K8s session provider."
+    },
     "ProviderOption": {
       "properties": {
         "key": {
@@ -1057,6 +1137,10 @@
           },
           "type": "object",
           "description": "Env sets additional environment variables for the provider process."
+        },
+        "k8s_credentials": {
+          "$ref": "#/$defs/ProviderK8sCredentials",
+          "description": "K8sCredentials configures provider credential materialization for the\nnative Kubernetes session provider. It is ignored by local providers."
         },
         "path_check": {
           "type": "string",
