@@ -893,6 +893,47 @@ func TestProviderRuntimeIdentityIncludesSharedProcessNamespace(t *testing.T) {
 	}
 }
 
+func TestProviderRuntimeIdentityIncludesClaudeOAuthSecretEnv(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+	cfg := runtime.Config{Env: map[string]string{"GC_AGENT": "mayor"}}
+
+	identity := mustDesiredProviderRuntimeIdentity(t, p, cfg)
+	var spec runtimeIdentitySpec
+	if err := json.Unmarshal([]byte(identity.Breakdown), &spec); err != nil {
+		t.Fatalf("unmarshal identity breakdown: %v\n%s", err, identity.Breakdown)
+	}
+
+	for _, env := range spec.CredentialEnv {
+		if env.Name == "CLAUDE_CODE_OAUTH_TOKEN" {
+			if env.SecretName != providerRuntimeClaudeSecretName || env.Key != "CLAUDE_CODE_OAUTH_TOKEN" || !env.Optional {
+				t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN credential env = %#v", env)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing CLAUDE_CODE_OAUTH_TOKEN credential env in %#v", spec.CredentialEnv)
+}
+
+func TestProviderRuntimeIdentityPreservesExplicitClaudeOAuthEnv(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+	cfg := runtime.Config{Env: map[string]string{
+		"GC_AGENT":                "mayor",
+		"CLAUDE_CODE_OAUTH_TOKEN": "explicit-token",
+	}}
+
+	identity := mustDesiredProviderRuntimeIdentity(t, p, cfg)
+	var spec runtimeIdentitySpec
+	if err := json.Unmarshal([]byte(identity.Breakdown), &spec); err != nil {
+		t.Fatalf("unmarshal identity breakdown: %v\n%s", err, identity.Breakdown)
+	}
+
+	for _, env := range spec.CredentialEnv {
+		if env.Name == "CLAUDE_CODE_OAUTH_TOKEN" {
+			t.Fatalf("explicit CLAUDE_CODE_OAUTH_TOKEN should not be represented as secret env: %#v", env)
+		}
+	}
+}
+
 func TestStartDetectsStalePod(t *testing.T) {
 	fake := newFakeK8sOps()
 	p := newProviderWithOps(fake)
@@ -1274,6 +1315,55 @@ func mustBuildPodEnv(t *testing.T, cfgEnv map[string]string, podWorkDir, managed
 		t.Fatalf("buildPodEnv: %v", err)
 	}
 	return env
+}
+
+func TestBuildPodEnvClaudeOAuthTokenUsesOptionalSecret(t *testing.T) {
+	env := mustBuildPodEnv(t, map[string]string{}, "/workspace/rig", podManagedDoltHost, podManagedDoltPort)
+
+	for _, v := range env {
+		if v.Name != "CLAUDE_CODE_OAUTH_TOKEN" {
+			continue
+		}
+		if v.Value != "" {
+			t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN literal value = %q, want secret ref", v.Value)
+		}
+		if v.ValueFrom == nil || v.ValueFrom.SecretKeyRef == nil {
+			t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN does not come from a secret: %#v", v)
+		}
+		ref := v.ValueFrom.SecretKeyRef
+		if ref.Name != providerRuntimeClaudeSecretName || ref.Key != "CLAUDE_CODE_OAUTH_TOKEN" {
+			t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN secret ref = %s/%s, want %s/CLAUDE_CODE_OAUTH_TOKEN", ref.Name, ref.Key, providerRuntimeClaudeSecretName)
+		}
+		if ref.Optional == nil || !*ref.Optional {
+			t.Fatal("CLAUDE_CODE_OAUTH_TOKEN secret ref should be optional")
+		}
+		return
+	}
+	t.Fatal("missing CLAUDE_CODE_OAUTH_TOKEN env")
+}
+
+func TestBuildPodEnvClaudeOAuthTokenExplicitEnvTakesPrecedence(t *testing.T) {
+	env := mustBuildPodEnv(
+		t,
+		map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "explicit-token"},
+		"/workspace/rig",
+		podManagedDoltHost,
+		podManagedDoltPort,
+	)
+
+	for _, v := range env {
+		if v.Name != "CLAUDE_CODE_OAUTH_TOKEN" {
+			continue
+		}
+		if v.Value != "explicit-token" {
+			t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN = %q, want explicit-token", v.Value)
+		}
+		if v.ValueFrom != nil {
+			t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN should preserve explicit env instead of secret ref: %#v", v)
+		}
+		return
+	}
+	t.Fatal("missing CLAUDE_CODE_OAUTH_TOKEN env")
 }
 
 func TestBuildPodEnvRemapsVars(t *testing.T) {

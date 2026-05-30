@@ -483,8 +483,24 @@ func buildPodEnvForRoot(cfgEnv map[string]string, podCityRoot, podWorkDir, manag
 			},
 		},
 	})
+	if strings.TrimSpace(cfgEnv["CLAUDE_CODE_OAUTH_TOKEN"]) == "" {
+		env = append(env, claudeOAuthTokenEnv())
+	}
 
 	return env, nil
+}
+
+func claudeOAuthTokenEnv() corev1.EnvVar {
+	return corev1.EnvVar{
+		Name: "CLAUDE_CODE_OAUTH_TOKEN",
+		ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: providerRuntimeClaudeSecretName},
+				Key:                  "CLAUDE_CODE_OAUTH_TOKEN",
+				Optional:             boolPtr(true),
+			},
+		},
+	}
 }
 
 // needsStaging returns true if the session config requires file staging
