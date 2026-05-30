@@ -99,6 +99,68 @@ func TestRouteCreateOnFormulaCreatesWarrantAndAttachesShutdownDance(t *testing.T
 	}
 }
 
+func TestRouteCreateJSONSchemaDeclared(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"route", "create", "--json-schema=result"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(route create --json-schema=result) = %d; stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	if !json.Valid(stdout.Bytes()) {
+		t.Fatalf("stdout is not valid JSON schema: %s", stdout.String())
+	}
+}
+
+func TestRouteCreateJSONOutputValidatesSchema(t *testing.T) {
+	dir := testFormulaDir(t)
+	writeShutdownDanceRequiredVarsFormula(t, dir)
+	cfg := &config.City{
+		Workspace:     config.Workspace{Name: "test-city"},
+		FormulaLayers: config.FormulaLayers{City: []string{dir}},
+		Agents: []config.Agent{
+			{Name: "dog", BindingName: "gastown", MaxActiveSessions: intPtr(3)},
+		},
+	}
+	store := beads.NewMemStore()
+	deps := routeCreateDeps{
+		Sling: slingDeps{
+			CityName: "test-city",
+			CityPath: sharedTestCityDir,
+			Cfg:      cfg,
+			SP:       runtime.NewFake(),
+			Runner:   newFakeRunner().run,
+			Store:    store,
+			StoreRef: "city:test-city",
+		},
+	}
+	var stdout, stderr bytes.Buffer
+
+	code := doRouteCreate(routeCreateOptions{
+		Target: "gastown.dog",
+		On:     "mol-shutdown-dance",
+		Type:   "task",
+		Labels: []string{"warrant"},
+		Title:  "Stuck: gastown.deacon",
+		Metadata: []string{
+			"target=gastown.deacon",
+			"reason=stale patrol",
+			"requester=deacon",
+		},
+		JSON: true,
+	}, deps, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("doRouteCreate returned %d, want 0; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	validateJSONAgainstResultSchema(t, []string{"route", "create"}, stdout.Bytes())
+
+	var payload routeCreateJSONResult
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("decode route create JSON: %v\n%s", err, stdout.String())
+	}
+	if !payload.OK || payload.ID == "" || payload.Target != "gastown.dog" || payload.Formula != "mol-shutdown-dance" {
+		t.Fatalf("payload = %#v, want routed formula-backed source evidence", payload)
+	}
+}
+
 func TestRouteCreateEmitsFormulaBackedEvents(t *testing.T) {
 	dir := testFormulaDir(t)
 	writeShutdownDanceRequiredVarsFormula(t, dir)
