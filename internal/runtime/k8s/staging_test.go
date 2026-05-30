@@ -391,6 +391,7 @@ func (o *capturingStageOps) getPod(context.Context, string) (*corev1.Pod, error)
 	return &corev1.Pod{
 		Status: corev1.PodStatus{
 			InitContainerStatuses: []corev1.ContainerStatus{{
+				Name: "stage",
 				State: corev1.ContainerState{
 					Running: &corev1.ContainerStateRunning{},
 				},

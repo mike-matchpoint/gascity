@@ -994,8 +994,8 @@ func TestProviderRuntimeIdentityIncludesSharedProcessNamespace(t *testing.T) {
 	}
 
 	identity := mustDesiredProviderRuntimeIdentity(t, p, cfg)
-	if identity.Version != "k8s-v2" {
-		t.Fatalf("identity version = %q, want k8s-v2", identity.Version)
+	if identity.Version != "k8s-v3" {
+		t.Fatalf("identity version = %q, want k8s-v3", identity.Version)
 	}
 	var spec runtimeIdentitySpec
 	if err := json.Unmarshal([]byte(identity.Breakdown), &spec); err != nil {
@@ -1003,6 +1003,9 @@ func TestProviderRuntimeIdentityIncludesSharedProcessNamespace(t *testing.T) {
 	}
 	if !spec.ShareProcessNamespace {
 		t.Fatalf("ShareProcessNamespace = false in identity breakdown: %s", identity.Breakdown)
+	}
+	if spec.LaunchMaterialMode != "staged-files" {
+		t.Fatalf("LaunchMaterialMode = %q, want staged-files in identity breakdown: %s", spec.LaunchMaterialMode, identity.Breakdown)
 	}
 }
 
@@ -1046,6 +1049,72 @@ func TestStartDetectsStalePod(t *testing.T) {
 	}
 	if !found {
 		t.Error("stale pod was not deleted before recreation")
+	}
+}
+
+func TestStartStagesLaunchMaterialWithoutEmbeddingPromptInExecArgs(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	p.postStartSettle = 0
+	prompt := strings.Repeat("large prompt ", 20000)
+	command := "codex --model gpt-5.5 " + strings.Repeat("--flag ", 2000)
+	preStart := "printf %s " + strings.Repeat("x", 20000)
+	cfg := runtime.Config{
+		Command:      command,
+		WorkDir:      "/city/rigs/frontend",
+		PromptSuffix: "'" + prompt + "'",
+		PromptFlag:   "--prompt",
+		PreStart:     []string{preStart},
+		Env: map[string]string{
+			"GC_AGENT": "demo-rig/polecat",
+			"GC_CITY":  "/city",
+		},
+	}
+	fake.setExecResult("gc-test-agent", []string{"tmux", "has-session", "-t", "main"}, "", nil)
+
+	if err := p.Start(context.Background(), "gc-test-agent", cfg); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	pod := fake.pods["gc-test-agent"]
+	if pod == nil {
+		t.Fatal("created pod not recorded")
+	}
+	argv := strings.Join(append(append([]string{}, pod.Spec.Containers[0].Command...), pod.Spec.Containers[0].Args...), "\x00")
+	if len(argv) > 4096 {
+		t.Fatalf("pod argv length = %d, want bounded under 4096", len(argv))
+	}
+	for _, forbidden := range []string{prompt, command, preStart} {
+		if strings.Contains(argv, forbidden) {
+			t.Fatalf("pod argv leaked large launch material")
+		}
+	}
+
+	launchReadyIdx, workspaceReadyIdx := -1, -1
+	for i, c := range fake.calls {
+		if c.method != "execInPod" {
+			continue
+		}
+		joined := strings.Join(c.cmd, " ")
+		for _, forbidden := range []string{prompt, command, preStart} {
+			if strings.Contains(joined, forbidden) {
+				t.Fatalf("exec argv leaked large launch material in call %#v", c)
+			}
+		}
+		if c.container == "launch" && len(c.cmd) == 2 && c.cmd[0] == "touch" && c.cmd[1] == podLaunchReadyMarker {
+			launchReadyIdx = i
+		}
+		if c.container == "stage" && len(c.cmd) == 2 && c.cmd[0] == "touch" && c.cmd[1] == "/workspace/.gc-ready" {
+			workspaceReadyIdx = i
+		}
+	}
+	if launchReadyIdx == -1 {
+		t.Fatal("launch material was not marked ready")
+	}
+	if workspaceReadyIdx == -1 {
+		t.Fatal("workspace staging was not marked ready")
+	}
+	if launchReadyIdx > workspaceReadyIdx {
+		t.Fatalf("workspace was marked ready before launch material: launch=%d workspace=%d", launchReadyIdx, workspaceReadyIdx)
 	}
 }
 
@@ -1238,12 +1307,12 @@ func TestPodManifestCompatibility(t *testing.T) {
 		t.Errorf("container name = %q, want %q", pod.Spec.Containers[0].Name, "agent")
 	}
 
-	// Init container name must be "stage" (when staging needed).
-	if len(pod.Spec.InitContainers) == 0 {
-		t.Fatal("expected init container for rig agent")
+	// Init containers must stage launch material first, then workspace files.
+	if len(pod.Spec.InitContainers) < 2 {
+		t.Fatalf("expected launch and stage init containers for rig agent: %#v", pod.Spec.InitContainers)
 	}
-	if pod.Spec.InitContainers[0].Name != "stage" {
-		t.Errorf("init container name = %q, want %q", pod.Spec.InitContainers[0].Name, "stage")
+	if pod.Spec.InitContainers[0].Name != "launch" || pod.Spec.InitContainers[1].Name != "stage" {
+		t.Errorf("init containers = %#v, want launch then stage", pod.Spec.InitContainers)
 	}
 
 	// Labels must match gc-session-k8s format.
@@ -1256,7 +1325,7 @@ func TestPodManifestCompatibility(t *testing.T) {
 	for _, v := range pod.Spec.Volumes {
 		volNames[v.Name] = true
 	}
-	for _, name := range []string{"ws", "claude-config", "city"} {
+	for _, name := range []string{"launch", "ws", "claude-config", "city"} {
 		if !volNames[name] {
 			t.Errorf("missing volume %q", name)
 		}
@@ -1803,11 +1872,11 @@ func TestPodManifestAddsInitContainerForPackOverlayCityAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(pod.Spec.InitContainers) == 0 {
-		t.Fatal("expected init container for city agent with pack overlay")
+	if len(pod.Spec.InitContainers) < 2 {
+		t.Fatalf("expected launch and stage init containers for city agent with pack overlay: %#v", pod.Spec.InitContainers)
 	}
-	if pod.Spec.InitContainers[0].Name != "stage" {
-		t.Errorf("init container name = %q, want %q", pod.Spec.InitContainers[0].Name, "stage")
+	if pod.Spec.InitContainers[0].Name != "launch" || pod.Spec.InitContainers[1].Name != "stage" {
+		t.Errorf("init containers = %#v, want launch then stage", pod.Spec.InitContainers)
 	}
 }
 
@@ -1830,9 +1899,10 @@ func TestBuildPodPrebaked(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// No init containers when prebaked.
-	if len(pod.Spec.InitContainers) != 0 {
-		t.Errorf("expected 0 init containers when prebaked, got %d", len(pod.Spec.InitContainers))
+	// Prebaked pods still use the bounded launch-material init container, but
+	// skip workspace staging.
+	if len(pod.Spec.InitContainers) != 1 || pod.Spec.InitContainers[0].Name != "launch" {
+		t.Errorf("expected only launch init container when prebaked, got %#v", pod.Spec.InitContainers)
 	}
 
 	// No "ws" EmptyDir volume.
@@ -1864,7 +1934,7 @@ func TestBuildPodPrebaked(t *testing.T) {
 	}
 
 	// Entrypoint should NOT contain workspace-ready wait.
-	entrypoint := pod.Spec.Containers[0].Args[0]
+	entrypoint := buildPodLaunchMaterial(cfg, p).Entrypoint
 	if containsStr(entrypoint, ".gc-workspace-ready") {
 		t.Error("prebaked entrypoint should not wait for .gc-workspace-ready")
 	}

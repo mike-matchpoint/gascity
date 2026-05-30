@@ -1,7 +1,6 @@
 package k8s
 
 import (
-	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -147,52 +146,63 @@ func TestBuildPod_ClonesSchedulingFields(t *testing.T) {
 
 func TestBuildPod_WaitsForEitherWorkspaceReadyMarker(t *testing.T) {
 	p := newProviderWithOps(newFakeK8sOps())
-	pod, err := buildPod("test-session", runtime.Config{Command: "/bin/bash"}, p)
+	cfg := runtime.Config{Command: "/bin/bash"}
+	pod, err := buildPod("test-session", cfg, p)
 	if err != nil {
 		t.Fatalf("buildPod: %v", err)
 	}
 
-	args := pod.Spec.Containers[0].Args
-	if len(args) != 1 {
-		t.Fatalf("container args = %v, want one shell command", args)
+	entrypoint := buildPodLaunchMaterial(cfg, p).Entrypoint
+	if !strings.Contains(entrypoint, `/workspace/.gc-workspace-ready ] && [ ! -f /workspace/.gc-ready`) {
+		t.Fatalf("entrypoint does not accept both workspace ready markers: %s", entrypoint)
 	}
-	if !strings.Contains(args[0], `/workspace/.gc-workspace-ready ] && [ ! -f /workspace/.gc-ready`) {
-		t.Fatalf("entrypoint does not accept both workspace ready markers: %s", args[0])
+	if got := pod.Spec.Containers[0].Command; len(got) != 2 || got[0] != "/bin/sh" || got[1] != podLaunchEntrypoint {
+		t.Fatalf("container command = %#v, want bounded launch script command", got)
+	}
+	if len(pod.Spec.Containers[0].Args) != 0 {
+		t.Fatalf("container args = %#v, want none", pod.Spec.Containers[0].Args)
 	}
 }
 
 func TestBuildPodEntrypointLaunchesTmuxFromWorkDirAfterPreStart(t *testing.T) {
 	p := newProviderWithOps(newFakeK8sOps())
-	pod, err := buildPod("test-session", runtime.Config{
+	cfg := runtime.Config{
 		Command:  "codex",
 		WorkDir:  "/city/rigs/frontend",
 		PreStart: []string{"rm -rf /workspace/rigs/frontend && mkdir -p /workspace/rigs/frontend"},
 		Env: map[string]string{
 			"GC_CITY": "/city",
 		},
-	}, p)
+	}
+	pod, err := buildPod("test-session", cfg, p)
 	if err != nil {
 		t.Fatalf("buildPod: %v", err)
 	}
 
-	args := pod.Spec.Containers[0].Args
-	if len(args) != 1 {
-		t.Fatalf("container args = %v, want one shell command", args)
+	if len(pod.Spec.Containers[0].Args) != 0 {
+		t.Fatalf("container args = %v, want none", pod.Spec.Containers[0].Args)
 	}
 	if got := pod.Spec.Containers[0].WorkingDir; got != podEntrypointWorkDir {
 		t.Fatalf("container workingDir = %q, want stable entrypoint dir %q", got, podEntrypointWorkDir)
 	}
-	entrypoint := args[0]
-	preStartIdx := strings.Index(entrypoint, "base64 -d | sh")
+	material := buildPodLaunchMaterial(cfg, p)
+	entrypoint := material.Entrypoint
+	preStartIdx := strings.Index(entrypoint, "for __gc_pre_start")
 	launchIdx := strings.Index(entrypoint, "cd '/workspace/rigs/frontend' && tmux new-session")
 	if preStartIdx == -1 {
-		t.Fatalf("entrypoint does not run pre_start via base64 shell: %s", entrypoint)
+		t.Fatalf("entrypoint does not run staged pre_start scripts: %s", entrypoint)
 	}
 	if launchIdx == -1 {
 		t.Fatalf("entrypoint does not cd to projected workdir before tmux: %s", entrypoint)
 	}
 	if preStartIdx > launchIdx {
 		t.Fatalf("entrypoint cd happens before pre_start; want pre_start then final cd: %s", entrypoint)
+	}
+	if len(material.PreStart) != 1 || material.PreStart[0] != "rm -rf /workspace/rigs/frontend && mkdir -p /workspace/rigs/frontend" {
+		t.Fatalf("pre_start material = %#v", material.PreStart)
+	}
+	if !strings.Contains(material.Agent, "exec sh -c 'codex'") {
+		t.Fatalf("agent launch script missing command:\n%s", material.Agent)
 	}
 }
 
@@ -216,7 +226,7 @@ func TestBuildPodEnablesSharedProcessNamespace(t *testing.T) {
 func TestBuildPodEntrypointDeliversPromptSuffixInLaunchCommand(t *testing.T) {
 	p := newProviderWithOps(newFakeK8sOps())
 	prompt := "Full startup prompt\nwith quoted ' text"
-	pod, err := buildPod("test-session", runtime.Config{
+	cfg := runtime.Config{
 		Command:      "codex --model gpt-5.5",
 		WorkDir:      "/city/rigs/frontend",
 		PromptSuffix: shellquote.Quote(prompt),
@@ -224,35 +234,62 @@ func TestBuildPodEntrypointDeliversPromptSuffixInLaunchCommand(t *testing.T) {
 		Env: map[string]string{
 			"GC_CITY": "/city",
 		},
-	}, p)
+	}
+	pod, err := buildPod("test-session", cfg, p)
 	if err != nil {
 		t.Fatalf("buildPod: %v", err)
 	}
 
-	args := pod.Spec.Containers[0].Args
-	if len(args) != 1 {
-		t.Fatalf("container args = %v, want one shell command", args)
+	if strings.Contains(strings.Join(pod.Spec.Containers[0].Command, " "), prompt) || strings.Contains(strings.Join(pod.Spec.Containers[0].Args, " "), prompt) {
+		t.Fatalf("pod argv leaked prompt text: command=%#v args=%#v", pod.Spec.Containers[0].Command, pod.Spec.Containers[0].Args)
 	}
-	entrypoint := args[0]
-	if strings.Contains(entrypoint, prompt) {
-		t.Fatalf("entrypoint leaked raw prompt text instead of base64 payload: %s", entrypoint)
+	material := buildPodLaunchMaterial(cfg, p)
+	if material.Prompt != prompt || !material.HasPrompt {
+		t.Fatalf("launch prompt material = (%q, %v), want raw prompt", material.Prompt, material.HasPrompt)
 	}
-	if !strings.Contains(entrypoint, "mkdir -p '/workspace/rigs/frontend/.gc/tmp'") {
-		t.Fatalf("entrypoint does not create pod-local prompt dir: %s", entrypoint)
+	for _, want := range []string{
+		podLaunchPromptPath,
+		"rm -f '/gc-launch/prompt.txt'",
+		`exec sh -c 'codex --model gpt-5.5 --prompt "$1"' sh "$__gc_prompt"`,
+	} {
+		if !strings.Contains(material.Agent, want) {
+			t.Fatalf("agent launch script missing %q:\n%s", want, material.Agent)
+		}
 	}
-	if want := base64.StdEncoding.EncodeToString([]byte(prompt)); !strings.Contains(entrypoint, want) {
-		t.Fatalf("entrypoint missing base64 prompt payload %q: %s", want, entrypoint)
+}
+
+func TestBuildPodDoesNotEmbedLargeLaunchMaterialInPodArgs(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+	prompt := strings.Repeat("large prompt ", 20000)
+	command := "codex --model gpt-5.5 " + strings.Repeat("--flag ", 2000)
+	preStart := "printf %s " + strings.Repeat("x", 20000)
+	cfg := runtime.Config{
+		Command:      command,
+		WorkDir:      "/city/rigs/frontend",
+		PromptSuffix: shellquote.Quote(prompt),
+		PromptFlag:   "--prompt",
+		PreStart:     []string{preStart},
+		Env: map[string]string{
+			"GC_CITY": "/city",
+		},
+	}
+	pod, err := buildPod("test-session", cfg, p)
+	if err != nil {
+		t.Fatalf("buildPod: %v", err)
 	}
 
-	cmd := decodedEntrypointCommand(t, entrypoint)
-	for _, want := range []string{
-		"sh -c ",
-		"/workspace/rigs/frontend/.gc/tmp/prompt-test-session.txt",
-		"exec codex --model gpt-5.5 --prompt \"$__gc_prompt\"",
-	} {
-		if !strings.Contains(cmd, want) {
-			t.Fatalf("decoded launch command missing %q:\n%s", want, cmd)
+	argv := strings.Join(append(append([]string{}, pod.Spec.Containers[0].Command...), pod.Spec.Containers[0].Args...), "\x00")
+	if len(argv) > 4096 {
+		t.Fatalf("pod argv length = %d, want bounded under 4096: %#v %#v", len(argv), pod.Spec.Containers[0].Command, pod.Spec.Containers[0].Args)
+	}
+	for _, forbidden := range []string{prompt, command, preStart} {
+		if strings.Contains(argv, forbidden) {
+			t.Fatalf("pod argv leaked large launch material")
 		}
+	}
+	material := buildPodLaunchMaterial(cfg, p)
+	if material.Prompt != prompt || material.Agent == "" || len(material.PreStart) != 1 {
+		t.Fatalf("launch material did not preserve large inputs: %#v", material)
 	}
 }
 
@@ -270,21 +307,28 @@ func TestBuildPodEntrypointTransfersPromptFileOwnershipForDynamicUser(t *testing
 	if err != nil {
 		t.Fatalf("buildPod: %v", err)
 	}
+	if len(pod.Spec.InitContainers) == 0 || pod.Spec.InitContainers[0].SecurityContext == nil || pod.Spec.InitContainers[0].SecurityContext.RunAsUser == nil || *pod.Spec.InitContainers[0].SecurityContext.RunAsUser != 0 {
+		t.Fatalf("dynamic-user launch init container must run as root to stage/chown launch material: %#v", pod.Spec.InitContainers)
+	}
 
-	args := pod.Spec.Containers[0].Args
-	if len(args) != 1 {
-		t.Fatalf("container args = %v, want one shell command", args)
+	material := buildPodLaunchMaterial(runtime.Config{
+		Command:      "codex",
+		WorkDir:      "/city/rigs/frontend",
+		PromptSuffix: shellquote.Quote("full startup prompt"),
+		Env: map[string]string{
+			"GC_CITY":        "/city",
+			"LINUX_USERNAME": "agentuser",
+		},
+	}, p)
+	entrypoint := material.Entrypoint
+	if want := "chown -R 'agentuser' '/gc-launch'"; !strings.Contains(entrypoint, want) {
+		t.Fatalf("entrypoint does not transfer launch material ownership with %q:\n%s", want, entrypoint)
 	}
-	entrypoint := args[0]
-	if want := "chown -R 'agentuser' '/workspace/rigs/frontend/.gc/tmp'"; !strings.Contains(entrypoint, want) {
-		t.Fatalf("entrypoint does not transfer prompt dir ownership with %q:\n%s", want, entrypoint)
-	}
-	if want := `su -m agentuser -c`; !strings.Contains(entrypoint, want) {
+	if want := `su -m 'agentuser' -c`; !strings.Contains(entrypoint, want) {
 		t.Fatalf("entrypoint does not drop to dynamic user with %q:\n%s", want, entrypoint)
 	}
-	script := decodedEntrypointScript(t, entrypoint)
-	if want := "rm -f '/workspace/rigs/frontend/.gc/tmp/prompt-test-session.txt'"; !strings.Contains(script, want) {
-		t.Fatalf("decoded launch script does not remove prompt file with %q:\n%s", want, script)
+	if want := "rm -f '/gc-launch/prompt.txt'"; !strings.Contains(material.Agent, want) {
+		t.Fatalf("agent launch script does not remove prompt file with %q:\n%s", want, material.Agent)
 	}
 }
 
@@ -307,11 +351,24 @@ func TestBuildPodEntrypointPreservesRuntimeIdentityForDynamicUser(t *testing.T) 
 		t.Fatalf("buildPod: %v", err)
 	}
 
-	entrypoint := pod.Spec.Containers[0].Args[0]
-	if want := `export HOME="/home/agentuser" USER="agentuser" LOGNAME="agentuser" SHELL="/bin/bash"`; !strings.Contains(entrypoint, want) {
+	material := buildPodLaunchMaterial(runtime.Config{
+		Command: "/bin/bash",
+		WorkDir: "/city/.gc/agents/worker",
+		Env: map[string]string{
+			"GC_AGENT":          "worker",
+			"GC_ALIAS":          "worker",
+			"GC_CITY":           "/city",
+			"GC_INSTANCE_TOKEN": "tok-worker",
+			"GC_RUNTIME_EPOCH":  "12",
+			"GC_SESSION_ID":     "gc-session-pending",
+			"LINUX_USERNAME":    "agentuser",
+		},
+	}, p)
+	entrypoint := material.Entrypoint
+	if want := `export HOME='/home/agentuser' USER='agentuser' LOGNAME='agentuser' SHELL="/bin/bash"`; !strings.Contains(entrypoint, want) {
 		t.Fatalf("entrypoint does not prepare preserved user env with %q:\n%s", want, entrypoint)
 	}
-	if want := `su -m agentuser -c`; !strings.Contains(entrypoint, want) {
+	if want := `su -m 'agentuser' -c`; !strings.Contains(entrypoint, want) {
 		t.Fatalf("entrypoint must preserve container env when switching users with %q:\n%s", want, entrypoint)
 	}
 	if strings.Contains(entrypoint, `su - agentuser -c`) {
@@ -356,8 +413,8 @@ func TestBuildPodPersistentWorkspacePVCUsesMountedCityRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildPod: %v", err)
 	}
-	if len(pod.Spec.InitContainers) != 0 {
-		t.Fatalf("persistent workspace pod should not use init staging containers: %#v", pod.Spec.InitContainers)
+	if len(pod.Spec.InitContainers) != 1 || pod.Spec.InitContainers[0].Name != "launch" {
+		t.Fatalf("persistent workspace pod should use only launch staging init container: %#v", pod.Spec.InitContainers)
 	}
 
 	workspaceMount, ok := volumeMountByName(pod.Spec.Containers[0].VolumeMounts, "workspace")
@@ -381,20 +438,19 @@ func TestBuildPodPersistentWorkspacePVCUsesMountedCityRoot(t *testing.T) {
 		t.Fatal("persistent workspace pod should not create compatibility city EmptyDir")
 	}
 
-	entrypoint := pod.Spec.Containers[0].Args[0]
+	material := buildPodLaunchMaterial(cfg, p)
+	entrypoint := material.Entrypoint
 	if strings.Contains(entrypoint, ".gc-workspace-ready") || strings.Contains(entrypoint, ".gc-ready") {
 		t.Fatalf("persistent workspace entrypoint should not wait for staged workspace markers: %s", entrypoint)
 	}
 	if !strings.Contains(entrypoint, "cd '/workspace/cities/demo-city/.gc/worktrees/demo/cartographer' && tmux new-session") {
 		t.Fatalf("entrypoint does not launch from persistent workdir: %s", entrypoint)
 	}
-	wantPreStartB64 := base64.StdEncoding.EncodeToString([]byte("test -d /workspace/cities/demo-city/rigs/demo"))
-	if !strings.Contains(entrypoint, wantPreStartB64) {
-		t.Fatalf("pre_start command was not remapped to persistent workspace root: %s", entrypoint)
+	if len(material.PreStart) != 1 || material.PreStart[0] != "test -d /workspace/cities/demo-city/rigs/demo" {
+		t.Fatalf("pre_start command was not remapped to persistent workspace root: %#v", material.PreStart)
 	}
-	wantCommandB64 := base64.StdEncoding.EncodeToString([]byte("gc agent-script --script /workspace/cities/demo-city/packs/demo/agent.yaml"))
-	if !strings.Contains(entrypoint, wantCommandB64) {
-		t.Fatalf("agent command was not remapped to persistent workspace root: %s", entrypoint)
+	if !strings.Contains(material.Agent, "gc agent-script --script /workspace/cities/demo-city/packs/demo/agent.yaml") {
+		t.Fatalf("agent command was not remapped to persistent workspace root: %s", material.Agent)
 	}
 
 	envMap := map[string]string{}
@@ -415,35 +471,6 @@ func TestBuildPodPersistentWorkspacePVCUsesMountedCityRoot(t *testing.T) {
 			t.Fatalf("%s = %q, want %q", key, got, wantValue)
 		}
 	}
-}
-
-func decodedEntrypointCommand(t *testing.T, entrypoint string) string {
-	t.Helper()
-	const prefix = "CMD=$(echo '"
-	start := strings.Index(entrypoint, prefix)
-	if start == -1 {
-		t.Fatalf("entrypoint missing command base64 prefix %q: %s", prefix, entrypoint)
-	}
-	rest := entrypoint[start+len(prefix):]
-	end := strings.Index(rest, "' | base64 -d)")
-	if end == -1 {
-		t.Fatalf("entrypoint missing command base64 suffix: %s", entrypoint)
-	}
-	decoded, err := base64.StdEncoding.DecodeString(rest[:end])
-	if err != nil {
-		t.Fatalf("decode command base64: %v", err)
-	}
-	return string(decoded)
-}
-
-func decodedEntrypointScript(t *testing.T, entrypoint string) string {
-	t.Helper()
-	cmd := decodedEntrypointCommand(t, entrypoint)
-	parts := shellquote.Split(cmd)
-	if len(parts) != 3 || parts[0] != "sh" || parts[1] != "-c" {
-		t.Fatalf("decoded launch command should be sh -c <script>, got %#v from %q", parts, cmd)
-	}
-	return parts[2]
 }
 
 func TestBuildPod_MountsProviderCredentialSecrets(t *testing.T) {
@@ -581,16 +608,14 @@ func TestBuildPodEnv_GitHubTokenEnvSupportsGitAndGHCLI(t *testing.T) {
 
 func TestBuildPod_CredentialBootstrapCopiesClaudeRootConfig(t *testing.T) {
 	p := newProviderWithOps(newFakeK8sOps())
-	pod, err := buildPod("test-session", runtime.Config{Command: "/bin/bash"}, p)
+	cfg := runtime.Config{Command: "/bin/bash"}
+	_, err := buildPod("test-session", cfg, p)
 	if err != nil {
 		t.Fatalf("buildPod: %v", err)
 	}
-	args := pod.Spec.Containers[0].Args
-	if len(args) != 1 {
-		t.Fatalf("container args = %v, want one shell command", args)
-	}
-	if !strings.Contains(args[0], `cp -f /tmp/claude-secret/.claude.json "$HOME/.claude.json"`) {
-		t.Fatalf("credential bootstrap does not copy Claude root config: %s", args[0])
+	entrypoint := buildPodLaunchMaterial(cfg, p).Entrypoint
+	if !strings.Contains(entrypoint, `cp -f /tmp/claude-secret/.claude.json "$HOME/.claude.json"`) {
+		t.Fatalf("credential bootstrap does not copy Claude root config: %s", entrypoint)
 	}
 }
 
