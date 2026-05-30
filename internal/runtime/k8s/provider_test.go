@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -867,6 +868,25 @@ func TestProviderRuntimeFingerprintChangesForSubstrateFields(t *testing.T) {
 				t.Fatalf("fingerprint did not change for %s: %s", tt.name, got.Fingerprint)
 			}
 		})
+	}
+}
+
+func TestProviderRuntimeIdentityIncludesSharedProcessNamespace(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+	cfg := runtime.Config{
+		Env: map[string]string{"GC_AGENT": "mayor", "GC_CITY": "/workspace"},
+	}
+
+	identity := mustDesiredProviderRuntimeIdentity(t, p, cfg)
+	if identity.Version != "k8s-v2" {
+		t.Fatalf("identity version = %q, want k8s-v2", identity.Version)
+	}
+	var spec runtimeIdentitySpec
+	if err := json.Unmarshal([]byte(identity.Breakdown), &spec); err != nil {
+		t.Fatalf("unmarshal identity breakdown: %v\n%s", err, identity.Breakdown)
+	}
+	if !spec.ShareProcessNamespace {
+		t.Fatalf("ShareProcessNamespace = false in identity breakdown: %s", identity.Breakdown)
 	}
 }
 
@@ -2043,6 +2063,12 @@ func TestInitBeadsInPodStripsProjectIDFromMetadata(t *testing.T) {
 	count := strings.Count(script, want)
 	if count < 2 {
 		t.Errorf("expected %q to appear in both python3 patch invocations (>=2 times), got %d\nscript:\n%s", want, count, script)
+	}
+	if strings.Contains(script, "<<<") {
+		t.Fatalf("repair script uses Bash-only here-string despite running under /bin/sh:\n%s", script)
+	}
+	if !strings.Contains(script, `printf '%s' "$PATCH" | python3 -c`) {
+		t.Fatalf("repair script missing POSIX sh stdin fallback:\n%s", script)
 	}
 }
 

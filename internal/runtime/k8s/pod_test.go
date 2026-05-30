@@ -180,6 +180,23 @@ func TestBuildPodEntrypointLaunchesTmuxFromWorkDirAfterPreStart(t *testing.T) {
 	}
 }
 
+func TestBuildPodEnablesSharedProcessNamespace(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+	pod, err := buildPod("test-session", runtime.Config{
+		Command: "codex",
+		WorkDir: "/city/rigs/frontend",
+		Env: map[string]string{
+			"GC_CITY": "/city",
+		},
+	}, p)
+	if err != nil {
+		t.Fatalf("buildPod: %v", err)
+	}
+	if pod.Spec.ShareProcessNamespace == nil || !*pod.Spec.ShareProcessNamespace {
+		t.Fatalf("ShareProcessNamespace = %#v, want true", pod.Spec.ShareProcessNamespace)
+	}
+}
+
 func TestBuildPodEntrypointDeliversPromptSuffixInLaunchCommand(t *testing.T) {
 	p := newProviderWithOps(newFakeK8sOps())
 	prompt := "Full startup prompt\nwith quoted ' text"

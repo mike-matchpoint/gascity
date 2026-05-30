@@ -352,6 +352,7 @@ case "$op" in
           spec: {
             serviceAccountName: $sa,
             restartPolicy: "Never",
+            shareProcessNamespace: true,
             initContainers: [{
               name: "stage",
               image: $image,
@@ -420,6 +421,7 @@ case "$op" in
           spec: {
             serviceAccountName: $sa,
             restartPolicy: "Never",
+            shareProcessNamespace: true,
             containers: [{
               name: "agent",
               image: $image,

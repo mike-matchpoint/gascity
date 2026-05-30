@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	providerRuntimeFingerprintVersion = "k8s-v1"
+	providerRuntimeFingerprintVersion = "k8s-v2"
 
 	providerRuntimeFingerprintAnnotation        = "gascity.dev/provider-runtime-fingerprint"
 	providerRuntimeFingerprintVersionAnnotation = "gascity.dev/provider-runtime-fingerprint-version"
@@ -26,6 +26,7 @@ const (
 type runtimeIdentitySpec struct {
 	Provider              string                 `json:"provider"`
 	Image                 string                 `json:"image"`
+	ShareProcessNamespace bool                   `json:"share_process_namespace"`
 	InitImage             string                 `json:"init_image,omitempty"`
 	ServiceAccount        string                 `json:"service_account,omitempty"`
 	Resources             runtimeResourceSpec    `json:"resources"`
@@ -189,6 +190,7 @@ func (p *Provider) runtimeIdentitySpec(cfg runtime.Config) (runtimeIdentitySpec,
 	return runtimeIdentitySpec{
 		Provider:              "k8s",
 		Image:                 p.image,
+		ShareProcessNamespace: true,
 		InitImage:             initImage,
 		ServiceAccount:        p.serviceAccount,
 		Resources:             providerRuntimeResources(p),
