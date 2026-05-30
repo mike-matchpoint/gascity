@@ -440,10 +440,39 @@ func k8sShouldAcceptStartupDialogs(cfg runtime.Config) bool {
 	if cfg.AcceptStartupDialogs != nil {
 		return *cfg.AcceptStartupDialogs
 	}
+	if k8sProviderMayPromptForStartupDialog(cfg.ProviderName) ||
+		k8sProviderMayPromptForStartupDialog(cfg.ProviderOverlayName) ||
+		k8sCommandMayPromptForStartupDialog(cfg.Command) {
+		return true
+	}
+	for _, provider := range cfg.InstallAgentHooks {
+		if k8sProviderMayPromptForStartupDialog(provider) {
+			return true
+		}
+	}
 	if len(cfg.ProcessNames) == 0 && !cfg.EmitsPermissionWarning {
 		return false
 	}
 	return true
+}
+
+func k8sProviderMayPromptForStartupDialog(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "claude", "codex", "gemini", "kimi":
+		return true
+	default:
+		return false
+	}
+}
+
+func k8sCommandMayPromptForStartupDialog(command string) bool {
+	command = strings.ToLower(command)
+	for _, token := range []string{"claude", "codex", "gemini", "kimi"} {
+		if strings.Contains(command, token) {
+			return true
+		}
+	}
+	return false
 }
 
 // Stop deletes the pod for the named session. Idempotent.
