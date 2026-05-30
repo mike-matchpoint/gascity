@@ -51,7 +51,7 @@ var cityRootRuntimeInputStagePaths = []string{
 // content into the pod via the init container, then signals it to exit.
 func stageFiles(ctx context.Context, ops k8sOps, podName string, cfg runtime.Config, ctrlCity string, warn io.Writer) error {
 	// Wait for init container to be running (up to 60s).
-	if err := waitForInitContainer(ctx, ops, podName, 60*time.Second); err != nil {
+	if err := waitForInitContainer(ctx, ops, podName, "stage", 60*time.Second); err != nil {
 		return err
 	}
 
@@ -97,6 +97,54 @@ func stageFiles(ctx context.Context, ops k8sOps, podName string, cfg runtime.Con
 	_, err := ops.execInPod(ctx, podName, "stage",
 		[]string{"touch", "/workspace/.gc-ready"}, nil)
 	return err
+}
+
+// stageLaunchFiles copies bounded launch material into the pod before the
+// agent container starts. Large prompts, command strings, and pre_start bodies
+// live in this EmptyDir-backed filesystem instead of Kubernetes argv/env.
+func stageLaunchFiles(ctx context.Context, ops k8sOps, podName string, cfg runtime.Config, p *Provider) error {
+	if err := waitForInitContainer(ctx, ops, podName, "launch", 60*time.Second); err != nil {
+		return err
+	}
+	stageDir, err := os.MkdirTemp("", "gc-k8s-launch-")
+	if err != nil {
+		return fmt.Errorf("preparing launch material: %w", err)
+	}
+	defer os.RemoveAll(stageDir) //nolint:errcheck
+
+	material := buildPodLaunchMaterial(cfg, p)
+	if err := writePodLaunchMaterial(stageDir, material); err != nil {
+		return err
+	}
+	if err := copyDirToPod(ctx, ops, podName, "launch", stageDir, podLaunchDir); err != nil {
+		return fmt.Errorf("staging launch material: %w", err)
+	}
+	_, err = ops.execInPod(ctx, podName, "launch", []string{"touch", podLaunchReadyMarker}, nil)
+	return err
+}
+
+func writePodLaunchMaterial(root string, material podLaunchMaterial) error {
+	if err := os.MkdirAll(filepath.Join(root, "pre-start"), 0o755); err != nil {
+		return fmt.Errorf("creating launch pre-start dir: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "entrypoint.sh"), []byte(material.Entrypoint), 0o755); err != nil {
+		return fmt.Errorf("writing launch entrypoint: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "agent-launch.sh"), []byte(material.Agent), 0o755); err != nil {
+		return fmt.Errorf("writing agent launch script: %w", err)
+	}
+	if material.HasPrompt {
+		if err := os.WriteFile(filepath.Join(root, "prompt.txt"), []byte(material.Prompt), 0o600); err != nil {
+			return fmt.Errorf("writing launch prompt: %w", err)
+		}
+	}
+	for i, cmd := range material.PreStart {
+		name := fmt.Sprintf("%03d.sh", i)
+		if err := os.WriteFile(filepath.Join(root, "pre-start", name), []byte("#!/bin/sh\n"+cmd+"\n"), 0o755); err != nil {
+			return fmt.Errorf("writing pre_start[%d]: %w", i, err)
+		}
+	}
+	return nil
 }
 
 func projectedPodWorkDirForControllerPath(workDir, ctrlCity string) string {
@@ -321,8 +369,8 @@ func stageProviderOverlay(srcDir, dstDir string, providers []string, label strin
 	return nil
 }
 
-// waitForInitContainer waits for the init container to be running.
-func waitForInitContainer(ctx context.Context, ops k8sOps, podName string, timeout time.Duration) error {
+// waitForInitContainer waits for the named init container to be running.
+func waitForInitContainer(ctx context.Context, ops k8sOps, podName string, containerName string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		pod, err := ops.getPod(ctx, podName)
@@ -330,8 +378,11 @@ func waitForInitContainer(ctx context.Context, ops k8sOps, podName string, timeo
 			time.Sleep(time.Second)
 			continue
 		}
-		if len(pod.Status.InitContainerStatuses) > 0 {
-			state := pod.Status.InitContainerStatuses[0].State
+		for _, status := range pod.Status.InitContainerStatuses {
+			if status.Name != containerName {
+				continue
+			}
+			state := status.State
 			if state.Running != nil {
 				return nil
 			}
@@ -342,7 +393,7 @@ func waitForInitContainer(ctx context.Context, ops k8sOps, podName string, timeo
 		}
 		time.Sleep(time.Second)
 	}
-	return fmt.Errorf("init container not running in pod %s after %s", podName, timeout)
+	return fmt.Errorf("init container %s not running in pod %s after %s", containerName, podName, timeout)
 }
 
 // copyDirToPod copies a local directory into the pod via tar-based exec.

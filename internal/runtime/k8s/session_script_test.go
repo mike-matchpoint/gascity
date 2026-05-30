@@ -125,11 +125,17 @@ func TestSessionScriptStartRigManifestUsesPodPaths(t *testing.T) {
 	if got := result.containerWorkingDir; got != "/workspace" {
 		t.Fatalf("container workingDir = %q, want stable /workspace entrypoint dir", got)
 	}
-	if len(result.containerArgs) != 1 || !strings.Contains(result.containerArgs[0], "cd /workspace/frontend && tmux new-session") {
-		t.Fatalf("container args do not cd to projected workdir before tmux: %#v", result.containerArgs)
+	if got := result.containerCommand; len(got) != 2 || got[0] != "/bin/sh" || got[1] != "/gc-launch/entrypoint.sh" {
+		t.Fatalf("container command = %#v, want bounded launch script command", got)
+	}
+	if len(result.containerArgs) != 0 {
+		t.Fatalf("container args = %#v, want none", result.containerArgs)
 	}
 	if got := result.manifestMounts["ws"]; got != "/workspace" {
 		t.Fatalf("ws mount = %q, want /workspace", got)
+	}
+	if got := result.manifestMounts["launch"]; got != "/gc-launch" {
+		t.Fatalf("launch mount = %q, want /gc-launch", got)
 	}
 	if got := result.manifestMounts["city"]; got != cityDir {
 		t.Fatalf("city mount = %q, want %q", got, cityDir)
@@ -141,16 +147,43 @@ func TestSessionScriptStartRigManifestUsesPodPaths(t *testing.T) {
 	}
 }
 
+func TestSessionScriptStartDoesNotEmbedLargeLaunchMaterialInPodArgs(t *testing.T) {
+	largeCommand := "codex " + strings.Repeat("--flag ", 2000)
+	largePreStart := "printf %s " + strings.Repeat("x", 20000)
+	result := runSessionScriptStart(t, sessionScriptStartOptions{
+		Command:  largeCommand,
+		PreStart: []string{largePreStart},
+	})
+	if result.err != nil {
+		t.Fatalf("gc-session-k8s start error = %v\noutput:\n%s", result.err, result.output)
+	}
+	argv := strings.Join(append(append([]string{}, result.containerCommand...), result.containerArgs...), "\x00")
+	if len(argv) > 4096 {
+		t.Fatalf("container argv length = %d, want bounded under 4096: command=%#v args=%#v", len(argv), result.containerCommand, result.containerArgs)
+	}
+	for _, forbidden := range []string{largeCommand, largePreStart} {
+		if strings.Contains(argv, forbidden) || strings.Contains(result.callLog, forbidden) {
+			t.Fatalf("large launch material leaked into pod argv or kubectl command log")
+		}
+	}
+	if !strings.Contains(result.callLog, " cp ") || !strings.Contains(result.callLog, " -c launch") {
+		t.Fatalf("launch material was not copied through launch init container:\n%s", result.callLog)
+	}
+}
+
 type sessionScriptStartOptions struct {
 	ProcessEnv map[string]string
 	PayloadEnv map[string]string
 	WorkDir    string
+	Command    string
+	PreStart   []string
 }
 
 type sessionScriptStartResult struct {
 	manifestEnv         map[string]string
 	manifestMounts      map[string]string
 	containerWorkingDir string
+	containerCommand    []string
 	containerArgs       []string
 	shareProcessNS      bool
 	callLog             string
@@ -179,7 +212,7 @@ joined=" $* "
 if [[ "$joined" == *" get pods -l "* ]]; then
   exit 0
 fi
-if [[ "$joined" == *" get pod "*".status.initContainerStatuses[0].state.running"* ]]; then
+if [[ "$joined" == *" get pod "*".status.initContainerStatuses["*".state.running"* ]]; then
   printf 'true'
   exit 0
 fi
@@ -196,6 +229,9 @@ fi
 if [[ "$joined" == *" apply -f - "* ]]; then
   payload=$(cat)
   printf '%%s' "$payload" > "$manifest_out"
+  exit 0
+fi
+if [[ "$joined" == *" cp "* ]]; then
   exit 0
 fi
 if [[ "$joined" == *" wait --for=condition=Ready pod/"* ]]; then
@@ -215,10 +251,17 @@ exit 1
 	if workDir == "" {
 		workDir = filepath.Join(tmpDir, "missing-workdir")
 	}
+	command := opts.Command
+	if command == "" {
+		command = "echo hi"
+	}
 	payload := map[string]any{
-		"command":  "echo hi",
+		"command":  command,
 		"env":      opts.PayloadEnv,
 		"work_dir": workDir,
+	}
+	if opts.PreStart != nil {
+		payload["pre_start"] = opts.PreStart
 	}
 	configJSON, err := json.Marshal(payload)
 	if err != nil {
@@ -236,6 +279,7 @@ exit 1
 	manifestEnv := map[string]string{}
 	manifestMounts := map[string]string{}
 	containerWorkingDir := ""
+	containerCommand := []string{}
 	containerArgs := []string{}
 	shareProcessNS := false
 	manifestBytes, readManifestErr := os.ReadFile(manifestPath)
@@ -245,6 +289,7 @@ exit 1
 				ShareProcessNamespace bool `json:"shareProcessNamespace"`
 				Containers            []struct {
 					WorkingDir string   `json:"workingDir"`
+					Command    []string `json:"command"`
 					Args       []string `json:"args"`
 					Env        []struct {
 						Name  string `json:"name"`
@@ -263,6 +308,7 @@ exit 1
 		shareProcessNS = manifest.Spec.ShareProcessNamespace
 		if len(manifest.Spec.Containers) > 0 {
 			containerWorkingDir = manifest.Spec.Containers[0].WorkingDir
+			containerCommand = manifest.Spec.Containers[0].Command
 			containerArgs = manifest.Spec.Containers[0].Args
 			for _, item := range manifest.Spec.Containers[0].Env {
 				manifestEnv[item.Name] = item.Value
@@ -284,6 +330,7 @@ exit 1
 		manifestEnv:         manifestEnv,
 		manifestMounts:      manifestMounts,
 		containerWorkingDir: containerWorkingDir,
+		containerCommand:    containerCommand,
 		containerArgs:       containerArgs,
 		shareProcessNS:      shareProcessNS,
 		callLog:             string(callLogBytes),

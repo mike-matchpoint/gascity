@@ -275,6 +275,10 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 	}
 
 	ctrlCity := controllerCityPath(cfg.Env)
+	if err := stageLaunchFiles(ctx, p.ops, podName, cfg, p); err != nil {
+		cleanup("launch staging failed")
+		return fmt.Errorf("staging launch files for session %q: %w", name, err)
+	}
 
 	if !p.prebaked && !p.usesPersistentWorkspace() {
 		// Stage files via init container if needed.
