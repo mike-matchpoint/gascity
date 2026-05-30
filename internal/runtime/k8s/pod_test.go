@@ -606,6 +606,54 @@ func TestBuildPodEnv_GitHubTokenEnvSupportsGitAndGHCLI(t *testing.T) {
 	}
 }
 
+func TestBuildPodEnv_ClaudeOAuthTokenEnvUsesOptionalSecret(t *testing.T) {
+	env, err := buildPodEnv(map[string]string{}, "/workspace", podManagedDoltHost, podManagedDoltPort)
+	if err != nil {
+		t.Fatalf("buildPodEnv: %v", err)
+	}
+
+	v, ok := envByName(env, "CLAUDE_CODE_OAUTH_TOKEN")
+	if !ok {
+		t.Fatal("missing CLAUDE_CODE_OAUTH_TOKEN env")
+	}
+	if v.Value != "" {
+		t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN literal value = %q, want secret ref", v.Value)
+	}
+	if v.ValueFrom == nil || v.ValueFrom.SecretKeyRef == nil {
+		t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN does not come from a secret: %#v", v)
+	}
+	ref := v.ValueFrom.SecretKeyRef
+	if ref.Name != "claude-credentials" || ref.Key != "CLAUDE_CODE_OAUTH_TOKEN" {
+		t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN secret ref = %s/%s, want claude-credentials/CLAUDE_CODE_OAUTH_TOKEN", ref.Name, ref.Key)
+	}
+	if ref.Optional == nil || !*ref.Optional {
+		t.Fatal("CLAUDE_CODE_OAUTH_TOKEN secret ref should be optional")
+	}
+}
+
+func TestBuildPodEnv_ClaudeOAuthTokenExplicitEnvTakesPrecedence(t *testing.T) {
+	env, err := buildPodEnv(
+		map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "explicit-token"},
+		"/workspace",
+		podManagedDoltHost,
+		podManagedDoltPort,
+	)
+	if err != nil {
+		t.Fatalf("buildPodEnv: %v", err)
+	}
+
+	v, ok := envByName(env, "CLAUDE_CODE_OAUTH_TOKEN")
+	if !ok {
+		t.Fatal("missing CLAUDE_CODE_OAUTH_TOKEN env")
+	}
+	if v.Value != "explicit-token" {
+		t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN = %q, want explicit-token", v.Value)
+	}
+	if v.ValueFrom != nil {
+		t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN should preserve explicit env instead of secret ref: %#v", v)
+	}
+}
+
 func TestBuildPod_CredentialBootstrapCopiesClaudeRootConfig(t *testing.T) {
 	p := newProviderWithOps(newFakeK8sOps())
 	cfg := runtime.Config{Command: "/bin/bash"}

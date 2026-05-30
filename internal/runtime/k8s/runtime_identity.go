@@ -200,10 +200,7 @@ func (p *Provider) runtimeIdentitySpec(cfg runtime.Config) (runtimeIdentitySpec,
 			{Name: "claude-config", SecretName: claudeSecretName, Optional: true},
 			{Name: "codex-config", SecretName: codexSecretName, Optional: true},
 		},
-		CredentialEnv: []runtimeSecretEnvSpec{
-			{Name: "GITHUB_TOKEN", SecretName: gitSecretName, Key: "token", Optional: true},
-			{Name: "GH_TOKEN", SecretName: gitSecretName, Key: "token", Optional: true},
-		},
+		CredentialEnv:     providerRuntimeCredentialEnv(cfg.Env),
 		ProviderHome:      podProviderHome(cfg.Env),
 		LinuxUsername:     strings.TrimSpace(cfg.Env["LINUX_USERNAME"]),
 		NodeSelector:      cloneStringMap(p.nodeSelector),
@@ -212,6 +209,22 @@ func (p *Provider) runtimeIdentitySpec(cfg runtime.Config) (runtimeIdentitySpec,
 		PriorityClassName: p.priorityClassName,
 		ManagedDoltEnv:    managedDoltEnv,
 	}, nil
+}
+
+func providerRuntimeCredentialEnv(cfgEnv map[string]string) []runtimeSecretEnvSpec {
+	env := []runtimeSecretEnvSpec{
+		{Name: "GITHUB_TOKEN", SecretName: gitSecretName, Key: "token", Optional: true},
+		{Name: "GH_TOKEN", SecretName: gitSecretName, Key: "token", Optional: true},
+	}
+	if strings.TrimSpace(cfgEnv["CLAUDE_CODE_OAUTH_TOKEN"]) == "" {
+		env = append(env, runtimeSecretEnvSpec{
+			Name:       "CLAUDE_CODE_OAUTH_TOKEN",
+			SecretName: claudeSecretName,
+			Key:        "CLAUDE_CODE_OAUTH_TOKEN",
+			Optional:   true,
+		})
+	}
+	return env
 }
 
 func providerRuntimeResources(p *Provider) runtimeResourceSpec {

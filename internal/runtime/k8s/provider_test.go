@@ -1009,6 +1009,47 @@ func TestProviderRuntimeIdentityIncludesSharedProcessNamespace(t *testing.T) {
 	}
 }
 
+func TestProviderRuntimeIdentityIncludesClaudeOAuthSecretEnv(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+	cfg := runtime.Config{Env: map[string]string{"GC_AGENT": "mayor"}}
+
+	identity := mustDesiredProviderRuntimeIdentity(t, p, cfg)
+	var spec runtimeIdentitySpec
+	if err := json.Unmarshal([]byte(identity.Breakdown), &spec); err != nil {
+		t.Fatalf("unmarshal identity breakdown: %v\n%s", err, identity.Breakdown)
+	}
+
+	for _, env := range spec.CredentialEnv {
+		if env.Name == "CLAUDE_CODE_OAUTH_TOKEN" {
+			if env.SecretName != claudeSecretName || env.Key != "CLAUDE_CODE_OAUTH_TOKEN" || !env.Optional {
+				t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN credential env = %#v", env)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing CLAUDE_CODE_OAUTH_TOKEN credential env in %#v", spec.CredentialEnv)
+}
+
+func TestProviderRuntimeIdentityPreservesExplicitClaudeOAuthEnv(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+	cfg := runtime.Config{Env: map[string]string{
+		"GC_AGENT":                "mayor",
+		"CLAUDE_CODE_OAUTH_TOKEN": "explicit-token",
+	}}
+
+	identity := mustDesiredProviderRuntimeIdentity(t, p, cfg)
+	var spec runtimeIdentitySpec
+	if err := json.Unmarshal([]byte(identity.Breakdown), &spec); err != nil {
+		t.Fatalf("unmarshal identity breakdown: %v\n%s", err, identity.Breakdown)
+	}
+
+	for _, env := range spec.CredentialEnv {
+		if env.Name == "CLAUDE_CODE_OAUTH_TOKEN" {
+			t.Fatalf("explicit CLAUDE_CODE_OAUTH_TOKEN should not be represented as secret env: %#v", env)
+		}
+	}
+}
+
 func TestStartDetectsStalePod(t *testing.T) {
 	fake := newFakeK8sOps()
 	p := newProviderWithOps(fake)

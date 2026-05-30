@@ -496,6 +496,9 @@ func buildPodEnvForRoot(cfgEnv map[string]string, podCityRoot, podWorkDir, manag
 	// Inject GITHUB_TOKEN from optional K8s secret for git push in pods.
 	env = append(env, gitTokenEnv("GITHUB_TOKEN"))
 	env = append(env, gitTokenEnv("GH_TOKEN"))
+	if strings.TrimSpace(cfgEnv["CLAUDE_CODE_OAUTH_TOKEN"]) == "" {
+		env = append(env, claudeOAuthTokenEnv())
+	}
 
 	return env, nil
 }
@@ -517,6 +520,19 @@ func gitTokenEnv(name string) corev1.EnvVar {
 			SecretKeyRef: &corev1.SecretKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: gitSecretName},
 				Key:                  "token",
+				Optional:             boolPtr(true),
+			},
+		},
+	}
+}
+
+func claudeOAuthTokenEnv() corev1.EnvVar {
+	return corev1.EnvVar{
+		Name: "CLAUDE_CODE_OAUTH_TOKEN",
+		ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: claudeSecretName},
+				Key:                  "CLAUDE_CODE_OAUTH_TOKEN",
 				Optional:             boolPtr(true),
 			},
 		},
