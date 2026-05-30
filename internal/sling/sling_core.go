@@ -12,6 +12,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	convoycore "github.com/gastownhall/gascity/internal/convoy"
+	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/formula"
 	"github.com/gastownhall/gascity/internal/molecule"
 	"github.com/gastownhall/gascity/internal/routedwork"
@@ -33,6 +34,28 @@ func depsTracef(deps SlingDeps, format string, args ...any) {
 		return
 	}
 	SlingTracef(format, args...)
+}
+
+func slingEventActor(deps SlingDeps) string {
+	if actor := strings.TrimSpace(deps.EventActor); actor != "" {
+		return actor
+	}
+	return "gc sling"
+}
+
+func recordSlingRouteWorkEvent(deps SlingDeps, eventType, subject string, payload events.RouteWorkEventPayload) {
+	if deps.Recorder == nil {
+		return
+	}
+	if payload.StoreRef == "" {
+		payload.StoreRef = strings.TrimSpace(deps.StoreRef)
+	}
+	deps.Recorder.Record(events.Event{
+		Type:    eventType,
+		Actor:   slingEventActor(deps),
+		Subject: subject,
+		Payload: events.RouteWorkPayloadJSON(payload),
+	})
 }
 
 // validateDeps checks that required SlingDeps fields are non-nil.
@@ -61,6 +84,17 @@ func DoSling(opts SlingOpts, deps SlingDeps, querier BeadQuerier) (SlingResult, 
 		return result, preErr
 	}
 	if result.DryRun || result.Idempotent {
+		if result.Idempotent && opts.OnFormula != "" {
+			recordSlingRouteWorkEvent(deps, events.SlingFormulaAttachmentSkipped, result.BeadID, events.RouteWorkEventPayload{
+				BeadID:     result.BeadID,
+				Target:     result.Target,
+				Formula:    result.FormulaName,
+				Method:     result.Method,
+				WispRootID: result.WispRootID,
+				WorkflowID: result.WorkflowID,
+				Idempotent: true,
+			})
+		}
 		return result, nil
 	}
 
@@ -70,7 +104,20 @@ func DoSling(opts SlingOpts, deps SlingDeps, querier BeadQuerier) (SlingResult, 
 	case opts.IsFormula:
 		return slingFormula(opts, deps)
 	case opts.OnFormula != "":
-		return slingOnFormula(opts, deps, querier, beadID, result)
+		out, err := slingOnFormula(opts, deps, querier, beadID, result)
+		if err != nil {
+			recordSlingRouteWorkEvent(deps, events.SlingFormulaAttachmentRejected, beadID, events.RouteWorkEventPayload{
+				BeadID:       beadID,
+				Target:       a.QualifiedName(),
+				Formula:      opts.OnFormula,
+				Method:       "on-formula",
+				WispRootID:   out.WispRootID,
+				WorkflowID:   out.WorkflowID,
+				ErrorCode:    "formula_attachment_rejected",
+				ErrorMessage: err.Error(),
+			})
+		}
+		return out, err
 	case !opts.NoFormula && a.EffectiveDefaultSlingFormula() != "":
 		return slingDefaultFormula(opts, deps, querier, beadID, result)
 	default:
@@ -327,6 +374,15 @@ func stampAttachedFormula(result SlingResult, deps SlingDeps, beadID, formulaNam
 	if err := deps.Store.SetMetadata(beadID, routedwork.AttachedFormulaMetadataKey, formulaName); err != nil {
 		return result, fmt.Errorf("setting %s on %s: %w", routedwork.AttachedFormulaMetadataKey, beadID, err)
 	}
+	recordSlingRouteWorkEvent(deps, events.SlingFormulaAttached, beadID, events.RouteWorkEventPayload{
+		BeadID:     beadID,
+		Target:     result.Target,
+		Formula:    formulaName,
+		Method:     result.Method,
+		WispRootID: result.WispRootID,
+		WorkflowID: result.WorkflowID,
+		Idempotent: result.Idempotent,
+	})
 	return result, nil
 }
 
@@ -489,6 +545,15 @@ func finalize(opts SlingOpts, deps SlingDeps, beadID, method string, result Slin
 	result.BeadID = beadID
 	result.Method = method
 
+	recordSlingRouteWorkEvent(deps, events.SlingRouted, beadID, events.RouteWorkEventPayload{
+		BeadID:     beadID,
+		Target:     a.QualifiedName(),
+		Formula:    result.FormulaName,
+		Method:     method,
+		WispRootID: result.WispRootID,
+		WorkflowID: result.WorkflowID,
+	})
+
 	// Poke controller.
 	if !opts.SkipPoke && deps.Notify != nil {
 		deps.Notify.PokeController(deps.CityPath)
@@ -530,6 +595,13 @@ func doStartGraphWorkflow(rootID, sourceBeadID string, a config.Agent, method st
 			return result, fmt.Errorf("setting workflow_id on %s: %w", sourceBeadID, err)
 		}
 	}
+	recordSlingRouteWorkEvent(deps, events.SlingRouted, result.BeadID, events.RouteWorkEventPayload{
+		BeadID:     result.BeadID,
+		Target:     a.QualifiedName(),
+		Formula:    result.FormulaName,
+		Method:     method,
+		WorkflowID: rootID,
+	})
 	telemetry.RecordSling(context.Background(), a.QualifiedName(), TargetType(&a), method, nil)
 	if deps.Notify != nil {
 		deps.Notify.PokeController(deps.CityPath)
