@@ -115,6 +115,7 @@ func (g *GitRefSource) repoTopAndRelPath(path string) (string, string, bool) {
 	if err != nil {
 		return "", "", false
 	}
+	abs = canonicalGitPath(abs)
 	queryDir := abs
 	if info, statErr := os.Stat(abs); statErr != nil || !info.IsDir() {
 		queryDir = filepath.Dir(abs)
@@ -134,11 +135,23 @@ func (g *GitRefSource) repoTopAndRelPath(path string) (string, string, bool) {
 	if top == "" {
 		return "", "", false
 	}
+	top = filepath.Clean(top)
 	rel, err := filepath.Rel(top, abs)
-	if err != nil || strings.HasPrefix(rel, "..") {
+	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
 		return "", "", false
 	}
 	return top, filepath.ToSlash(rel), true
+}
+
+func canonicalGitPath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+	dir := filepath.Dir(path)
+	if resolvedDir, err := filepath.EvalSymlinks(dir); err == nil {
+		return filepath.Join(filepath.Clean(resolvedDir), filepath.Base(path))
+	}
+	return filepath.Clean(path)
 }
 
 // Stat reports whether a regular blob exists at the configured ref
