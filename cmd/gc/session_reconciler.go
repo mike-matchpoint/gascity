@@ -3309,7 +3309,9 @@ func handleProviderRuntimeDrift(
 
 func providerRuntimeConfigForSession(tp TemplateParams, session beads.Bead) runtime.Config {
 	agentCfg := sessionCoreConfigForHash(tp, session)
-	if gcProvider := sessionProviderFamily(session); gcProvider != "" {
+	if gcProvider := resolvedProviderGCProviderEnv(tp.ResolvedProvider); gcProvider != "" {
+		agentCfg.Env = mergeEnv(agentCfg.Env, map[string]string{"GC_PROVIDER": gcProvider})
+	} else if gcProvider := sessionProviderFamily(session); gcProvider != "" {
 		agentCfg.Env = mergeEnv(agentCfg.Env, map[string]string{"GC_PROVIDER": gcProvider})
 	}
 	return runtime.SyncWorkDirEnv(agentCfg)
