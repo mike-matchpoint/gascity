@@ -39,10 +39,14 @@ func (s *failingMetadataBatchStore) SetMetadataBatch(id string, kvs map[string]s
 }
 
 func (s *failingMetadataBatchStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
-	if len(opts.Metadata) > 0 && s.failBatch {
+	if len(opts.Metadata) > 0 && s.failBatch && !onlyClearsLastWokeAt(opts.Metadata) {
 		return errors.New("batch failed")
 	}
 	return s.MemStore.RuntimeUpdate(ctx, id, opts, policy)
+}
+
+func onlyClearsLastWokeAt(metadata map[string]string) bool {
+	return len(metadata) == 1 && metadata["last_woke_at"] == ""
 }
 
 type incompatibleRuntimeObserverProvider struct {

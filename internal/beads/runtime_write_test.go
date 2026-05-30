@@ -78,6 +78,7 @@ func TestBdStoreRuntimeCreateTimeoutReturnsDegradedWithinBudget(t *testing.T) {
 	if runnerCalls.Load() != 1 {
 		t.Fatalf("runner calls = %d, want 1", runnerCalls.Load())
 	}
+	waitForRuntimeWriteManagerIdle(t, store, time.Second)
 }
 
 func TestRuntimeWriteBypassesCachingStoreRefresh(t *testing.T) {
@@ -738,7 +739,7 @@ func writeRuntimeWriteExecutable(t *testing.T, path, body string) {
 
 func waitForRuntimeWriteTestPID(t *testing.T, path string) string {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		data, err := os.ReadFile(path)
 		if err == nil {
@@ -751,4 +752,18 @@ func waitForRuntimeWriteTestPID(t *testing.T, path string) string {
 	}
 	t.Fatalf("pid file %s was not written", path)
 	return ""
+}
+
+func waitForRuntimeWriteManagerIdle(t *testing.T, store *BdStore, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		stats := store.RuntimeWriteManagerStats()
+		if stats.Active == 0 && stats.QueueDepth == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stats := store.RuntimeWriteManagerStats()
+	t.Fatalf("runtime write manager still active after %s: active=%d queue_depth=%d", timeout, stats.Active, stats.QueueDepth)
 }

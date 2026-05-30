@@ -719,21 +719,22 @@ func TestListRunning_FindsSessions(t *testing.T) {
 }
 
 func TestStartLongSocketPathUsesShortSocketName(t *testing.T) {
-	root, err := os.MkdirTemp("", "gc-acp-sock-")
+	root, err := os.MkdirTemp("/tmp", "gc-acp-sock-")
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	const name = "control-dispatcher"
+	const sunPathLimit = 104
 	longDir := ""
-	for i := 1; i <= 32; i++ {
-		candidate := filepath.Join(root, strings.Repeat("deep-path-", i), "acp")
+	for i := 1; i <= 200; i++ {
+		candidate := filepath.Join(root, strings.Repeat("p", i), "acp")
 		p := NewProviderWithDir(candidate, Config{
 			HandshakeTimeout:  5 * time.Second,
 			NudgeBusyTimeout:  2 * time.Second,
 			OutputBufferLines: 100,
 		})
-		if len(p.legacySockPath(name)) > 108 && len(p.sockPath(name)) < 108 {
+		if len(p.legacySockPath(name)) > sunPathLimit && len(p.sockPath(name)) < sunPathLimit {
 			longDir = candidate
 			break
 		}

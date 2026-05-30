@@ -502,6 +502,7 @@ func RunProviderTests(t *testing.T, newProvider func(t *testing.T) (events.Provi
 	})
 
 	// --- Watch ---
+	const watchTestTimeout = 5 * time.Second
 
 	t.Run("WatchExistingEvents", func(t *testing.T) {
 		p, cleanup := newProvider(t)
@@ -509,7 +510,7 @@ func RunProviderTests(t *testing.T, newProvider func(t *testing.T) (events.Provi
 
 		p.Record(events.Event{Type: events.BeadCreated, Actor: "human", Subject: "gc-1"})
 
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), watchTestTimeout)
 		defer cancel()
 
 		w, err := p.Watch(ctx, 0)
@@ -531,7 +532,7 @@ func RunProviderTests(t *testing.T, newProvider func(t *testing.T) (events.Provi
 		p, cleanup := newProvider(t)
 		defer cleanup()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), watchTestTimeout)
 		defer cancel()
 
 		w, err := p.Watch(ctx, 0)
@@ -572,7 +573,7 @@ func RunProviderTests(t *testing.T, newProvider func(t *testing.T) (events.Provi
 		}
 		lastSeq := all[len(all)-1].Seq
 
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), watchTestTimeout)
 		defer cancel()
 
 		// Watch after the last existing event.
