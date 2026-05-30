@@ -1804,16 +1804,13 @@ func TestCompactScriptAllowsRowCountIncreaseWithStableValueHashes(t *testing.T) 
 	}
 }
 
-func TestCompactScriptQuarantinesSameTableRowGainWithValueHashDriftBeforeFullGC(t *testing.T) {
+func TestCompactScriptDefersSameTableRowGainWithValueHashDriftBeforeFullGC(t *testing.T) {
 	fixture := newCompactScriptFixture(t)
-	out, err := fixture.run(t, "same_table_replacement_with_row_gain", "GC_DOLT_COMPACT_THRESHOLD_COMMITS=500")
-	if err == nil {
-		t.Fatalf("compact succeeded despite same-table row-count gain with value-hash drift:\n%s", out)
-	}
+	out, runErr := fixture.run(t, "same_table_replacement_with_row_gain", "GC_DOLT_COMPACT_THRESHOLD_COMMITS=500")
 	if !strings.Contains(out, "table=beads gained rows during flatten") ||
 		!strings.Contains(out, "value hash changed with row-count increase") ||
-		!strings.Contains(out, "post-flatten INTEGRITY check failed") {
-		t.Fatalf("output missing same-table drift quarantine notices:\n%s", out)
+		!strings.Contains(out, "possible writer race during flatten") {
+		t.Fatalf("output missing same-table gain+drift defer notices:\n%s", out)
 	}
 	data, err := os.ReadFile(fixture.doltLog)
 	if err != nil {
@@ -1823,13 +1820,7 @@ func TestCompactScriptQuarantinesSameTableRowGainWithValueHashDriftBeforeFullGC(
 	if !strings.Contains(log, "DOLT_HASHOF_TABLE('beads')") {
 		t.Fatalf("same-table row-count gain test should probe table value hash:\n%s", log)
 	}
-	if strings.Contains(log, "DOLT_GC") {
-		t.Fatalf("same-table row-count gain with value-hash drift must block full GC:\n%s", log)
-	}
-	marker := filepath.Join(fixture.cityPath, ".gc", "runtime", "packs", "dolt", "compact-quarantine", "beads")
-	if reason := compactMarkerValue(t, marker, "reason"); reason != "post-flatten table value hash changed with row-count increase" {
-		t.Fatalf("quarantine reason should identify gained-table hash drift, got %q", reason)
-	}
+	assertCompactWriterRaceDeferred(t, fixture, out, runErr)
 }
 
 func TestCompactScriptQuarantinesMixedRowGainAndSameCountHashDriftBeforeFullGC(t *testing.T) {
@@ -1892,33 +1883,33 @@ func TestCompactScriptQuarantinesMixedSignalsDespiteWriterRace(t *testing.T) {
 	}
 }
 
-// assertCompactWriterRaceDeferred encodes the shared expectations for a proven
-// writer-race defer: the gain+drift quarantine is downgraded to a skip, so the
-// run exits 0, logs the defer message, writes NO quarantine marker, and does not
-// run DOLT_GC (GC is left for the next run after the writer settles).
+// assertCompactWriterRaceDeferred encodes the shared expectations for a
+// gain+drift defer: the ambiguous quarantine is downgraded to a skip, so the run
+// exits 0, logs the defer message, writes NO quarantine marker, and does not run
+// DOLT_GC (GC is left for the next run after the writer settles).
 func assertCompactWriterRaceDeferred(t *testing.T, fixture compactScriptFixture, out string, err error) {
 	t.Helper()
 	if err != nil {
-		t.Fatalf("writer-race defer must exit 0 (skip, not failure): %v\n%s", err, out)
+		t.Fatalf("gain+drift defer must exit 0 (skip, not failure): %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "writer race detected during flatten") ||
+	if (!strings.Contains(out, "writer race detected during flatten") && !strings.Contains(out, "possible writer race during flatten")) ||
 		!strings.Contains(out, "deferring, will retry next run") {
-		t.Fatalf("output missing writer-race defer message:\n%s", out)
+		t.Fatalf("output missing gain+drift defer message:\n%s", out)
 	}
 	quarantine := filepath.Join(fixture.cityPath, ".gc", "runtime", "packs", "dolt", "compact-quarantine", "beads")
 	if _, statErr := os.Stat(quarantine); !os.IsNotExist(statErr) {
-		t.Fatalf("writer-race defer must NOT write a quarantine marker; stat=%v", statErr)
+		t.Fatalf("gain+drift defer must NOT write a quarantine marker; stat=%v", statErr)
 	}
 	pendingGC := filepath.Join(fixture.cityPath, ".gc", "runtime", "packs", "dolt", "compact-pending-gc", "beads")
 	if reason := compactMarkerValue(t, pendingGC, "reason"); reason != "writer race during flatten deferred full GC" {
-		t.Fatalf("writer-race defer should record pending-GC retry marker, got reason %q", reason)
+		t.Fatalf("gain+drift defer should record pending-GC retry marker, got reason %q", reason)
 	}
 	data, readErr := os.ReadFile(fixture.doltLog)
 	if readErr != nil {
 		t.Fatalf("read dolt log: %v", readErr)
 	}
 	if strings.Contains(string(data), "DOLT_GC") {
-		t.Fatalf("writer-race defer must skip GC this run:\n%s", string(data))
+		t.Fatalf("gain+drift defer must skip GC this run:\n%s", string(data))
 	}
 }
 
@@ -2106,32 +2097,20 @@ func TestCompactScriptWriterRaceGateUsesFlagNotReasonText(t *testing.T) {
 	}
 }
 
-// Control: the same gain+drift signal with a STABLE HEAD (no writer proven) is a
-// genuine anomaly and must still write the blocking quarantine marker and fail.
-// This guards against the writer-race gate weakening real-corruption detection.
-func TestCompactScriptStillQuarantinesGainAndHashDriftWithStableHead(t *testing.T) {
+// Control for the residual probe->reset race: the same gain+drift signal with a
+// stable HEAD is no longer treated as proven corruption because a writer can
+// still land inside the unobservable window. It must defer to pending GC without
+// running full GC and without installing a permanent quarantine marker.
+func TestCompactScriptDefersGainAndHashDriftWithStableHead(t *testing.T) {
 	fixture := newCompactScriptFixture(t)
 	out, err := fixture.run(t, "same_table_replacement_with_row_gain", "GC_DOLT_COMPACT_THRESHOLD_COMMITS=500")
-	if err == nil {
-		t.Fatalf("stable-HEAD gain+drift must remain a blocking failure:\n%s", out)
-	}
 	if strings.Contains(out, "writer race detected") {
-		t.Fatalf("stable HEAD must not be misclassified as a writer race:\n%s", out)
+		t.Fatalf("stable HEAD must not be reported as a proven writer race:\n%s", out)
 	}
-	if !strings.Contains(out, "post-flatten INTEGRITY check failed") {
-		t.Fatalf("stable-HEAD gain+drift should escalate as an integrity failure:\n%s", out)
+	if !strings.Contains(out, "possible writer race during flatten") {
+		t.Fatalf("stable-HEAD gain+drift should report the unobservable race window:\n%s", out)
 	}
-	marker := filepath.Join(fixture.cityPath, ".gc", "runtime", "packs", "dolt", "compact-quarantine", "beads")
-	if reason := compactMarkerValue(t, marker, "reason"); reason != "post-flatten table value hash changed with row-count increase" {
-		t.Fatalf("stable-HEAD gain+drift must quarantine with the gain+drift reason, got %q", reason)
-	}
-	data, readErr := os.ReadFile(fixture.doltLog)
-	if readErr != nil {
-		t.Fatalf("read dolt log: %v", readErr)
-	}
-	if strings.Contains(string(data), "DOLT_GC") {
-		t.Fatalf("stable-HEAD gain+drift must block full GC:\n%s", string(data))
-	}
+	assertCompactWriterRaceDeferred(t, fixture, out, err)
 }
 
 func TestCompactScriptFailsOnRowCountDecreaseBeforeGC(t *testing.T) {
@@ -2246,27 +2225,15 @@ func TestCompactScriptQuarantinesPostFlattenInvalidTableNameBeforeFullGC(t *test
 	}
 }
 
-func TestCompactScriptPreservesRowGainReasonForDatabaseHashDrift(t *testing.T) {
+func TestCompactScriptDefersRowGainDatabaseHashDrift(t *testing.T) {
 	fixture := newCompactScriptFixture(t)
 	out, err := fixture.run(t, "row_count_gain_with_db_hash_drift", "GC_DOLT_COMPACT_THRESHOLD_COMMITS=500")
-	if err == nil {
-		t.Fatalf("compact succeeded despite database value-hash drift after row-count gain:\n%s", out)
-	}
 	if !strings.Contains(out, "gained rows during flatten") ||
-		!strings.Contains(out, "value hash changed with row-count increase") {
-		t.Fatalf("output missing row-count-gain database hash drift reason:\n%s", out)
+		!strings.Contains(out, "database value hash drift with row-count increase") ||
+		!strings.Contains(out, "possible writer race during flatten") {
+		t.Fatalf("output missing row-count-gain database hash defer reason:\n%s", out)
 	}
-	logData, err := os.ReadFile(fixture.doltLog)
-	if err != nil {
-		t.Fatalf("read dolt log: %v", err)
-	}
-	if strings.Contains(string(logData), "DOLT_GC") {
-		t.Fatalf("database hash drift after row-count gain must block full GC:\n%s", logData)
-	}
-	marker := filepath.Join(fixture.cityPath, ".gc", "runtime", "packs", "dolt", "compact-quarantine", "beads")
-	if reason := compactMarkerValue(t, marker, "reason"); reason != "post-flatten value hash changed with row-count increase" {
-		t.Fatalf("quarantine reason should identify DB hash drift after row-count gain, got %q", reason)
-	}
+	assertCompactWriterRaceDeferred(t, fixture, out, err)
 }
 
 func TestCompactScriptPreservesNoGainReasonForDatabaseHashDrift(t *testing.T) {
