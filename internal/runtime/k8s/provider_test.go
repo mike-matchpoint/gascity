@@ -2750,24 +2750,25 @@ func TestStartHonorsCancellationDuringPostStartSettle(t *testing.T) {
 	p := newProviderWithOps(fake)
 	p.postStartSettle = 100 * time.Millisecond
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	hasSessionCalls := 0
 	fake.execFunc = func(_ string, cmd []string) (string, error) {
 		if len(cmd) >= 3 && cmd[0] == "tmux" && cmd[1] == "has-session" {
 			hasSessionCalls++
+			if hasSessionCalls == 1 {
+				cancel()
+			}
 		}
 		return "", nil
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		cancel()
-	}()
-
+	acceptStartupDialogs := false
 	cfg := runtime.Config{
-		Command:      "claude --session-id fresh-key",
-		Env:          map[string]string{"GC_AGENT": "deacon", "GC_CITY": "/workspace"},
-		ProcessNames: []string{"claude"},
+		Command:              "claude --session-id fresh-key",
+		Env:                  map[string]string{"GC_AGENT": "deacon", "GC_CITY": "/workspace"},
+		ProcessNames:         []string{"claude"},
+		AcceptStartupDialogs: &acceptStartupDialogs,
 	}
 
 	started := time.Now()
