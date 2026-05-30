@@ -7481,6 +7481,169 @@ func TestBuildDesiredState_ScaleCheckErrorPreservesDormantAffectedPoolSessionWit
 	}
 }
 
+func TestBuildDesiredState_AssignedInProgressAsleepPoolSessionStaysDesired(t *testing.T) {
+	cityPath := t.TempDir()
+	store := beads.NewMemStore()
+	session, err := store.Create(beads.Bead{
+		Title:  "polecat-1",
+		Type:   sessionBeadType,
+		Status: "open",
+		Labels: []string{sessionBeadLabel, "template:polecat", "agent:polecat-1"},
+		Metadata: map[string]string{
+			"session_name":         "polecat-rft-session-deadbeef",
+			"template":             "polecat",
+			"agent_name":           "polecat-1",
+			"alias":                "polecat-1",
+			"pool_slot":            "1",
+			poolManagedMetadataKey: boolMetadata(true),
+			"state":                "asleep",
+			"sleep_reason":         "runtime-missing",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	work, err := store.Create(beads.Bead{
+		Title:    "Single pooled retry step",
+		Type:     "task",
+		Assignee: "polecat-rft-session-deadbeef",
+		Metadata: map[string]string{
+			"gc.routed_to":           "polecat",
+			"gc.execution_routed_to": "polecat",
+			"gc.step_ref":            "mol-retry-recovery-smoke.review.attempt.2",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(work.ID, beads.UpdateOpts{Status: strPtr("in_progress")}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "review-formula-test"},
+		Session:   config.SessionConfig{Provider: "subprocess"},
+		Agents: []config.Agent{{
+			Name:              "polecat",
+			StartCommand:      "true",
+			MinActiveSessions: intPtr(0),
+			MaxActiveSessions: intPtr(3),
+			ScaleCheck:        "printf 0",
+		}},
+	}
+
+	var stderr strings.Builder
+	result := buildDesiredState("review-formula-test", cityPath, time.Now().UTC(), cfg, runtime.NewFake(), store, &stderr)
+
+	if len(result.AssignedWorkBeads) != 1 {
+		t.Fatalf("AssignedWorkBeads len = %d, want 1; stderr=%s", len(result.AssignedWorkBeads), stderr.String())
+	}
+	tp, ok := result.State["polecat-rft-session-deadbeef"]
+	if !ok {
+		t.Fatalf("assigned asleep pool session missing from desired state: keys=%v stderr=%s", mapKeys(result.State), stderr.String())
+	}
+	if tp.TemplateName != "polecat" {
+		t.Fatalf("TemplateName = %q, want polecat", tp.TemplateName)
+	}
+	poolWorkBeads := filterAssignedWorkBeadsForPoolDemand(cfg, cityPath, []beads.Bead{session}, result.AssignedWorkBeads, result.AssignedWorkStoreRefs)
+	poolStates := ComputePoolDesiredStates(cfg, poolWorkBeads, []beads.Bead{session}, result.ScaleCheckCounts)
+	if len(poolStates) != 1 || len(poolStates[0].Requests) != 1 {
+		t.Fatalf("pool states = %#v, want one resume request", poolStates)
+	}
+	req := poolStates[0].Requests[0]
+	if req.Tier != "resume" || req.SessionBeadID != session.ID {
+		t.Fatalf("pool request = %+v, want resume for %s", req, session.ID)
+	}
+}
+
+type controllerDemandIndexedStore struct {
+	beads.Store
+}
+
+func (s *controllerDemandIndexedStore) ListIndexed(_ context.Context, query beads.ListQuery) (beads.IndexedListResult, error) {
+	rows, err := s.List(query)
+	return beads.IndexedListResult{
+		Beads:              rows,
+		DependencyCoverage: true,
+		LabelsCoverage:     true,
+	}, err
+}
+
+func TestBuildDesiredState_AssignedInProgressPoolDemandBypassesStaleActiveCache(t *testing.T) {
+	cityPath := t.TempDir()
+	backing := &controllerDemandIndexedStore{Store: beads.NewMemStore()}
+	session, err := backing.Create(beads.Bead{
+		Title:  "polecat-1",
+		Type:   sessionBeadType,
+		Status: "open",
+		Labels: []string{sessionBeadLabel, "template:polecat", "agent:polecat-1"},
+		Metadata: map[string]string{
+			"session_name":         "polecat-rft-session-deadbeef",
+			"template":             "polecat",
+			"agent_name":           "polecat-1",
+			"alias":                "polecat-1",
+			"pool_slot":            "1",
+			poolManagedMetadataKey: boolMetadata(true),
+			"state":                "asleep",
+			"sleep_reason":         "runtime-missing",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := beads.NewCachingStoreForTest(backing, nil)
+	if err := cache.PrimeActive(); err != nil {
+		t.Fatalf("PrimeActive: %v", err)
+	}
+	work, err := backing.Create(beads.Bead{
+		Title:    "Single pooled retry step",
+		Type:     "task",
+		Assignee: "polecat-rft-session-deadbeef",
+		Metadata: map[string]string{
+			"gc.routed_to":           "polecat",
+			"gc.execution_routed_to": "polecat",
+			"gc.step_ref":            "mol-retry-recovery-smoke.review.attempt.2",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backing.Update(work.ID, beads.UpdateOpts{Status: strPtr("in_progress")}); err != nil {
+		t.Fatal(err)
+	}
+	if rows, err := cache.RuntimeList(context.Background(), beads.ListQuery{Status: "in_progress", Live: true}, beads.RuntimeReadPolicy(beads.ReadClassHotAuthoritative, "test.controller-demand")); err != nil || len(rows) != 1 {
+		t.Fatalf("precondition RuntimeList(in_progress, live) rows=%#v err=%v, want one fresh backing row", rows, err)
+	}
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "review-formula-test"},
+		Session:   config.SessionConfig{Provider: "subprocess"},
+		Agents: []config.Agent{{
+			Name:              "polecat",
+			StartCommand:      "true",
+			MinActiveSessions: intPtr(0),
+			MaxActiveSessions: intPtr(3),
+			ScaleCheck:        "printf 0",
+		}},
+	}
+
+	var stderr strings.Builder
+	result := buildDesiredState("review-formula-test", cityPath, time.Now().UTC(), cfg, runtime.NewFake(), cache, &stderr)
+
+	if len(result.AssignedWorkBeads) != 1 {
+		t.Fatalf("AssignedWorkBeads len = %d, want 1 from live indexed demand read despite stale cache; stderr=%s", len(result.AssignedWorkBeads), stderr.String())
+	}
+	if result.AssignedWorkBeads[0].Assignee != "polecat-rft-session-deadbeef" {
+		t.Fatalf("AssignedWorkBeads[0].Assignee = %q, want stale-cache-missing session assignee", result.AssignedWorkBeads[0].Assignee)
+	}
+	if _, ok := result.State["polecat-rft-session-deadbeef"]; !ok {
+		t.Fatalf("assigned asleep pool session missing from desired state: keys=%v stderr=%s", mapKeys(result.State), stderr.String())
+	}
+	poolWorkBeads := filterAssignedWorkBeadsForPoolDemand(cfg, cityPath, []beads.Bead{session}, result.AssignedWorkBeads, result.AssignedWorkStoreRefs)
+	poolStates := ComputePoolDesiredStates(cfg, poolWorkBeads, []beads.Bead{session}, result.ScaleCheckCounts)
+	if len(poolStates) != 1 || len(poolStates[0].Requests) != 1 || poolStates[0].Requests[0].SessionBeadID != session.ID {
+		t.Fatalf("pool states = %#v, want one resume request for %s", poolStates, session.ID)
+	}
+}
+
 func TestBuildDesiredState_NamedScaleCheckPartialDoesNotRetainGenericPoolSession(t *testing.T) {
 	cityPath := t.TempDir()
 	store := &controllerDemandPartialStore{MemStore: beads.NewMemStore()}

@@ -1624,9 +1624,43 @@ func sortedStringSet(values map[string]struct{}) []string {
 }
 
 func listForControllerDemand(store beads.Store, query beads.ListQuery) ([]beads.Bead, error) {
+	if query.Status == "in_progress" {
+		// In-progress assignments are ownership, not just demand hints. A
+		// stale active cache can miss a worker claim made by an agent-side bd
+		// subprocess, while later close gates see the live assignment and keep
+		// the dead pool slot open. Use the hot indexed path, not the hydrated
+		// CLI fallback, but bypass the cache for this recovery-critical scan.
+		query.Live = true
+		rows, err := beads.RuntimeList(context.Background(), store, query,
+			beads.RuntimeReadPolicy(beads.ReadClassHotAuthoritative, "controller.demand.list"))
+		if err == nil || len(rows) > 0 || !cacheUnavailableForControllerDemand(err) {
+			return rows, err
+		}
+		// Unit-test and in-memory stores can wrap a cache without an indexed
+		// backing reader. Preserve their existing hot cached behavior when no
+		// live indexed route exists at all; do not use this fallback for indexed
+		// timeouts or incomplete coverage.
+		query.Live = false
+		if cached, ok := store.(interface {
+			CachedList(beads.ListQuery) ([]beads.Bead, bool)
+		}); ok {
+			if rows, ok := cached.CachedList(query); ok {
+				return rows, nil
+			}
+		}
+		return rows, err
+	}
 	query.Live = false
 	return beads.RuntimeList(context.Background(), store, query,
 		beads.RuntimeReadPolicy(beads.ReadClassHotDegradedOK, "controller.demand.list"))
+}
+
+func cacheUnavailableForControllerDemand(err error) bool {
+	var degraded *beads.DegradedReadError
+	return errors.As(err, &degraded) &&
+		degraded.Route == "cache" &&
+		degraded.Coverage == "unavailable" &&
+		errors.Is(degraded.Err, beads.ErrIndexedListUnsupported)
 }
 
 func readyForControllerDemand(store beads.Store) ([]beads.Bead, error) {

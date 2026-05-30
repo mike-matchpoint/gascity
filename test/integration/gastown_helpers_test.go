@@ -199,27 +199,8 @@ func sessionAssigneeForTemplate(t *testing.T, cityDir, template string) string {
 	for time.Now().Before(deadline) {
 		out, err := gc(cityDir, "session", "list", "--json", "--template", template)
 		if err == nil {
-			var sessionList struct {
-				Sessions []struct {
-					Template    string `json:"template"`
-					Closed      bool   `json:"closed"`
-					State       string `json:"state"`
-					SessionName string `json:"session_name"`
-				} `json:"sessions"`
-			}
-			if jsonErr := json.Unmarshal([]byte(strings.TrimSpace(out)), &sessionList); jsonErr == nil {
-				for _, session := range sessionList.Sessions {
-					if session.Closed || strings.TrimSpace(session.Template) != template {
-						continue
-					}
-					state := strings.TrimSpace(strings.ToLower(session.State))
-					if state != "active" && state != "awake" {
-						continue
-					}
-					if assignee := strings.TrimSpace(session.SessionName); assignee != "" {
-						return assignee
-					}
-				}
+			if assignee := sessionAssigneeFromListJSON(out, template); assignee != "" {
+				return assignee
 			}
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -234,6 +215,47 @@ func sessionAssigneeForTemplate(t *testing.T, cityDir, template string) string {
 		}
 	}
 	t.Fatalf("timed out waiting for session assignee for template %q\nsessions:\n%s\nbeads:\n%s\nsupervisor log tail:\n%s", template, sessionList, out, supervisorLog)
+	return ""
+}
+
+func sessionAssigneeFromListJSON(out, template string) string {
+	var sessionList struct {
+		Sessions []struct {
+			Template    string `json:"template"`
+			TemplateAPI string `json:"Template"`
+			Closed      bool   `json:"closed"`
+			ClosedAPI   bool   `json:"Closed"`
+			State       string `json:"state"`
+			StateAPI    string `json:"State"`
+			SessionName string `json:"session_name"`
+			SessionAPI  string `json:"SessionName"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &sessionList); err != nil {
+		return ""
+	}
+	for _, session := range sessionList.Sessions {
+		sessionTemplate := firstNonEmptyTestValue(session.Template, session.TemplateAPI)
+		if session.Closed || session.ClosedAPI || strings.TrimSpace(sessionTemplate) != template {
+			continue
+		}
+		state := strings.TrimSpace(strings.ToLower(firstNonEmptyTestValue(session.State, session.StateAPI)))
+		if state != "active" && state != "awake" {
+			continue
+		}
+		if assignee := strings.TrimSpace(firstNonEmptyTestValue(session.SessionName, session.SessionAPI)); assignee != "" {
+			return assignee
+		}
+	}
+	return ""
+}
+
+func firstNonEmptyTestValue(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
 	return ""
 }
 
