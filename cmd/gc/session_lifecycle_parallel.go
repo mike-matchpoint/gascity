@@ -893,7 +893,9 @@ func buildPreparedStartWithRuntimeProvider(
 		instanceToken,
 	)
 	agentCfg.Env = mergeEnv(agentCfg.Env, runtimeEnv)
-	if gcProvider := sessionProviderFamily(*session); gcProvider != "" {
+	if gcProvider := resolvedProviderGCProviderEnv(tp.ResolvedProvider); gcProvider != "" {
+		agentCfg.Env = mergeEnv(agentCfg.Env, map[string]string{"GC_PROVIDER": gcProvider})
+	} else if gcProvider := sessionProviderFamily(*session); gcProvider != "" {
 		agentCfg.Env = mergeEnv(agentCfg.Env, map[string]string{"GC_PROVIDER": gcProvider})
 	}
 	agentCfg = runtime.SyncWorkDirEnv(agentCfg)
@@ -1823,6 +1825,17 @@ func commitStartResultTraced(
 		ClearPendingCreateClaim:  shouldRollbackPendingCreate(session),
 		Now:                      clk.Now(),
 	})
+	if tp.Command != "" {
+		metadata["command"] = tp.Command
+	}
+	if tp.ResolvedProvider != nil {
+		for key, value := range resolvedProviderSessionMetadataPatch(tp.ResolvedProvider) {
+			metadata[key] = value
+		}
+		metadata["resume_flag"] = tp.ResolvedProvider.ResumeFlag
+		metadata["resume_style"] = tp.ResolvedProvider.ResumeStyle
+		metadata["resume_command"] = tp.ResolvedProvider.ResumeCommand
+	}
 	storedMCPSnapshot, err := sessionpkg.EncodeMCPServersSnapshot(result.prepared.cfg.MCPServers)
 	if err != nil {
 		clearPendingStartInFlightLease(session, store, stderr)

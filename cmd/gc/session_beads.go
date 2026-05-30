@@ -187,15 +187,10 @@ func stampResolvedProviderSessionMetadata(meta map[string]string, resolved *conf
 	if meta == nil || resolved == nil {
 		return
 	}
-	name := strings.TrimSpace(resolved.Name)
-	if name != "" {
-		meta["provider"] = name
-	}
-	if family := resolvedProviderFamilyMetadata(resolved); family != "" {
-		meta["provider_kind"] = family
-	}
-	if ancestor := strings.TrimSpace(resolved.BuiltinAncestor); ancestor != "" && ancestor != name {
-		meta["builtin_ancestor"] = ancestor
+	for key, value := range resolvedProviderSessionMetadataPatch(resolved) {
+		if value != "" {
+			meta[key] = value
+		}
 	}
 }
 
@@ -203,16 +198,39 @@ func queueMissingResolvedProviderSessionMetadata(existing map[string]string, que
 	if queue == nil || resolved == nil {
 		return
 	}
+	for key, value := range resolvedProviderSessionMetadataPatch(resolved) {
+		if existing[key] == "" && value != "" {
+			queue(key, value)
+		}
+	}
+}
+
+func resolvedProviderSessionMetadataPatch(resolved *config.ResolvedProvider) map[string]string {
+	patch := map[string]string{}
+	if resolved == nil {
+		return patch
+	}
 	name := strings.TrimSpace(resolved.Name)
-	if existing["provider"] == "" && name != "" {
-		queue("provider", name)
+	patch["provider"] = name
+	patch["provider_kind"] = ""
+	if family := resolvedProviderFamilyMetadata(resolved); family != "" {
+		patch["provider_kind"] = family
 	}
-	if family := resolvedProviderFamilyMetadata(resolved); existing["provider_kind"] == "" && family != "" {
-		queue("provider_kind", family)
+	patch["builtin_ancestor"] = ""
+	if ancestor := strings.TrimSpace(resolved.BuiltinAncestor); ancestor != "" && ancestor != name {
+		patch["builtin_ancestor"] = ancestor
 	}
-	if ancestor := strings.TrimSpace(resolved.BuiltinAncestor); existing["builtin_ancestor"] == "" && ancestor != "" && ancestor != name {
-		queue("builtin_ancestor", ancestor)
+	return patch
+}
+
+func resolvedProviderGCProviderEnv(resolved *config.ResolvedProvider) string {
+	if resolved == nil {
+		return ""
 	}
+	return session.ProviderFamilyFromMetadata(
+		resolvedProviderSessionMetadataPatch(resolved),
+		resolvedProviderLaunchFamily(resolved),
+	)
 }
 
 func canRebindConfiguredNamedSession(b beads.Bead, identity, sessionName, backingTemplate string) bool {

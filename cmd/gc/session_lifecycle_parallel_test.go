@@ -6309,6 +6309,70 @@ func TestPrepareStartCandidateUsesBuiltinAncestorForGCProviderEnv(t *testing.T) 
 	}
 }
 
+func TestPrepareStartCandidateUsesResolvedProviderForGCProviderEnvWhenMetadataStale(t *testing.T) {
+	store := beads.NewMemStore()
+	bead, err := store.Create(beads.Bead{
+		Title: "mayor",
+		Type:  "task",
+		Metadata: map[string]string{
+			"session_name":       "s-gc-test",
+			"template":           "mayor",
+			"session_origin":     "manual",
+			"provider":           "claude",
+			"provider_kind":      "claude",
+			"generation":         "1",
+			"continuation_epoch": "1",
+			"instance_token":     "tok",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create bead: %v", err)
+	}
+	tp := TemplateParams{
+		Command:          "codex --model gpt-5.5",
+		WorkDir:          t.TempDir(),
+		SessionName:      "s-gc-test",
+		Alias:            "mayor",
+		ResolvedProvider: &config.ResolvedProvider{Name: "codex"},
+		TemplateName:     "mayor",
+		InstanceName:     "mayor",
+	}
+
+	prepared, err := prepareStartCandidate(
+		startCandidate{
+			session: &bead,
+			tp:      tp,
+		},
+		&config.City{},
+		store,
+		clock.Real{},
+	)
+	if err != nil {
+		t.Fatalf("prepareStartCandidate: %v", err)
+	}
+	if got := prepared.cfg.Env["GC_PROVIDER"]; got != "codex" {
+		t.Fatalf("GC_PROVIDER = %q, want codex", got)
+	}
+}
+
+func TestProviderRuntimeConfigForSessionUsesResolvedProviderWhenMetadataStale(t *testing.T) {
+	session := beads.Bead{
+		Metadata: map[string]string{
+			"provider":      "claude",
+			"provider_kind": "claude",
+		},
+	}
+	tp := TemplateParams{
+		Command:          "codex --model gpt-5.5",
+		ResolvedProvider: &config.ResolvedProvider{Name: "codex"},
+	}
+
+	cfg := providerRuntimeConfigForSession(tp, session)
+	if got := cfg.Env["GC_PROVIDER"]; got != "codex" {
+		t.Fatalf("GC_PROVIDER = %q, want codex", got)
+	}
+}
+
 func TestPrepareStartCandidate_EmptyPoolBeadAliasScrubsStampedTemplateIdentity(t *testing.T) {
 	store := beads.NewMemStore()
 	bead, err := store.Create(beads.Bead{
@@ -6558,6 +6622,75 @@ func TestCommitStartResult_TransitionsCreatingToActive(t *testing.T) {
 	}
 	if got.Metadata["opt_permission_mode"] != "plan" {
 		t.Fatalf("opt_permission_mode = %q, want plan", got.Metadata["opt_permission_mode"])
+	}
+}
+
+func TestCommitStartResultRefreshesProviderMetadataAfterProviderChange(t *testing.T) {
+	store := beads.NewMemStore()
+	session, err := store.Create(beads.Bead{
+		Title:  "worker-session",
+		Type:   sessionBeadType,
+		Labels: []string{sessionBeadLabel},
+		Metadata: map[string]string{
+			"template":         "worker",
+			"session_name":     "worker-1",
+			"state":            "creating",
+			"provider":         "claude",
+			"provider_kind":    "claude",
+			"builtin_ancestor": "claude",
+			"command":          "claude --model opus",
+			"resume_flag":      "--resume",
+			"resume_style":     "flag",
+			"resume_command":   "claude --resume {{.SessionKey}}",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tp := TemplateParams{
+		Command:      "codex --model gpt-5.5",
+		TemplateName: "worker",
+		SessionName:  "worker-1",
+		ResolvedProvider: &config.ResolvedProvider{
+			Name:          "codex",
+			ResumeCommand: "codex resume {{.SessionKey}}",
+			ResumeStyle:   "subcommand",
+		},
+	}
+	result := startResult{
+		prepared: preparedStart{
+			candidate: startCandidate{
+				session: &session,
+				tp:      tp,
+			},
+			coreHash: "core-abc",
+			liveHash: "live-xyz",
+		},
+		outcome:  "success",
+		started:  time.Unix(100, 0),
+		finished: time.Unix(101, 0),
+	}
+
+	if !commitStartResult(result, store, &clock.Fake{Time: time.Unix(102, 0)}, events.Discard, 0, ioDiscard{}, ioDiscard{}) {
+		t.Fatal("commitStartResult returned false for successful start")
+	}
+	got, err := store.Get(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checks := map[string]string{
+		"provider":         "codex",
+		"provider_kind":    "",
+		"builtin_ancestor": "",
+		"command":          "codex --model gpt-5.5",
+		"resume_flag":      "",
+		"resume_style":     "subcommand",
+		"resume_command":   "codex resume {{.SessionKey}}",
+	}
+	for key, want := range checks {
+		if got.Metadata[key] != want {
+			t.Fatalf("metadata[%q] = %q, want %q", key, got.Metadata[key], want)
+		}
 	}
 }
 
