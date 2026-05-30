@@ -17,6 +17,8 @@ const (
 	PoolDemandMetadataKey = "gc.pool_demand"
 	// PoolDemandOrderValue is the durable formula-order demand sentinel value.
 	PoolDemandOrderValue = "order"
+	// AttachedFormulaMetadataKey records the formula attached to source work.
+	AttachedFormulaMetadataKey = "gc.attached_formula"
 )
 
 // DemandKind identifies the demand contract a route is expected to satisfy.
