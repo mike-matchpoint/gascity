@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -82,7 +83,12 @@ func loadSessionBeadSnapshot(store beads.Store) (*sessionBeadSnapshot, error) {
 	// calls this several times per tick and closed history grows
 	// without bound. Callers that need a closed record must fetch that
 	// one ID explicitly.
-	sessions, err := sessionpkg.ListAllSessionBeads(store, beads.ListQuery{})
+	sessions, err := sessionpkg.ListAllSessionBeadsRuntime(
+		context.Background(),
+		store,
+		beads.ListQuery{},
+		sessionRuntimeReadPolicy("session.snapshot.load"),
+	)
 	if err != nil {
 		return nil, err
 	}

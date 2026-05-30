@@ -127,6 +127,16 @@ func (m *MemStore) RuntimeCreate(ctx context.Context, b Bead, policy WritePolicy
 	return created, err
 }
 
+// RuntimeGet retrieves a bead under a runtime read policy.
+func (m *MemStore) RuntimeGet(ctx context.Context, id string, policy ReadPolicy) (Bead, error) {
+	select {
+	case <-ctxDone(ctx):
+		return Bead{}, degradedRead(normalizeReadPolicy(policy), "get", "memory", "", ctx.Err())
+	default:
+	}
+	return m.Get(id)
+}
+
 // RuntimeUpdate updates a bead under a runtime write policy.
 func (m *MemStore) RuntimeUpdate(ctx context.Context, id string, opts UpdateOpts, policy WritePolicy) error {
 	select {

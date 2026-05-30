@@ -124,6 +124,10 @@ type runtimeLister interface {
 	RuntimeList(context.Context, ListQuery, ReadPolicy) ([]Bead, error)
 }
 
+type runtimeGetter interface {
+	RuntimeGet(context.Context, string, ReadPolicy) (Bead, error)
+}
+
 type runtimeReadyer interface {
 	RuntimeReady(context.Context, ReadyQuery, ReadPolicy) ([]Bead, error)
 }
@@ -148,6 +152,24 @@ func RuntimeList(ctx context.Context, store Store, query ListQuery, policy ReadP
 		return runtimeStore.RuntimeList(ctx, query, policy)
 	}
 	return store.List(query)
+}
+
+// RuntimeGet executes an ID lookup under policy. Foreground policies preserve
+// existing Store.Get semantics. Hot policies use cache/index/runtime-aware
+// routes and return DegradedReadError instead of falling through to an
+// unbounded foreground Get.
+func RuntimeGet(ctx context.Context, store Store, id string, policy ReadPolicy) (Bead, error) {
+	if store == nil {
+		return Bead{}, degradedRead(policy, "get", "none", "", errors.New("nil bead store"))
+	}
+	policy = normalizeReadPolicy(policy)
+	if policy.AllowFallback {
+		return store.Get(id)
+	}
+	if runtimeStore, ok := store.(runtimeGetter); ok {
+		return runtimeStore.RuntimeGet(ctx, id, policy)
+	}
+	return Bead{}, degradedRead(policy, "get", "runtime", "", ErrIndexedListUnsupported)
 }
 
 // RuntimeReady executes a ready-work lookup under policy. Hot policies use the

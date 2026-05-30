@@ -688,7 +688,7 @@ func prepareStartCandidateForCity(
 	session := candidate.session
 	if session != nil && strings.TrimSpace(session.ID) != "" && store != nil {
 		if err := sessionpkg.WithSessionMutationLock(session.ID, func() error {
-			current, err := store.Get(session.ID)
+			current, err := runtimeGetSessionBead(context.Background(), store, session.ID, "session.prepare-start-refresh")
 			if err != nil {
 				return err
 			}
@@ -805,7 +805,7 @@ func buildPreparedStartWithRuntimeProvider(
 			return nil, fmt.Errorf("generating session key: %w", err)
 		}
 		if store != nil && session.ID != "" {
-			if err := store.SetMetadata(session.ID, "session_key", sessionKey); err != nil {
+			if err := runtimeSetSessionMetadata(context.Background(), store, session.ID, "session_key", sessionKey, "session.prepare-start-key"); err != nil {
 				return nil, fmt.Errorf("storing session key: %w", err)
 			}
 		}
@@ -876,7 +876,7 @@ func buildPreparedStartWithRuntimeProvider(
 	instanceToken := session.Metadata["instance_token"]
 	if instanceToken == "" {
 		instanceToken = sessionpkg.NewInstanceToken()
-		if err := store.SetMetadata(session.ID, "instance_token", instanceToken); err != nil {
+		if err := runtimeSetSessionMetadata(context.Background(), store, session.ID, "instance_token", instanceToken, "session.prepare-start-instance-token"); err != nil {
 			return nil, err
 		}
 		session.Metadata["instance_token"] = instanceToken
@@ -1311,7 +1311,7 @@ func refreshAsyncStartResult(result startResult, store beads.Store, stderr io.Wr
 	if store == nil || session == nil || strings.TrimSpace(session.ID) == "" {
 		return result, true, false, false
 	}
-	current, err := store.Get(session.ID)
+	current, err := runtimeGetSessionBead(context.Background(), store, session.ID, "session.async-start-refresh")
 	if err != nil {
 		fmt.Fprintf(stderr, "session reconciler: refreshing async start %s: %v\n", result.prepared.candidate.name(), err) //nolint:errcheck
 		return result, false, false, true
@@ -1510,7 +1510,7 @@ func commitStartedSessionMetadata(session *beads.Bead, store beads.Store, metada
 	}
 	var committed bool
 	err := sessionpkg.WithSessionMutationLock(session.ID, func() error {
-		current, err := store.Get(session.ID)
+		current, err := runtimeGetSessionBead(context.Background(), store, session.ID, "session.started-commit-refresh")
 		if err != nil {
 			return err
 		}
@@ -1524,7 +1524,7 @@ func commitStartedSessionMetadata(session *beads.Bead, store beads.Store, metada
 			}
 			open := "open"
 			repair := repairMetadataForStartedSession(metadata)
-			if err := store.Update(session.ID, beads.UpdateOpts{Status: &open, Metadata: repair}); err != nil {
+			if err := runtimeUpdateSessionBead(context.Background(), store, session.ID, beads.UpdateOpts{Status: &open, Metadata: repair}, "session.started-closed-repair"); err != nil {
 				return err
 			}
 			current.Status = "open"
@@ -1541,7 +1541,7 @@ func commitStartedSessionMetadata(session *beads.Bead, store beads.Store, metada
 		if !asyncStartIdentityMatches(*session, current) {
 			return nil
 		}
-		if err := store.SetMetadataBatch(session.ID, metadata); err != nil {
+		if err := runtimeSetSessionMetadataBatch(context.Background(), store, session.ID, metadata, "session.started-metadata"); err != nil {
 			return err
 		}
 		if current.Metadata == nil {
@@ -1575,7 +1575,7 @@ func repairClosedFailedCreateRuntimeBinding(
 	}
 	repaired := false
 	err := sessionpkg.WithSessionMutationLock(bead.ID, func() error {
-		current, err := store.Get(bead.ID)
+		current, err := runtimeGetSessionBead(context.Background(), store, bead.ID, "session.failed-create-runtime-repair-refresh")
 		if err != nil {
 			return err
 		}
@@ -1608,7 +1608,7 @@ func repairClosedFailedCreateRuntimeBinding(
 		}
 		metadata := repairMetadataForStartedSession(sessionpkg.ConfirmStartedPatch(now.UTC()))
 		open := "open"
-		if err := store.Update(current.ID, beads.UpdateOpts{Status: &open, Metadata: metadata}); err != nil {
+		if err := runtimeUpdateSessionBead(context.Background(), store, current.ID, beads.UpdateOpts{Status: &open, Metadata: metadata}, "session.failed-create-runtime-repair"); err != nil {
 			return err
 		}
 		repaired = true
@@ -1782,7 +1782,7 @@ func commitStartResultTraced(
 			logLifecycleOutcome(stderr, "start", wave, name, tp.TemplateName, result.outcome, result.started, result.finished, result.err, result.phases)
 			return false
 		}
-		if err := store.SetMetadata(session.ID, "last_woke_at", ""); err != nil {
+		if err := runtimeSetSessionMetadata(context.Background(), store, session.ID, "last_woke_at", "", "session.start-failure-clear-last-woke"); err != nil {
 			fmt.Fprintf(stderr, "session reconciler: clearing last_woke_at for %s: %v\n", name, err) //nolint:errcheck
 		} else {
 			session.Metadata["last_woke_at"] = ""
@@ -2042,7 +2042,7 @@ func rollbackPendingCreate(session *beads.Bead, store beads.Store, now time.Time
 		return
 	}
 	if err := sessionpkg.WithSessionMutationLock(session.ID, func() error {
-		current, err := store.Get(session.ID)
+		current, err := runtimeGetSessionBead(context.Background(), store, session.ID, "session.rollback-pending-create")
 		if err != nil {
 			return err
 		}
@@ -2071,7 +2071,7 @@ func rollbackPendingCreateClearingClaim(session *beads.Bead, store beads.Store, 
 		return
 	}
 	if err := sessionpkg.WithSessionMutationLock(session.ID, func() error {
-		current, err := store.Get(session.ID)
+		current, err := runtimeGetSessionBead(context.Background(), store, session.ID, "session.rollback-pending-create-claim")
 		if err != nil {
 			return err
 		}
@@ -2792,7 +2792,7 @@ func markStopTargetContinuation(store beads.Store, target stopTarget, reason str
 	if store == nil || strings.TrimSpace(target.sessionID) == "" {
 		return
 	}
-	session, err := store.Get(target.sessionID)
+	session, err := runtimeGetSessionBead(context.Background(), store, target.sessionID, "session.stop-continuation-mark")
 	if err != nil {
 		return
 	}
@@ -2804,7 +2804,7 @@ func stopTargetHasVerifiedBoundary(store beads.Store, target stopTarget) bool {
 	if store == nil || strings.TrimSpace(target.sessionID) == "" {
 		return false
 	}
-	session, err := store.Get(target.sessionID)
+	session, err := runtimeGetSessionBead(context.Background(), store, target.sessionID, "session.stop-boundary-check")
 	if err != nil {
 		return false
 	}
@@ -2815,7 +2815,7 @@ func cityStopSessionMarked(store beads.Store, sessionID string) bool {
 	if store == nil || strings.TrimSpace(sessionID) == "" {
 		return false
 	}
-	b, err := store.Get(sessionID)
+	b, err := runtimeGetSessionBead(context.Background(), store, sessionID, "session.city-stop-check")
 	if err != nil {
 		return false
 	}
@@ -2827,7 +2827,7 @@ func markCityStopSessionAsAsleep(store beads.Store, sessionID string, stderr io.
 		return
 	}
 	batch := sessionpkg.SleepPatch(time.Now().UTC(), sleepReasonCityStop)
-	if err := store.SetMetadataBatch(sessionID, batch); err != nil && stderr != nil {
+	if err := runtimeSetSessionMetadataBatch(context.Background(), store, sessionID, batch, "session.city-stop-asleep"); err != nil && stderr != nil {
 		fmt.Fprintf(stderr, "gc stop: marking session %s asleep: %v\n", sessionID, err) //nolint:errcheck
 	}
 }
@@ -2938,7 +2938,7 @@ func stopTargetRequiresCleanBoundary(store beads.Store, target stopTarget) bool 
 	if store == nil || strings.TrimSpace(target.sessionID) == "" {
 		return false
 	}
-	session, err := store.Get(target.sessionID)
+	session, err := runtimeGetSessionBead(context.Background(), store, target.sessionID, "session.stop-clean-boundary-check")
 	if err != nil {
 		return false
 	}

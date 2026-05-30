@@ -240,6 +240,29 @@ func (fs *FileStore) RuntimeCreate(ctx context.Context, b Bead, policy WritePoli
 	return created, nil
 }
 
+// RuntimeGet retrieves a bead under a runtime read policy.
+func (fs *FileStore) RuntimeGet(ctx context.Context, id string, policy ReadPolicy) (Bead, error) {
+	if fs == nil {
+		return Bead{}, degradedRead(policy, "get", "file", "", errors.New("nil FileStore"))
+	}
+	policy = normalizeReadPolicy(policy)
+	select {
+	case <-ctxDone(ctx):
+		return Bead{}, degradedRead(policy, "get", "file", "", ctx.Err())
+	default:
+	}
+	fs.fmu.Lock()
+	defer fs.fmu.Unlock()
+	if err := fs.locker.Lock(); err != nil {
+		return Bead{}, err
+	}
+	defer fs.locker.Unlock() //nolint:errcheck // best-effort unlock
+	if err := fs.reloadFromDisk(); err != nil {
+		return Bead{}, err
+	}
+	return fs.MemStore.Get(id)
+}
+
 // Update delegates to MemStore.Update and flushes to disk.
 // If the disk flush fails, the in-memory mutation is rolled back.
 func (fs *FileStore) Update(id string, opts UpdateOpts) error {
@@ -269,13 +292,14 @@ func (fs *FileStore) RuntimeUpdate(ctx context.Context, id string, opts UpdateOp
 		return degradedWrite(policy, "", "update", WriteOutcomeUnsupported, errors.New("nil FileStore"))
 	}
 	policy = normalizeWritePolicy(policy)
-	_, err := fs.runtimeWriteManager().do(ctx, policy, "update", id, func(writeCtx context.Context) (any, error) {
+	_, err := fs.runtimeWriteManager().doWithPayload(ctx, policy, "update", id, opts, mergeRuntimeUpdatePayload, func(writeCtx context.Context, payload any) (any, error) {
 		select {
 		case <-ctxDone(writeCtx):
 			return nil, degradedWrite(policy, fs.runtimeWriteStoreKey(), "update", WriteOutcomeNotStarted, writeCtx.Err())
 		default:
 		}
-		return nil, fs.Update(id, opts)
+		merged, _ := payload.(UpdateOpts)
+		return nil, fs.Update(id, merged)
 	})
 	return err
 }

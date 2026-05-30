@@ -359,8 +359,11 @@ type runtimeWriteJob struct {
 	objectKey   string
 	collapseKey string
 	enqueued    time.Time
-	run         func(context.Context) (any, error)
+	payload     any
+	merge       func(existing, incoming any) any
+	run         func(context.Context, any) (any, error)
 	waiters     []chan runtimeWriteResult
+	started     bool
 }
 
 type runtimeWriteResult struct {
@@ -380,6 +383,12 @@ func newRuntimeWriteManager(storeKey string) *runtimeWriteManager {
 }
 
 func (m *runtimeWriteManager) do(ctx context.Context, policy WritePolicy, op, objectKey string, run func(context.Context) (any, error)) (any, error) {
+	return m.doWithPayload(ctx, policy, op, objectKey, nil, nil, func(runCtx context.Context, _ any) (any, error) {
+		return run(runCtx)
+	})
+}
+
+func (m *runtimeWriteManager) doWithPayload(ctx context.Context, policy WritePolicy, op, objectKey string, payload any, merge func(existing, incoming any) any, run func(context.Context, any) (any, error)) (any, error) {
 	if m == nil {
 		return nil, degradedWrite(policy, "", op, WriteOutcomeUnsupported, errors.New("nil runtime write manager"))
 	}
@@ -398,12 +407,17 @@ func (m *runtimeWriteManager) do(ctx context.Context, policy WritePolicy, op, ob
 		objectKey:   objectKey,
 		collapseKey: collapseKey,
 		enqueued:    time.Now(),
+		payload:     payload,
+		merge:       merge,
 		run:         run,
 		waiters:     []chan runtimeWriteResult{result},
 	}
 	if collapseKey != "" {
 		m.mu.Lock()
 		if existing := m.pending[collapseKey]; existing != nil {
+			if !existing.started && existing.merge != nil {
+				existing.payload = existing.merge(existing.payload, payload)
+			}
 			existing.waiters = append(existing.waiters, result)
 			m.collapsed++
 			m.mu.Unlock()
@@ -486,8 +500,10 @@ func (m *runtimeWriteManager) loop() {
 		m.mu.Lock()
 		m.active++
 		m.oldest = time.Now()
+		job.started = true
+		payload := job.payload
 		m.mu.Unlock()
-		value, err := job.run(job.ctx)
+		value, err := job.run(job.ctx, payload)
 		res := runtimeWriteResult{value: value, err: err}
 		m.recordResult(err)
 		m.mu.Lock()
@@ -627,4 +643,108 @@ func runtimeWriteCollapseKey(policy WritePolicy, op, objectKey string) string {
 		strings.TrimSpace(objectKey),
 		idempotencyKey,
 	}, "\x00")
+}
+
+func mergeRuntimeUpdatePayload(existing, incoming any) any {
+	existingOpts, _ := existing.(UpdateOpts)
+	incomingOpts, _ := incoming.(UpdateOpts)
+	return mergeRuntimeUpdateOpts(existingOpts, incomingOpts)
+}
+
+func mergeRuntimeUpdateOpts(existing, incoming UpdateOpts) UpdateOpts {
+	out := cloneRuntimeUpdateOpts(existing)
+	if incoming.Title != nil {
+		out.Title = cloneStringPtr(incoming.Title)
+	}
+	if incoming.Status != nil {
+		out.Status = cloneStringPtr(incoming.Status)
+	}
+	if incoming.Type != nil {
+		out.Type = cloneStringPtr(incoming.Type)
+	}
+	if incoming.Priority != nil {
+		out.Priority = cloneIntPtr(incoming.Priority)
+	}
+	if incoming.Description != nil {
+		out.Description = cloneStringPtr(incoming.Description)
+	}
+	if incoming.ParentID != nil {
+		out.ParentID = cloneStringPtr(incoming.ParentID)
+	}
+	if incoming.Assignee != nil {
+		out.Assignee = cloneStringPtr(incoming.Assignee)
+	}
+	out.Labels = appendDedupStrings(out.Labels, incoming.Labels...)
+	out.RemoveLabels = appendDedupStrings(out.RemoveLabels, incoming.RemoveLabels...)
+	if len(incoming.Metadata) > 0 {
+		if out.Metadata == nil {
+			out.Metadata = make(map[string]string, len(incoming.Metadata))
+		}
+		for key, value := range incoming.Metadata {
+			if key == "state" && runtimeSessionStateTerminal(out.Metadata[key]) && !runtimeSessionStateTerminal(value) {
+				continue
+			}
+			if key == "close_reason" && strings.TrimSpace(out.Metadata[key]) != "" && strings.TrimSpace(value) == "" {
+				continue
+			}
+			out.Metadata[key] = value
+		}
+	}
+	return out
+}
+
+func cloneRuntimeUpdateOpts(in UpdateOpts) UpdateOpts {
+	out := UpdateOpts{
+		Title:        cloneStringPtr(in.Title),
+		Status:       cloneStringPtr(in.Status),
+		Type:         cloneStringPtr(in.Type),
+		Priority:     cloneIntPtr(in.Priority),
+		Description:  cloneStringPtr(in.Description),
+		ParentID:     cloneStringPtr(in.ParentID),
+		Assignee:     cloneStringPtr(in.Assignee),
+		Labels:       append([]string(nil), in.Labels...),
+		RemoveLabels: append([]string(nil), in.RemoveLabels...),
+	}
+	if len(in.Metadata) > 0 {
+		out.Metadata = make(map[string]string, len(in.Metadata))
+		for key, value := range in.Metadata {
+			out.Metadata[key] = value
+		}
+	}
+	return out
+}
+
+func cloneStringPtr(v *string) *string {
+	if v == nil {
+		return nil
+	}
+	cloned := *v
+	return &cloned
+}
+
+func appendDedupStrings(dst []string, values ...string) []string {
+	if len(values) == 0 {
+		return dst
+	}
+	seen := make(map[string]struct{}, len(dst)+len(values))
+	for _, value := range dst {
+		seen[value] = struct{}{}
+	}
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		dst = append(dst, value)
+	}
+	return dst
+}
+
+func runtimeSessionStateTerminal(state string) bool {
+	switch strings.TrimSpace(state) {
+	case "archived", "closed", "drained", "duplicate", "duplicate-repair", "failed-create", "gc_swept", "orphaned", "quarantined", "suspended":
+		return true
+	default:
+		return false
+	}
 }

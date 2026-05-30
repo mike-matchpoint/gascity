@@ -427,6 +427,30 @@ func (c *CachingStore) Get(id string) (Bead, error) {
 	return c.backing.Get(id)
 }
 
+// RuntimeGet returns a bead by ID only when the runtime cache can answer
+// without falling through to a foreground backing Get.
+func (c *CachingStore) RuntimeGet(_ context.Context, id string, policy ReadPolicy) (Bead, error) {
+	policy = normalizeReadPolicy(policy)
+	if policy.AllowFallback {
+		return c.Get(id)
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if _, deleted := c.deletedSeq[id]; deleted {
+		return Bead{}, ErrNotFound
+	}
+	if b, ok := c.beads[id]; ok {
+		if _, dirty := c.dirty[id]; dirty {
+			return Bead{}, degradedRead(policy, "get", "cache", "dirty", ErrIndexedListUnsupported)
+		}
+		return cloneBead(b), nil
+	}
+	if c.state == cacheLive {
+		return Bead{}, ErrNotFound
+	}
+	return Bead{}, degradedRead(policy, "get", "cache", "partial", ErrIndexedListUnsupported)
+}
+
 // Ready returns open beads whose blocking deps are all closed.
 func (c *CachingStore) Ready(query ...ReadyQuery) ([]Bead, error) {
 	if readyQueryFromArgs(query) != (ReadyQuery{}) {

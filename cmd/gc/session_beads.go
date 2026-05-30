@@ -36,7 +36,12 @@ func loadSessionBeads(store beads.Store) ([]beads.Bead, error) {
 	if store == nil {
 		return nil, nil
 	}
-	all, err := session.ListAllSessionBeads(store, beads.ListQuery{})
+	all, err := session.ListAllSessionBeadsRuntime(
+		context.Background(),
+		store,
+		beads.ListQuery{},
+		sessionRuntimeReadPolicy("session.beads.load"),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("listing session beads: %w", err)
 	}
@@ -352,7 +357,7 @@ func reopenClosedConfiguredNamedSessionBead(
 			return nil
 		}
 		open := "open"
-		if err := store.Update(bead.ID, beads.UpdateOpts{Status: &open}); err != nil {
+		if err := runtimeUpdateSessionBead(context.Background(), store, bead.ID, beads.UpdateOpts{Status: &open}, "session.reopen-named"); err != nil {
 			fmt.Fprintf(stderr, "session beads: reopening configured named session %q: %v\n", identity, err) //nolint:errcheck
 			return nil
 		}
@@ -457,7 +462,7 @@ func retireDuplicateConfiguredNamedSessionBeads(
 				continue
 			}
 			status := "open"
-			if err := store.Update(b.ID, beads.UpdateOpts{Status: &status}); err != nil {
+			if err := runtimeUpdateSessionBead(context.Background(), store, b.ID, beads.UpdateOpts{Status: &status}, "session.archive-duplicate-named"); err != nil {
 				fmt.Fprintf(stderr, "session beads: archiving duplicate named session %s: %v\n", b.ID, err) //nolint:errcheck
 				continue
 			}
@@ -527,7 +532,7 @@ func retireRemovedConfiguredNamedSessionBead(
 		return false
 	}
 	status := "open"
-	if err := store.Update(b.ID, beads.UpdateOpts{Status: &status}); err != nil {
+	if err := runtimeUpdateSessionBead(context.Background(), store, b.ID, beads.UpdateOpts{Status: &status}, "session.archive-removed-named"); err != nil {
 		fmt.Fprintf(stderr, "session beads: archiving removed named session %s: %v\n", b.ID, err) //nolint:errcheck
 		return false
 	}
@@ -845,7 +850,7 @@ func syncSessionBeadsWithSnapshotAndRigStores(
 			continue
 		}
 		t := sessionBeadType
-		if err := store.Update(b.ID, beads.UpdateOpts{Type: &t}); err != nil {
+		if err := runtimeUpdateSessionBead(context.Background(), store, b.ID, beads.UpdateOpts{Type: &t}, "session.repair-type"); err != nil {
 			fmt.Fprintf(stderr, "session beads: repairing type for %s: %v\n", b.ID, err) //nolint:errcheck
 		} else {
 			existing[i].Type = sessionBeadType
@@ -1116,7 +1121,7 @@ func syncSessionBeadsWithSnapshotAndRigStores(
 				createdSessionName = strings.TrimSpace(newBead.Metadata["session_name"])
 				if isPoolInstance {
 					createdSessionName = PoolSessionName(qualifiedTemplate, newBead.ID)
-					if err := store.SetMetadata(newBead.ID, "session_name", createdSessionName); err != nil {
+					if err := setMeta(store, newBead.ID, "session_name", createdSessionName, stderr); err != nil {
 						finalizeErr = err
 						fmt.Fprintf(stderr, "session beads: setting pool session_name for %s: %v\n", agentName, err) //nolint:errcheck
 						closeFailedCreateBead(store, newBead.ID, now, stderr)
@@ -1691,10 +1696,11 @@ func configuredSessionNamesWithSnapshot(cfg *config.City, cityName string, sessi
 	return names
 }
 
-// setMeta wraps store.SetMetadata with error logging. Returns the error
-// so callers can abort dependent writes (e.g., skip config_hash on failure).
+// setMeta wraps the runtime metadata write with error logging. Returns the
+// error so callers can abort dependent writes (e.g., skip config_hash on
+// failure).
 func setMeta(store beads.Store, id, key, value string, stderr io.Writer) error {
-	if err := store.SetMetadata(id, key, value); err != nil {
+	if err := runtimeSetSessionMetadata(context.Background(), store, id, key, value, "session.beads.metadata"); err != nil {
 		fmt.Fprintf(stderr, "session beads: setting %s on %s: %v\n", key, id, err) //nolint:errcheck
 		return err
 	}
@@ -1705,7 +1711,7 @@ func setMetaBatch(store beads.Store, id string, batch map[string]string, stderr 
 	if len(batch) == 0 {
 		return nil
 	}
-	if err := store.SetMetadataBatch(id, batch); err != nil {
+	if err := runtimeSetSessionMetadataBatch(context.Background(), store, id, batch, "session.beads.metadata-batch"); err != nil {
 		fmt.Fprintf(stderr, "session beads: setting metadata on %s: %v\n", id, err) //nolint:errcheck
 		return err
 	}
@@ -1731,10 +1737,7 @@ func closeFailedCreateBeadLocked(store beads.Store, id string, now time.Time, st
 	patch["pending_create_claim"] = ""
 	patch["pending_create_started_at"] = ""
 	patch["sleep_intent"] = ""
-	if setMetaBatch(store, id, patch, stderr) != nil {
-		return false
-	}
-	if err := store.Close(id); err != nil {
+	if _, err := runtimeCloseSessionBeads(context.Background(), store, []string{id}, patch, "session.failed-create.close"); err != nil {
 		fmt.Fprintf(stderr, "session beads: closing failed-create bead %s: %v\n", id, err) //nolint:errcheck
 		return false
 	}
@@ -1988,7 +1991,7 @@ func reapRuntimesBoundToClosedBeads(
 
 		// The bead is not open. Confirm it is actually closed before reaping —
 		// a missing or unreadable record must not trigger a stop.
-		bead, err := store.Get(liveID)
+		bead, err := runtimeGetSessionBead(context.Background(), store, liveID, "session.closed-runtime-confirm")
 		if err != nil {
 			continue
 		}
@@ -2138,16 +2141,14 @@ func closeBeadLocked(store beads.Store, id, reason string, now time.Time, stderr
 	// bead.updated event. Skipping the write when status is already
 	// closed is safe because all three callers are reconciler tick logic
 	// that should be no-op on terminal beads.
-	if existing, err := store.Get(id); err == nil && existing.Status == "closed" {
+	if existing, err := runtimeGetSessionBead(context.Background(), store, id, "session.close.preflight"); err == nil && existing.Status == "closed" {
 		return false
 	}
 	if reason == string(session.StateFailedCreate) {
 		return closeFailedCreateBeadLocked(store, id, now, stderr)
 	}
-	if setMetaBatch(store, id, session.ClosePatch(now, reason), stderr) != nil {
-		return false
-	}
-	if err := store.Close(id); err != nil {
+	patch := session.ClosePatch(now, reason)
+	if _, err := runtimeCloseSessionBeads(context.Background(), store, []string{id}, patch, "session.close"); err != nil {
 		fmt.Fprintf(stderr, "session beads: closing %s: %v\n", id, err) //nolint:errcheck
 		return false
 	}

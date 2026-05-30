@@ -49,6 +49,40 @@ func TestRuntimeReadStaticGuardForControllerHotPaths(t *testing.T) {
 	}
 }
 
+func TestSessionHotPathStaticGuardForRuntimeStoreAccess(t *testing.T) {
+	for _, path := range []string{
+		"session_beads.go",
+		"session_lifecycle_parallel.go",
+		"session_reconciler.go",
+	} {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		text := string(body)
+		forbidden := []string{
+			"store.Get(",
+			"store.Update(",
+			"store.SetMetadata(",
+			"store.SetMetadataBatch(",
+			"store.Close(",
+		}
+		for _, needle := range forbidden {
+			if strings.Contains(text, needle) {
+				t.Fatalf("%s contains %q; hot session writes/ID reads must use runtime policies", path, needle)
+			}
+		}
+	}
+
+	body, err := os.ReadFile("session_bead_snapshot.go")
+	if err != nil {
+		t.Fatalf("reading session_bead_snapshot.go: %v", err)
+	}
+	if strings.Contains(string(body), "ListAllSessionBeads(") {
+		t.Fatal("session_bead_snapshot.go calls ListAllSessionBeads; hot session snapshots must use ListAllSessionBeadsRuntime")
+	}
+}
+
 func TestControllerDemandReadyDoesNotFallbackToBdReady(t *testing.T) {
 	var runnerCalls atomic.Int64
 	backing := beads.NewBdStore("/city", func(string, string, ...string) ([]byte, error) {

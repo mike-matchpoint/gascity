@@ -90,6 +90,26 @@ func (s *taskWorkDirLiveListCountingStore) RuntimeList(ctx context.Context, quer
 	return beads.RuntimeList(ctx, s.Store, query, policy)
 }
 
+func (s *taskWorkDirLiveListCountingStore) RuntimeGet(ctx context.Context, id string, policy beads.ReadPolicy) (beads.Bead, error) {
+	return beads.RuntimeGet(ctx, s.Store, id, policy)
+}
+
+func (s *taskWorkDirLiveListCountingStore) RuntimeCreate(ctx context.Context, b beads.Bead, policy beads.WritePolicy) (beads.Bead, error) {
+	return beads.RuntimeCreate(ctx, s.Store, b, policy)
+}
+
+func (s *taskWorkDirLiveListCountingStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	return beads.RuntimeUpdate(ctx, s.Store, id, opts, policy)
+}
+
+func (s *taskWorkDirLiveListCountingStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy beads.WritePolicy) (int, error) {
+	return beads.RuntimeCloseAll(ctx, s.Store, ids, metadata, policy)
+}
+
+func (s *taskWorkDirLiveListCountingStore) RuntimePing(ctx context.Context, policy beads.WritePolicy) error {
+	return beads.RuntimePing(ctx, s.Store, policy)
+}
+
 type panicMetadataBatchStore struct {
 	*beads.MemStore
 }

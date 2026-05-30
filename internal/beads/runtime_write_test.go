@@ -454,6 +454,109 @@ func TestBdStoreRuntimeWriteCoalescesIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestBdStoreRuntimeUpdateMergesQueuedSessionHotState(t *testing.T) {
+	holdStarted := make(chan struct{})
+	releaseHold := make(chan struct{})
+	var holdOnce sync.Once
+	var mu sync.Mutex
+	var sessionArgs []string
+	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(ctx context.Context, _ string, _ string, args ...string) ([]byte, error) {
+		if len(args) >= 3 && args[0] == "update" && args[2] == "gc-hold" {
+			holdOnce.Do(func() { close(holdStarted) })
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-releaseHold:
+				return []byte(`[]`), nil
+			}
+		}
+		if len(args) >= 3 && args[0] == "update" && args[2] == "gc-1" {
+			mu.Lock()
+			sessionArgs = append([]string(nil), args...)
+			mu.Unlock()
+		}
+		return []byte(`[]`), nil
+	})
+	holdPolicy := RuntimeWritePolicy(WriteClassAuditRepair, "test.hold", "hold")
+	holdPolicy.Timeout = time.Second
+	var holdWG sync.WaitGroup
+	holdWG.Add(1)
+	go func() {
+		defer holdWG.Done()
+		if err := store.RuntimeUpdate(context.Background(), "gc-hold", UpdateOpts{Metadata: map[string]string{"hold": "true"}}, holdPolicy); err != nil {
+			t.Errorf("hold RuntimeUpdate: %v", err)
+		}
+	}()
+	<-holdStarted
+
+	policy := RuntimeWritePolicy(WriteClassHotState, "test.session-coalesce", "session:gc-1")
+	policy.Timeout = time.Second
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errs <- store.RuntimeUpdate(context.Background(), "gc-1", UpdateOpts{Metadata: map[string]string{
+			"state":        "orphaned",
+			"close_reason": "session orphaned",
+			"generation":   "1",
+		}}, policy)
+	}()
+	queueDeadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(queueDeadline) {
+		if store.RuntimeWriteManagerStats().QueueDepth >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errs <- store.RuntimeUpdate(context.Background(), "gc-1", UpdateOpts{
+			Labels: []string{"synced"},
+			Metadata: map[string]string{
+				"state":        "active",
+				"close_reason": "",
+				"instance":     "2",
+			},
+		}, policy)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if store.RuntimeWriteManagerStats().Collapsed > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	close(releaseHold)
+	holdWG.Wait()
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("RuntimeUpdate: %v", err)
+		}
+	}
+	mu.Lock()
+	args := append([]string(nil), sessionArgs...)
+	mu.Unlock()
+	joined := strings.Join(args, "\n")
+	for _, want := range []string{
+		"--set-metadata\ngeneration=1",
+		"--set-metadata\ninstance=2",
+		"--set-metadata\nstate=orphaned",
+		"--set-metadata\nclose_reason=session orphaned",
+		"--add-label\nsynced",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("merged update args missing %q:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "state=active") || strings.Contains(joined, "\nclose_reason=\n") {
+		t.Fatalf("merged update lost terminal session state:\n%s", joined)
+	}
+}
+
 func TestBdStoreRuntimeCreateDuplicateMatchingReservationSucceeds(t *testing.T) {
 	var createCalls atomic.Int64
 	var showCalls atomic.Int64

@@ -211,6 +211,13 @@ func (s *countingMetadataStore) SetMetadataBatch(id string, kvs map[string]strin
 	return s.MemStore.SetMetadataBatch(id, kvs)
 }
 
+func (s *countingMetadataStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	if len(opts.Metadata) > 0 {
+		s.batchCalls++
+	}
+	return s.MemStore.RuntimeUpdate(ctx, id, opts, policy)
+}
+
 func (s *sessionGetSpyStore) Get(id string) (beads.Bead, error) {
 	s.getIDs = append(s.getIDs, id)
 	return s.Store.Get(id)

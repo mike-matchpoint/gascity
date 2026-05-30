@@ -306,6 +306,39 @@ func (s *BdStore) RuntimeList(ctx context.Context, query ListQuery, policy ReadP
 	return enforceRuntimeRowCap(items, policy, "list", "indexed")
 }
 
+// RuntimeGet retrieves one bead under a bounded runtime read policy. BdStore
+// currently has no direct indexed ID lookup, so this uses a short runtime
+// command budget and reports degraded outcomes instead of falling back to the
+// foreground 120s read budget.
+func (s *BdStore) RuntimeGet(ctx context.Context, id string, policy ReadPolicy) (Bead, error) {
+	if s == nil {
+		return Bead{}, degradedRead(policy, "get", "bd", "", errors.New("nil BdStore"))
+	}
+	policy = normalizeReadPolicy(policy)
+	if policy.AllowFallback {
+		return s.Get(id)
+	}
+	readCtx, cancel := contextWithReadPolicy(ctx, policy)
+	defer cancel()
+	writePolicy := RuntimeWritePolicy(WriteClassHotState, policy.Caller, "runtime-get:"+id)
+	writePolicy.Timeout = policy.Timeout
+	out, err := s.runRuntimeBD(readCtx, writePolicy, "get", "show", "--json", id)
+	if err != nil {
+		if isBdNotFound(err) {
+			return Bead{}, fmt.Errorf("getting bead %q: %w", id, ErrNotFound)
+		}
+		return Bead{}, degradedRead(policy, "get", "bd", "", err)
+	}
+	var issues []bdIssue
+	if err := json.Unmarshal(extractJSON(out), &issues); err != nil {
+		return Bead{}, degradedRead(policy, "get", "bd", "", fmt.Errorf("bd show: parsing JSON: %w", err))
+	}
+	if len(issues) == 0 {
+		return Bead{}, fmt.Errorf("getting bead %q: %w", id, ErrNotFound)
+	}
+	return issues[0].toBead(), nil
+}
+
 // RuntimeReady has no safe direct BdStore implementation because bd ready is a
 // hydrated CLI command and indexed ready requires complete active-state
 // coverage. Controller hot paths should use CachingStore.RuntimeReady.
@@ -1442,12 +1475,16 @@ func (s *BdStore) RuntimeUpdate(ctx context.Context, id string, opts UpdateOpts,
 	if s == nil {
 		return degradedWrite(policy, "", "update", WriteOutcomeUnsupported, errors.New("nil BdStore"))
 	}
-	args := bdUpdateArgs(id, opts)
-	if len(args) == 0 {
+	if len(bdUpdateArgs(id, opts)) == 0 {
 		return nil
 	}
 	policy = normalizeWritePolicy(policy)
-	_, err := s.runtimeWriteManager().do(ctx, policy, "update", id, func(writeCtx context.Context) (any, error) {
+	_, err := s.runtimeWriteManager().doWithPayload(ctx, policy, "update", id, opts, mergeRuntimeUpdatePayload, func(writeCtx context.Context, payload any) (any, error) {
+		merged, _ := payload.(UpdateOpts)
+		args := bdUpdateArgs(id, merged)
+		if len(args) == 0 {
+			return nil, nil
+		}
 		_, runErr := s.runRuntimeBD(writeCtx, policy, "update", args...)
 		if isBdNotFound(runErr) {
 			return nil, fmt.Errorf("updating bead %q: %w", id, ErrNotFound)

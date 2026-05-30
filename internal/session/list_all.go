@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"sort"
 
@@ -34,6 +35,21 @@ import (
 // error is wrapped with context naming which leg failed so logs are
 // diagnosable.
 func ListAllSessionBeads(store beads.Store, base beads.ListQuery) ([]beads.Bead, error) {
+	return listAllSessionBeadsWithLister(func(query beads.ListQuery) ([]beads.Bead, error) {
+		return store.List(query)
+	}, store, base)
+}
+
+// ListAllSessionBeadsRuntime returns every session bead using the runtime read
+// contract. Hot callers receive degraded read errors instead of falling back to
+// foreground hydrated Beads list paths.
+func ListAllSessionBeadsRuntime(ctx context.Context, store beads.Store, base beads.ListQuery, policy beads.ReadPolicy) ([]beads.Bead, error) {
+	return listAllSessionBeadsWithLister(func(query beads.ListQuery) ([]beads.Bead, error) {
+		return beads.RuntimeList(ctx, store, query, policy)
+	}, store, base)
+}
+
+func listAllSessionBeadsWithLister(list func(beads.ListQuery) ([]beads.Bead, error), store beads.Store, base beads.ListQuery) ([]beads.Bead, error) {
 	if store == nil {
 		return nil, nil
 	}
@@ -46,7 +62,7 @@ func ListAllSessionBeads(store beads.Store, base beads.ListQuery) ([]beads.Bead,
 	byTypeQuery.Type = BeadType
 	byTypeQuery.Label = ""
 	byTypeQuery.Limit = 0
-	byType, typeErr := store.List(byTypeQuery)
+	byType, typeErr := list(byTypeQuery)
 	if typeErr != nil && !beads.IsPartialResult(typeErr) {
 		return nil, fmt.Errorf("listing session beads by type: %w", typeErr)
 	}
@@ -55,7 +71,7 @@ func ListAllSessionBeads(store beads.Store, base beads.ListQuery) ([]beads.Bead,
 	byLabelQuery.Type = ""
 	byLabelQuery.Label = LabelSession
 	byLabelQuery.Limit = 0
-	byLabel, labelErr := store.List(byLabelQuery)
+	byLabel, labelErr := list(byLabelQuery)
 	if labelErr != nil && !beads.IsPartialResult(labelErr) {
 		return nil, fmt.Errorf("listing session beads by label: %w", labelErr)
 	}

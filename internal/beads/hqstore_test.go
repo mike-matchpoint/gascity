@@ -1,6 +1,7 @@
 package beads_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -32,6 +33,54 @@ func TestHQStoreConformance(t *testing.T) {
 	beadstest.RunStoreTests(t, factory)
 	beadstest.RunDepTests(t, factory)
 	beadstest.RunCreationOrderTests(t, factory)
+}
+
+func TestHQStoreRuntimeHotPaths(t *testing.T) {
+	store, err := beads.OpenHQStore(t.TempDir(), beads.WithHQStoreSnapshotInterval(0))
+	if err != nil {
+		t.Fatalf("OpenHQStore: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Shutdown(); err != nil {
+			t.Errorf("Shutdown: %v", err)
+		}
+	})
+
+	ctx := context.Background()
+	writePolicy := beads.RuntimeWritePolicy(beads.WriteClassHotState, "test.hq-runtime", "session:gc-hq-1")
+	readPolicy := beads.RuntimeReadPolicy(beads.ReadClassHotAuthoritative, "test.hq-runtime")
+	created, err := store.RuntimeCreate(ctx, beads.Bead{
+		ID:    "gc-hq-1",
+		Title: "worker",
+		Type:  "session",
+		Metadata: map[string]string{
+			"state": "creating",
+		},
+	}, writePolicy)
+	if err != nil {
+		t.Fatalf("RuntimeCreate: %v", err)
+	}
+
+	if err := store.RuntimeUpdate(ctx, created.ID, beads.UpdateOpts{Metadata: map[string]string{"state": "awake"}}, writePolicy); err != nil {
+		t.Fatalf("RuntimeUpdate: %v", err)
+	}
+	got, err := store.RuntimeGet(ctx, created.ID, readPolicy)
+	if err != nil {
+		t.Fatalf("RuntimeGet: %v", err)
+	}
+	if got.Metadata["state"] != "awake" {
+		t.Fatalf("state = %q, want awake", got.Metadata["state"])
+	}
+	closed, err := store.RuntimeCloseAll(ctx, []string{created.ID}, map[string]string{"close_reason": "runtime test"}, writePolicy)
+	if err != nil {
+		t.Fatalf("RuntimeCloseAll: %v", err)
+	}
+	if closed != 1 {
+		t.Fatalf("RuntimeCloseAll count = %d, want 1", closed)
+	}
+	if err := store.RuntimePing(ctx, writePolicy); err != nil {
+		t.Fatalf("RuntimePing: %v", err)
+	}
 }
 
 func TestHQStoreRecoversFlushedSnapshotAfterSIGKILL(t *testing.T) {
