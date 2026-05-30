@@ -1564,11 +1564,11 @@ func TestGastownRoutedToTargetsUseBindingPrefix(t *testing.T) {
 		rel  string
 		want string
 	}{
-		{"packs/gastown/formulas/mol-deacon-patrol.toml", `gc sling {{binding_prefix}}dog "$WARRANT_ID"`},
-		{"packs/gastown/formulas/mol-witness-patrol.toml", `gc sling {{binding_prefix}}dog "$WARRANT_ID"`},
-		{"packs/gastown/agents/boot/prompt.template.md", `gc sling {{ .BindingPrefix }}dog "$WARRANT_ID"`},
-		{"packs/gastown/agents/deacon/prompt.template.md", `gc sling {{ .BindingPrefix }}dog "$WARRANT_ID"`},
-		{"packs/gastown/agents/witness/prompt.template.md", `gc sling {{ .BindingPrefix }}dog "$WARRANT_ID"`},
+		{"packs/gastown/formulas/mol-deacon-patrol.toml", `gc route create --target {{binding_prefix}}dog`},
+		{"packs/gastown/formulas/mol-witness-patrol.toml", `gc route create --target {{binding_prefix}}dog`},
+		{"packs/gastown/agents/boot/prompt.template.md", `gc route create --target {{ .BindingPrefix }}dog`},
+		{"packs/gastown/agents/deacon/prompt.template.md", `gc route create --target {{ .BindingPrefix }}dog`},
+		{"packs/gastown/agents/witness/prompt.template.md", `gc route create --target {{ .BindingPrefix }}dog`},
 		{"packs/gastown/formulas/mol-polecat-work.toml", `${GC_RIG:+$GC_RIG/}{{binding_prefix}}refinery`},
 		{"packs/gastown/formulas/mol-refinery-patrol.toml", `${GC_RIG:+$GC_RIG/}{{binding_prefix}}polecat`},
 		{"packs/gastown/formulas/mol-idea-to-plan.toml", "$GC_RIG/{{binding_prefix}}polecat"},
@@ -1603,18 +1603,18 @@ func TestGastownRoutedToTargetsUseBindingPrefix(t *testing.T) {
 	}
 }
 
-func TestGastownWarrantDispatchAttachesShutdownDance(t *testing.T) {
+func TestGastownWarrantDispatchUsesRouteCreate(t *testing.T) {
 	dir := exampleDir()
 	files := []struct {
-		rel       string
-		slingWant string
+		rel        string
+		targetWant string
 	}{
-		{"packs/gastown/agents/boot/prompt.template.md", `gc sling {{ .BindingPrefix }}dog "$WARRANT_ID"`},
-		{"packs/gastown/agents/deacon/prompt.template.md", `gc sling {{ .BindingPrefix }}dog "$WARRANT_ID"`},
-		{"packs/gastown/agents/witness/prompt.template.md", `gc sling {{ .BindingPrefix }}dog "$WARRANT_ID"`},
-		{"packs/gastown/formulas/mol-deacon-patrol.toml", `gc sling {{binding_prefix}}dog "$WARRANT_ID"`},
-		{"packs/gastown/formulas/mol-witness-patrol.toml", `gc sling {{binding_prefix}}dog "$WARRANT_ID"`},
-		{"packs/maintenance/formulas/mol-shutdown-dance.toml", `gc sling <binding-prefix>dog "$WARRANT_ID"`},
+		{"packs/gastown/agents/boot/prompt.template.md", `--target {{ .BindingPrefix }}dog`},
+		{"packs/gastown/agents/deacon/prompt.template.md", `--target {{ .BindingPrefix }}dog`},
+		{"packs/gastown/agents/witness/prompt.template.md", `--target {{ .BindingPrefix }}dog`},
+		{"packs/gastown/formulas/mol-deacon-patrol.toml", `--target {{binding_prefix}}dog`},
+		{"packs/gastown/formulas/mol-witness-patrol.toml", `--target {{binding_prefix}}dog`},
+		{"packs/maintenance/formulas/mol-shutdown-dance.toml", `--target <binding-prefix>dog`},
 	}
 	for _, file := range files {
 		data, err := os.ReadFile(filepath.Join(dir, file.rel))
@@ -1638,6 +1638,8 @@ func TestGastownWarrantDispatchAttachesShutdownDance(t *testing.T) {
 			}
 		}
 		for _, bad := range []string{
+			`WARRANT_ID=$(gc bd create`,
+			`gc sling`,
 			`"gc.routed_to":"<binding-prefix>dog"`,
 			`"gc.routed_to":"{{binding_prefix}}dog"`,
 			`"gc.routed_to":"{{ .BindingPrefix }}dog"`,
@@ -1647,13 +1649,14 @@ func TestGastownWarrantDispatchAttachesShutdownDance(t *testing.T) {
 			}
 		}
 		for _, want := range []string{
-			`WARRANT_ID=$(gc bd create --type=task`,
-			file.slingWant,
+			`gc route create`,
+			file.targetWant,
 			`--on mol-shutdown-dance`,
-			`--var warrant_id="$WARRANT_ID"`,
-			`--var target=`,
-			`--var reason=`,
-			`--var requester=`,
+			`--type task`,
+			`--label warrant`,
+			`--metadata target=`,
+			`--metadata reason=`,
+			`--metadata requester=`,
 		} {
 			if !strings.Contains(body, want) {
 				t.Errorf("%s missing formula-backed warrant dispatch guidance %q", file.rel, want)
@@ -1838,7 +1841,7 @@ func TestGastownPromptPeerAddressesUseBindingPrefix(t *testing.T) {
 				"gc mail count gastown.deacon",
 				"gc session nudge gastown.deacon",
 				`--title="Stuck: gastown.deacon"`,
-				`"target":"gastown.deacon"`,
+				`--metadata target="gastown.deacon"`,
 			},
 			bads: []string{
 				"gc session peek deacon",
@@ -1846,7 +1849,7 @@ func TestGastownPromptPeerAddressesUseBindingPrefix(t *testing.T) {
 				"gc mail count deacon",
 				"gc session nudge deacon",
 				`--title="Stuck: deacon"`,
-				`"target":"deacon"`,
+				`--metadata target="deacon"`,
 			},
 		},
 		{
@@ -1860,7 +1863,7 @@ func TestGastownPromptPeerAddressesUseBindingPrefix(t *testing.T) {
 				"gc mail count deacon",
 				"gc session nudge deacon",
 				`--title="Stuck: deacon"`,
-				`"target":"deacon"`,
+				`--metadata target="deacon"`,
 			},
 			bads: []string{
 				"gastown.deacon",
@@ -2415,8 +2418,8 @@ func TestGastownPromptRoutedToHandoffIsFullyQualifiedUnderBinding(t *testing.T) 
 	for _, tc := range cases {
 		t.Run(filepath.Base(filepath.Dir(tc.rel)), func(t *testing.T) {
 			body := renderGastownPromptForPack(t, tc.rel, tc.agentName, tc.templateName, rigName, bindingName, bindingPrefix)
-			if tc.templateName == "witness" && !strings.Contains(body, `gc sling gastown.dog "$WARRANT_ID"`) {
-				t.Errorf("%s: rendered template missing binding-prefixed dog sling target", tc.rel)
+			if tc.templateName == "witness" && !strings.Contains(body, `gc route create --target gastown.dog`) {
+				t.Errorf("%s: rendered template missing binding-prefixed dog route-create target", tc.rel)
 			}
 
 			// Every rendered gc.routed_to reference must be either a shell
@@ -3312,9 +3315,9 @@ func TestDeaconPatrolDetectsQueueStarvation(t *testing.T) {
 		"gc bd list --status=open --assignee=",
 		"bead.updated_at",
 		"30min",
-		`gc sling {{binding_prefix}}dog "$WARRANT_ID"`,
+		`gc route create --target {{binding_prefix}}dog`,
 		`--on mol-shutdown-dance`,
-		`--var warrant_id="$WARRANT_ID"`,
+		`--metadata reason=`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("deacon formula missing queue-starvation guidance %q", want)

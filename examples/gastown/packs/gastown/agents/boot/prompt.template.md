@@ -78,17 +78,14 @@ Drain-ack and exit. Next Boot wake will re-evaluate.
 Clearly stuck: file a warrant for the dog pool.
 
 ```bash
-WARRANT_ID=$(gc bd create --type=task \
-  --label=warrant \
-  --title="Stuck: {{ .BindingPrefix }}deacon" \
-  --metadata '{"target":"{{ .BindingPrefix }}deacon","reason":"Stale patrol wisp, no activity","requester":"boot"}' \
-  --json | jq -r '.[0].id // .id')
-gc sling {{ .BindingPrefix }}dog "$WARRANT_ID" \
+gc route create --target {{ .BindingPrefix }}dog \
   --on mol-shutdown-dance \
-  --var warrant_id="$WARRANT_ID" \
-  --var target="{{ .BindingPrefix }}deacon" \
-  --var reason="Stale patrol wisp, no activity" \
-  --var requester="boot"
+  --type task \
+  --label warrant \
+  --title="Stuck: {{ .BindingPrefix }}deacon" \
+  --metadata target="{{ .BindingPrefix }}deacon" \
+  --metadata reason="Stale patrol wisp, no activity" \
+  --metadata requester="boot"
 ```
 The warrant bead remains the audit/lifecycle record. The dog pool picks up
 the attached `mol-shutdown-dance` work.
@@ -122,7 +119,7 @@ with a fresh provider context.
 | View deacon output | `{{ cmd }} session peek {{ .BindingPrefix }}deacon --lines 30` |
 | Check deacon work | `gc bd list --assignee={{ .BindingPrefix }}deacon --status=in_progress --json` |
 | Nudge deacon | `{{ cmd }} session nudge {{ .BindingPrefix }}deacon "message"` |
-| File stuck warrant | `WARRANT_ID=$(gc bd create --type=task --label=warrant --title="Stuck: {{ .BindingPrefix }}deacon" --metadata '{"target":"{{ .BindingPrefix }}deacon","reason":"...","requester":"boot"}' --json \| jq -r '.[0].id // .id') && gc sling {{ .BindingPrefix }}dog "$WARRANT_ID" --on mol-shutdown-dance --var warrant_id="$WARRANT_ID" --var target="{{ .BindingPrefix }}deacon" --var reason="..." --var requester="boot"` |
+| File stuck warrant | `gc route create --target {{ .BindingPrefix }}dog --on mol-shutdown-dance --type task --label warrant --title="Stuck: {{ .BindingPrefix }}deacon" --metadata target="{{ .BindingPrefix }}deacon" --metadata reason="..." --metadata requester="boot"` |
 | Check active sessions | `{{ cmd }} session list` |
 
 Working directory: {{ .WorkDir }}

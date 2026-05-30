@@ -5,17 +5,14 @@ Dispatched by filing a warrant bead, then attaching this formula through the
 typed dog route:
 
 ```bash
-WARRANT_ID=$(gc bd create --type=task \
-  --label=warrant \
-  --title="Stuck: <agent>" \
-  --metadata '{"target":"<session>","reason":"<reason>","requester":"<who>"}' \
-  --json | jq -r '.[0].id // .id')
-gc sling <binding-prefix>dog "$WARRANT_ID" \
+gc route create --target <binding-prefix>dog \
   --on mol-shutdown-dance \
-  --var warrant_id="$WARRANT_ID" \
-  --var target="<session>" \
-  --var reason="<reason>" \
-  --var requester="<who>"
+  --type task \
+  --label warrant \
+  --title="Stuck: <agent>" \
+  --metadata target="<session>" \
+  --metadata reason="<reason>" \
+  --metadata requester="<who>"
 ```
 
 The warrant bead remains the audit/lifecycle record. The dog pool picks

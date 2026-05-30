@@ -163,16 +163,14 @@ something is stuck. This is exactly why an LLM does it, not Go code.
 
 **For stuck coordination agents, file a warrant:**
 ```bash
-WARRANT_ID=$(gc bd create --type=task --label=warrant \
-  --title="Stuck: <rig>/<role>" \
-  --metadata '{"target":"<session>","reason":"<reason>","requester":"deacon"}' \
-  --json | jq -r '.[0].id // .id')
-gc sling {{binding_prefix}}dog "$WARRANT_ID" \
+gc route create --target {{binding_prefix}}dog \
   --on mol-shutdown-dance \
-  --var warrant_id="$WARRANT_ID" \
-  --var target="<session>" \
-  --var reason="<reason>" \
-  --var requester="deacon"
+  --type task \
+  --label warrant \
+  --title="Stuck: <rig>/<role>" \
+  --metadata target="<session>" \
+  --metadata reason="<reason>" \
+  --metadata requester="deacon"
 ```
 
 The warrant bead remains the audit/lifecycle record. The dog pool runs
@@ -239,16 +237,14 @@ If the nudge doesn't unstick within the next patrol cycle, escalate
 by filing a warrant for the dog pool:
 
 ```bash
-WARRANT_ID=$(gc bd create --type=task --label=warrant \\
-    --title="Stuck queue: <session> — $ASSIGNED beads, no activity $duration" \\
-    --metadata '{"target":"<session>","reason":"queue starvation: N beads, no bead.updated_at progress","requester":"deacon"}' \\
-    --json | jq -r '.[0].id // .id')
-gc sling {{binding_prefix}}dog "$WARRANT_ID" \\
+gc route create --target {{binding_prefix}}dog \\
     --on mol-shutdown-dance \\
-    --var warrant_id="$WARRANT_ID" \\
-    --var target="<session>" \\
-    --var reason="queue starvation: N beads, no bead.updated_at progress" \\
-    --var requester="deacon"
+    --type task \\
+    --label warrant \\
+    --title="Stuck queue: <session> — $ASSIGNED beads, no activity $duration" \\
+    --metadata target="<session>" \\
+    --metadata reason="queue starvation: N beads, no bead.updated_at progress" \\
+    --metadata requester="deacon"
 ```
 
 The dog runs `mol-shutdown-dance` and the controller respawns a fresh
@@ -287,16 +283,14 @@ No hardcoded thresholds. Use judgment.
 
 **Step 3: For stuck utility agents, file a warrant:**
 ```bash
-WARRANT_ID=$(gc bd create --type=task --label=warrant \
-  --title="Stuck dog: <agent>" \
-  --metadata '{"target":"<session>","reason":"<reason>","requester":"deacon"}' \
-  --json | jq -r '.[0].id // .id')
-gc sling {{binding_prefix}}dog "$WARRANT_ID" \
+gc route create --target {{binding_prefix}}dog \
   --on mol-shutdown-dance \
-  --var warrant_id="$WARRANT_ID" \
-  --var target="<session>" \
-  --var reason="<reason>" \
-  --var requester="deacon"
+  --type task \
+  --label warrant \
+  --title="Stuck dog: <agent>" \
+  --metadata target="<session>" \
+  --metadata reason="<reason>" \
+  --metadata requester="deacon"
 ```
 
 A different dog from the pool picks up the attached shutdown dance work.
