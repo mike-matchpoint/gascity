@@ -4206,6 +4206,10 @@ func TestBuildDesiredState_MinZeroDefaultScaleCheckRoutedWorkCreatesPoolSession(
 	}); err != nil {
 		t.Fatalf("create routed work bead: %v", err)
 	}
+	cache := beads.NewCachingStoreForTest(store, nil)
+	if err := cache.PrimeActive(); err != nil {
+		t.Fatalf("PrimeActive: %v", err)
+	}
 
 	cfg := &config.City{
 		Workspace: config.Workspace{Name: "test-city"},
@@ -4218,7 +4222,7 @@ func TestBuildDesiredState_MinZeroDefaultScaleCheckRoutedWorkCreatesPoolSession(
 	}
 
 	var stderr strings.Builder
-	dsResult := buildDesiredState("test-city", cityPath, time.Now().UTC(), cfg, runtime.NewFake(), store, &stderr)
+	dsResult := buildDesiredState("test-city", cityPath, time.Now().UTC(), cfg, runtime.NewFake(), cache, &stderr)
 
 	if len(dsResult.AssignedWorkBeads) != 0 {
 		t.Fatalf("AssignedWorkBeads = %d, want 0 for routed unassigned work", len(dsResult.AssignedWorkBeads))

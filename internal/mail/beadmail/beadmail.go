@@ -873,9 +873,29 @@ func (p *Provider) messageCandidatesForRoutes(routes []string) ([]beads.Bead, er
 
 	result := make([]beads.Bead, 0, len(order))
 	for _, id := range order {
-		result = append(result, seen[id])
+		result = append(result, p.hydrateMessageCandidate(seen[id]))
 	}
 	return result, nil
+}
+
+func (p *Provider) hydrateMessageCandidate(b beads.Bead) beads.Bead {
+	if p == nil || p.store == nil || !messageNeedsSenderHydration(b) {
+		return b
+	}
+	full, err := p.store.Get(b.ID)
+	if err != nil || !isMessage(full) {
+		return b
+	}
+	if !messageNeedsSenderHydration(full) {
+		return full
+	}
+	return b
+}
+
+func messageNeedsSenderHydration(b beads.Bead) bool {
+	return b.From == "" &&
+		strings.TrimSpace(b.Metadata["from"]) == "" &&
+		strings.TrimSpace(b.Metadata[fromDisplayMetadataKey]) == ""
 }
 
 // isMessage reports whether the bead is a message. Type="message" is the
@@ -887,6 +907,9 @@ func isMessage(b beads.Bead) bool {
 // beadToMessage converts a bead to a mail.Message.
 func beadToMessage(b beads.Bead) mail.Message {
 	from := b.From
+	if from == "" {
+		from = strings.TrimSpace(b.Metadata["from"])
+	}
 	if display := strings.TrimSpace(b.Metadata[fromDisplayMetadataKey]); display != "" {
 		from = display
 	}
