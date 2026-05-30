@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -9,6 +11,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/doctor"
+	"github.com/gastownhall/gascity/internal/routedwork"
 )
 
 func TestV2RoutedToNamespaceCheckWarnsOnShortBoundRoutes(t *testing.T) {
@@ -219,4 +222,217 @@ type routeQuerySpyStore struct {
 func (s *routeQuerySpyStore) List(query beads.ListQuery) ([]beads.Bead, error) {
 	s.queries = append(s.queries, query)
 	return s.Store.List(query)
+}
+
+func TestDoctorRoutedWorkDemandContractWarnsOnUnclaimableRoutedWork(t *testing.T) {
+	cityDir := t.TempDir()
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Agents: []config.Agent{{
+			Name:              "dog",
+			BindingName:       "gastown",
+			MaxActiveSessions: intPtr(3),
+			WorkSelector: config.WorkSelector{Any: []config.WorkSelector{
+				{Type: "step", Unassigned: true, Metadata: map[string]string{routedwork.RoutedToMetadataKey: "gastown.dog"}},
+				{Type: "task", Label: "warrant", Unassigned: true, Metadata: map[string]string{
+					routedwork.RoutedToMetadataKey:        "gastown.dog",
+					routedwork.AttachedFormulaMetadataKey: "mol-shutdown-dance",
+				}},
+			}},
+		}},
+	}
+	store := beads.NewMemStoreFrom(0, []beads.Bead{{
+		ID:       "CITY-RAW",
+		Title:    "raw warrant",
+		Type:     "task",
+		Status:   "open",
+		Labels:   []string{"warrant"},
+		Metadata: map[string]string{routedwork.RoutedToMetadataKey: "gastown.dog"},
+	}}, nil)
+
+	result := newRoutedWorkDemandContractCheck(cfg, cityDir, func(path string) (beads.Store, error) {
+		if path != cityDir {
+			return nil, fmt.Errorf("unexpected store path %q", path)
+		}
+		return store, nil
+	}).Run(&doctor.CheckContext{})
+
+	if result.Status != doctor.StatusWarning {
+		t.Fatalf("status = %v, want warning: %#v", result.Status, result)
+	}
+	details := strings.Join(result.Details, "\n")
+	for _, want := range []string{
+		"unclaimable routed work",
+		"CITY-RAW",
+		`gc.routed_to="gastown.dog"`,
+		"does not match work_selector",
+	} {
+		if !strings.Contains(details, want) {
+			t.Fatalf("details missing %q:\n%s", want, details)
+		}
+	}
+}
+
+func TestDoctorRoutedWorkDemandContractWarnsOnWrongClaimStore(t *testing.T) {
+	cityDir := t.TempDir()
+	rigDir := t.TempDir()
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Rigs:      []config.Rig{{Name: "frontend", Path: rigDir}},
+		Agents: []config.Agent{{
+			Name:              "dog",
+			BindingName:       "gastown",
+			MaxActiveSessions: intPtr(3),
+			WorkSelector: config.WorkSelector{
+				Type:       "task",
+				Unassigned: true,
+				Metadata:   map[string]string{routedwork.RoutedToMetadataKey: "gastown.dog"},
+			},
+		}},
+	}
+	cityStore := beads.NewMemStore()
+	rigStore := beads.NewMemStoreFrom(0, []beads.Bead{{
+		ID:       "RIG-WRONG",
+		Title:    "wrong store",
+		Type:     "task",
+		Status:   "open",
+		Metadata: map[string]string{routedwork.RoutedToMetadataKey: "gastown.dog"},
+	}}, nil)
+	stores := map[string]beads.Store{cityDir: cityStore, rigDir: rigStore}
+
+	result := newRoutedWorkDemandContractCheck(cfg, cityDir, func(path string) (beads.Store, error) {
+		store, ok := stores[path]
+		if !ok {
+			return nil, fmt.Errorf("unexpected store path %q", path)
+		}
+		return store, nil
+	}).Run(&doctor.CheckContext{})
+
+	if result.Status != doctor.StatusWarning {
+		t.Fatalf("status = %v, want warning: %#v", result.Status, result)
+	}
+	details := strings.Join(result.Details, "\n")
+	for _, want := range []string{
+		"wrong claim store",
+		"RIG-WRONG",
+		"rig frontend",
+		"city",
+	} {
+		if !strings.Contains(details, want) {
+			t.Fatalf("details missing %q:\n%s", want, details)
+		}
+	}
+}
+
+func TestDoctorRoutedWorkDemandContractWarnsOnOrderRootMissingSentinel(t *testing.T) {
+	cityDir := t.TempDir()
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Agents: []config.Agent{{
+			Name:              "dog",
+			BindingName:       "gastown",
+			MaxActiveSessions: intPtr(3),
+			WorkSelector: config.WorkSelector{
+				Type:       "molecule",
+				Unassigned: true,
+				Tier:       "both",
+				Metadata: map[string]string{
+					routedwork.RoutedToMetadataKey: "gastown.dog",
+				},
+			},
+		}},
+	}
+	store := beads.NewMemStoreFrom(0, []beads.Bead{{
+		ID:        "MOL-ORDER",
+		Title:     "order root",
+		Type:      "molecule",
+		Status:    "open",
+		Labels:    []string{"order-run:nightly"},
+		Ephemeral: true,
+		Metadata:  map[string]string{routedwork.RoutedToMetadataKey: "gastown.dog"},
+	}}, nil)
+
+	result := newRoutedWorkDemandContractCheck(cfg, cityDir, func(path string) (beads.Store, error) {
+		if path != cityDir {
+			return nil, fmt.Errorf("unexpected store path %q", path)
+		}
+		return store, nil
+	}).Run(&doctor.CheckContext{})
+
+	if result.Status != doctor.StatusWarning {
+		t.Fatalf("status = %v, want warning: %#v", result.Status, result)
+	}
+	details := strings.Join(result.Details, "\n")
+	for _, want := range []string{
+		"missing order demand sentinel",
+		"MOL-ORDER",
+		`gc.pool_demand="order"`,
+	} {
+		if !strings.Contains(details, want) {
+			t.Fatalf("details missing %q:\n%s", want, details)
+		}
+	}
+}
+
+func TestDoctorRoutedWorkDemandContractAllowsFormulaBackedWarrant(t *testing.T) {
+	cityDir := t.TempDir()
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Agents: []config.Agent{{
+			Name:              "dog",
+			BindingName:       "gastown",
+			MaxActiveSessions: intPtr(3),
+			WorkSelector: config.WorkSelector{Any: []config.WorkSelector{
+				{Type: "step", Unassigned: true, Metadata: map[string]string{routedwork.RoutedToMetadataKey: "gastown.dog"}},
+				{Type: "task", Label: "warrant", Unassigned: true, Metadata: map[string]string{
+					routedwork.RoutedToMetadataKey:        "gastown.dog",
+					routedwork.AttachedFormulaMetadataKey: "mol-shutdown-dance",
+				}},
+			}},
+		}},
+	}
+	store := beads.NewMemStoreFrom(0, []beads.Bead{{
+		ID:     "CITY-WARRANT",
+		Title:  "formula warrant",
+		Type:   "task",
+		Status: "open",
+		Labels: []string{"warrant"},
+		Metadata: map[string]string{
+			routedwork.RoutedToMetadataKey:        "gastown.dog",
+			routedwork.AttachedFormulaMetadataKey: "mol-shutdown-dance",
+		},
+	}}, nil)
+
+	result := newRoutedWorkDemandContractCheck(cfg, cityDir, func(path string) (beads.Store, error) {
+		if path != cityDir {
+			return nil, fmt.Errorf("unexpected store path %q", path)
+		}
+		return store, nil
+	}).Run(&doctor.CheckContext{})
+
+	if result.Status != doctor.StatusOK {
+		t.Fatalf("status = %v, want ok: %#v", result.Status, result)
+	}
+}
+
+func TestDoctorJSONIncludesRoutedWorkDemandContractKey(t *testing.T) {
+	var out bytes.Buffer
+	report := &doctor.Report{
+		Passed: 1,
+		Results: []*doctor.CheckResult{{
+			Name:    newRoutedWorkDemandContractCheck(&config.City{}, t.TempDir(), nil).Name(),
+			Status:  doctor.StatusOK,
+			Message: "ok",
+		}},
+	}
+	if err := writeDoctorJSON(&out, report); err != nil {
+		t.Fatalf("writeDoctorJSON: %v", err)
+	}
+	var decoded doctorJSONReport
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &decoded); err != nil {
+		t.Fatalf("decode doctor json: %v\n%s", err, out.String())
+	}
+	if len(decoded.Results) != 1 || decoded.Results[0].Name != "routed-work-demand-contract" {
+		t.Fatalf("doctor JSON results = %#v, want routed-work-demand-contract key", decoded.Results)
+	}
 }

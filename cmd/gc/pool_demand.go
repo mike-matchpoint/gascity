@@ -2,11 +2,13 @@
 
 package main
 
+import "github.com/gastownhall/gascity/internal/routedwork"
+
 const (
-	poolDemandMetadataKey   = "gc.pool_demand"
-	poolDemandMetadataValue = "order"
+	poolDemandMetadataKey   = routedwork.PoolDemandMetadataKey
+	poolDemandMetadataValue = routedwork.PoolDemandOrderValue
 )
 
 func poolDemandMetadataPair() map[string]string {
-	return map[string]string{poolDemandMetadataKey: poolDemandMetadataValue}
+	return routedwork.PoolDemandMetadataPair()
 }

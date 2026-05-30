@@ -94,6 +94,7 @@ export type AgentPatch = {
     Provider: string | null;
     ResumeCommand: string | null;
     ScaleCheck: string | null;
+    ScaleCheckQuery: WorkSelector;
     Scope: string | null;
     Session: string | null;
     SessionLive: Array<string> | null;
@@ -109,6 +110,7 @@ export type AgentPatch = {
     TmuxAlias: string | null;
     WakeMode: string | null;
     WorkDir: string | null;
+    WorkSelector: WorkSelector;
 };
 
 export type AgentPatchSetInputBody = {
@@ -213,14 +215,17 @@ export type AnnotatedProviderResponse = {
     acp_command?: string;
     args?: Array<string> | null;
     command?: string;
+    continuation_integrity?: string;
     display_name?: string;
     env?: {
         [key: string]: string;
     };
+    fatal_resume_errors?: Array<string> | null;
     /**
      * Provider origin: builtin, city, or builtin+city.
      */
     origin: string;
+    private_history_policy?: string;
     prompt_flag?: string;
     prompt_mode?: string;
     ready_delay_ms?: number;
@@ -754,7 +759,7 @@ export type EventEmitRequest = {
     type: string;
 };
 
-export type EventPayload = AdapterEventPayload | BeadEventPayload | BoundEventPayload | CityCreateSucceededPayload | CityLifecyclePayload | CityUnregisterSucceededPayload | GroupCreatedEventPayload | InboundEventPayload | MailEventPayload | NoPayload | OutboundEventPayload | ProjectIdentityStampedPayload | RequestFailedPayload | RotatedPayload | SessionCreateSucceededPayload | SessionDrainAckedWithAssignedWorkPayload | SessionLifecyclePayload | SessionMessageSucceededPayload | SessionSubmitSucceededPayload | StoreMaintenanceDonePayload | StoreMaintenanceFailedPayload | SupervisorFsPressureSkippedTickPayload | SupervisorShutdownPayload | UnboundEventPayload | WorkerOperationEventPayload;
+export type EventPayload = AdapterEventPayload | BeadEventPayload | BoundEventPayload | CityCreateSucceededPayload | CityLifecyclePayload | CityUnregisterSucceededPayload | GroupCreatedEventPayload | InboundEventPayload | MailEventPayload | NoPayload | OrderDispatchTickPayload | OutboundEventPayload | ProjectIdentityStampedPayload | RequestFailedPayload | RotatedPayload | RouteWorkEventPayload | SessionCreateSucceededPayload | SessionDrainAckedWithAssignedWorkPayload | SessionLifecyclePayload | SessionMessageSucceededPayload | SessionSubmitSucceededPayload | StoreMaintenanceDonePayload | StoreMaintenanceFailedPayload | SupervisorFsPressureSkippedTickPayload | SupervisorShutdownPayload | UnboundEventPayload | WorkerOperationEventPayload;
 
 export type EventRotateAnchor = {
     /**
@@ -1714,6 +1719,20 @@ export type OrderCheckResponse = {
     scoped_name: string;
 };
 
+export type OrderDispatchTickPayload = {
+    defer_reasons?: {
+        [key: string]: number;
+    };
+    dispatches_created: number;
+    duration_s: number;
+    in_flight?: number;
+    orders_considered: number;
+    orders_deferred: number;
+    started_at: string;
+    stores_touched: number;
+    tracking_write_failures?: number;
+};
+
 export type OrderHistoryDetailResponse = {
     bead_id: string;
     created_at: string;
@@ -1915,6 +1934,10 @@ export type ProviderCreateInputBody = {
      */
     command?: string;
     /**
+     * Provider continuation reuse policy.
+     */
+    continuation_integrity?: string;
+    /**
      * Human-readable display name.
      */
     display_name?: string;
@@ -1925,6 +1948,10 @@ export type ProviderCreateInputBody = {
         [key: string]: string;
     };
     /**
+     * Provider output classifiers that force fresh continuation.
+     */
+    fatal_resume_errors?: Array<string> | null;
+    /**
      * Provider name.
      */
     name: string;
@@ -1932,6 +1959,10 @@ export type ProviderCreateInputBody = {
      * Options schema merge mode across inheritance chain.
      */
     options_schema_merge?: string;
+    /**
+     * Opaque provider-private transcript handling policy.
+     */
+    private_history_policy?: string;
     /**
      * Flag for prompt delivery.
      */
@@ -1973,12 +2004,15 @@ export type ProviderPatch = {
     ArgsAppend: Array<string> | null;
     Base: string | null;
     Command: string | null;
+    ContinuationIntegrity: string | null;
     Env: {
         [key: string]: string;
     };
     EnvRemove: Array<string> | null;
+    FatalResumeErrors: Array<string> | null;
     Name: string;
     OptionsSchemaMerge: string | null;
+    PrivateHistoryPolicy: string | null;
     PromptFlag: string | null;
     PromptMode: string | null;
     ReadyDelayMs: number | null;
@@ -2090,10 +2124,13 @@ export type ProviderSpecJson = {
     acp_command?: string;
     args?: Array<string> | null;
     command?: string;
+    continuation_integrity?: string;
     display_name?: string;
     env?: {
         [key: string]: string;
     };
+    fatal_resume_errors?: Array<string> | null;
+    private_history_policy?: string;
     prompt_flag?: string;
     prompt_mode?: string;
     ready_delay_ms?: number;
@@ -2125,6 +2162,10 @@ export type ProviderUpdateInputBody = {
      */
     command?: string;
     /**
+     * Provider continuation reuse policy.
+     */
+    continuation_integrity?: string;
+    /**
      * Human-readable display name.
      */
     display_name?: string;
@@ -2135,9 +2176,17 @@ export type ProviderUpdateInputBody = {
         [key: string]: string;
     };
     /**
+     * Provider output classifiers that force fresh continuation.
+     */
+    fatal_resume_errors?: Array<string> | null;
+    /**
      * Options schema merge mode across inheritance chain.
      */
     options_schema_merge?: string;
+    /**
+     * Opaque provider-private transcript handling policy.
+     */
+    private_history_policy?: string;
     /**
      * Flag for prompt delivery.
      */
@@ -2318,6 +2367,21 @@ export type RotatedPayload = {
     prior_archive: string;
     prior_first_seq: number;
     prior_last_seq: number;
+};
+
+export type RouteWorkEventPayload = {
+    bead_id?: string;
+    claim_store_ref?: string;
+    error_code?: string;
+    error_message?: string;
+    formula?: string;
+    idempotent?: boolean;
+    method?: string;
+    requested_target?: string;
+    store_ref?: string;
+    target?: string;
+    wisp_root_id?: string;
+    workflow_id?: string;
 };
 
 export type ScopeGroup = {
@@ -3224,6 +3288,8 @@ export type TypedEventStreamEnvelope = ({
 } & TypedEventStreamEnvelopeMailSent) | ({
     type: 'order.completed';
 } & TypedEventStreamEnvelopeOrderCompleted) | ({
+    type: 'order.dispatch.tick';
+} & TypedEventStreamEnvelopeOrderDispatchTick) | ({
     type: 'order.failed';
 } & TypedEventStreamEnvelopeOrderFailed) | ({
     type: 'order.fired';
@@ -3244,6 +3310,14 @@ export type TypedEventStreamEnvelope = ({
 } & TypedEventStreamEnvelopeRequestResultSessionMessage) | ({
     type: 'request.result.session.submit';
 } & TypedEventStreamEnvelopeRequestResultSessionSubmit) | ({
+    type: 'route.create.formula_attached';
+} & TypedEventStreamEnvelopeRouteCreateFormulaAttached) | ({
+    type: 'route.create.routed';
+} & TypedEventStreamEnvelopeRouteCreateRouted) | ({
+    type: 'route.create.source_created';
+} & TypedEventStreamEnvelopeRouteCreateSourceCreated) | ({
+    type: 'route.create.validation_failed';
+} & TypedEventStreamEnvelopeRouteCreateValidationFailed) | ({
     type: 'session.crashed';
 } & TypedEventStreamEnvelopeSessionCrashed) | ({
     type: 'session.drain_acked_with_assigned_work';
@@ -3270,6 +3344,14 @@ export type TypedEventStreamEnvelope = ({
 } & TypedEventStreamEnvelopeSessionWoke) | ({
     type: 'session.work_query_failed';
 } & TypedEventStreamEnvelopeSessionWorkQueryFailed) | ({
+    type: 'sling.formula_attached';
+} & TypedEventStreamEnvelopeSlingFormulaAttached) | ({
+    type: 'sling.formula_attachment_rejected';
+} & TypedEventStreamEnvelopeSlingFormulaAttachmentRejected) | ({
+    type: 'sling.formula_attachment_skipped';
+} & TypedEventStreamEnvelopeSlingFormulaAttachmentSkipped) | ({
+    type: 'sling.routed';
+} & TypedEventStreamEnvelopeSlingRouted) | ({
     type: 'supervisor.fs_pressure.skipped_tick';
 } & TypedEventStreamEnvelopeSupervisorFsPressureSkippedTick) | ({
     type: 'supervisor.shutdown_requested';
@@ -3700,6 +3782,20 @@ export type TypedEventStreamEnvelopeOrderCompleted = {
 };
 
 /**
+ * TypedEventStreamEnvelope order.dispatch.tick
+ */
+export type TypedEventStreamEnvelopeOrderDispatchTick = {
+    actor: string;
+    message?: string;
+    payload: OrderDispatchTickPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'order.dispatch.tick';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
  * TypedEventStreamEnvelope order.failed
  */
 export type TypedEventStreamEnvelopeOrderFailed = {
@@ -3836,6 +3932,62 @@ export type TypedEventStreamEnvelopeRequestResultSessionSubmit = {
     subject?: string;
     ts: string;
     type: 'request.result.session.submit';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedEventStreamEnvelope route.create.formula_attached
+ */
+export type TypedEventStreamEnvelopeRouteCreateFormulaAttached = {
+    actor: string;
+    message?: string;
+    payload: RouteWorkEventPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'route.create.formula_attached';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedEventStreamEnvelope route.create.routed
+ */
+export type TypedEventStreamEnvelopeRouteCreateRouted = {
+    actor: string;
+    message?: string;
+    payload: RouteWorkEventPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'route.create.routed';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedEventStreamEnvelope route.create.source_created
+ */
+export type TypedEventStreamEnvelopeRouteCreateSourceCreated = {
+    actor: string;
+    message?: string;
+    payload: RouteWorkEventPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'route.create.source_created';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedEventStreamEnvelope route.create.validation_failed
+ */
+export type TypedEventStreamEnvelopeRouteCreateValidationFailed = {
+    actor: string;
+    message?: string;
+    payload: RouteWorkEventPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'route.create.validation_failed';
     workflow?: WorkflowEventProjection;
 };
 
@@ -4022,6 +4174,62 @@ export type TypedEventStreamEnvelopeSessionWorkQueryFailed = {
 };
 
 /**
+ * TypedEventStreamEnvelope sling.formula_attached
+ */
+export type TypedEventStreamEnvelopeSlingFormulaAttached = {
+    actor: string;
+    message?: string;
+    payload: RouteWorkEventPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'sling.formula_attached';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedEventStreamEnvelope sling.formula_attachment_rejected
+ */
+export type TypedEventStreamEnvelopeSlingFormulaAttachmentRejected = {
+    actor: string;
+    message?: string;
+    payload: RouteWorkEventPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'sling.formula_attachment_rejected';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedEventStreamEnvelope sling.formula_attachment_skipped
+ */
+export type TypedEventStreamEnvelopeSlingFormulaAttachmentSkipped = {
+    actor: string;
+    message?: string;
+    payload: RouteWorkEventPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'sling.formula_attachment_skipped';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedEventStreamEnvelope sling.routed
+ */
+export type TypedEventStreamEnvelopeSlingRouted = {
+    actor: string;
+    message?: string;
+    payload: RouteWorkEventPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'sling.routed';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
  * TypedEventStreamEnvelope supervisor.fs_pressure.skipped_tick
  */
 export type TypedEventStreamEnvelopeSupervisorFsPressureSkippedTick = {
@@ -4127,6 +4335,8 @@ export type TypedTaggedEventStreamEnvelope = ({
 } & TypedTaggedEventStreamEnvelopeMailSent) | ({
     type: 'order.completed';
 } & TypedTaggedEventStreamEnvelopeOrderCompleted) | ({
+    type: 'order.dispatch.tick';
+} & TypedTaggedEventStreamEnvelopeOrderDispatchTick) | ({
     type: 'order.failed';
 } & TypedTaggedEventStreamEnvelopeOrderFailed) | ({
     type: 'order.fired';
@@ -4147,6 +4357,14 @@ export type TypedTaggedEventStreamEnvelope = ({
 } & TypedTaggedEventStreamEnvelopeRequestResultSessionMessage) | ({
     type: 'request.result.session.submit';
 } & TypedTaggedEventStreamEnvelopeRequestResultSessionSubmit) | ({
+    type: 'route.create.formula_attached';
+} & TypedTaggedEventStreamEnvelopeRouteCreateFormulaAttached) | ({
+    type: 'route.create.routed';
+} & TypedTaggedEventStreamEnvelopeRouteCreateRouted) | ({
+    type: 'route.create.source_created';
+} & TypedTaggedEventStreamEnvelopeRouteCreateSourceCreated) | ({
+    type: 'route.create.validation_failed';
+} & TypedTaggedEventStreamEnvelopeRouteCreateValidationFailed) | ({
     type: 'session.crashed';
 } & TypedTaggedEventStreamEnvelopeSessionCrashed) | ({
     type: 'session.drain_acked_with_assigned_work';
@@ -4173,6 +4391,14 @@ export type TypedTaggedEventStreamEnvelope = ({
 } & TypedTaggedEventStreamEnvelopeSessionWoke) | ({
     type: 'session.work_query_failed';
 } & TypedTaggedEventStreamEnvelopeSessionWorkQueryFailed) | ({
+    type: 'sling.formula_attached';
+} & TypedTaggedEventStreamEnvelopeSlingFormulaAttached) | ({
+    type: 'sling.formula_attachment_rejected';
+} & TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentRejected) | ({
+    type: 'sling.formula_attachment_skipped';
+} & TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentSkipped) | ({
+    type: 'sling.routed';
+} & TypedTaggedEventStreamEnvelopeSlingRouted) | ({
     type: 'supervisor.fs_pressure.skipped_tick';
 } & TypedTaggedEventStreamEnvelopeSupervisorFsPressureSkippedTick) | ({
     type: 'supervisor.shutdown_requested';
@@ -4633,6 +4859,21 @@ export type TypedTaggedEventStreamEnvelopeOrderCompleted = {
 };
 
 /**
+ * TypedTaggedEventStreamEnvelope order.dispatch.tick
+ */
+export type TypedTaggedEventStreamEnvelopeOrderDispatchTick = {
+    actor: string;
+    city: string;
+    message?: string;
+    payload: OrderDispatchTickPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'order.dispatch.tick';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
  * TypedTaggedEventStreamEnvelope order.failed
  */
 export type TypedTaggedEventStreamEnvelopeOrderFailed = {
@@ -4779,6 +5020,66 @@ export type TypedTaggedEventStreamEnvelopeRequestResultSessionSubmit = {
     subject?: string;
     ts: string;
     type: 'request.result.session.submit';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedTaggedEventStreamEnvelope route.create.formula_attached
+ */
+export type TypedTaggedEventStreamEnvelopeRouteCreateFormulaAttached = {
+    actor: string;
+    city: string;
+    message?: string;
+    payload: RouteWorkEventPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'route.create.formula_attached';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedTaggedEventStreamEnvelope route.create.routed
+ */
+export type TypedTaggedEventStreamEnvelopeRouteCreateRouted = {
+    actor: string;
+    city: string;
+    message?: string;
+    payload: RouteWorkEventPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'route.create.routed';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedTaggedEventStreamEnvelope route.create.source_created
+ */
+export type TypedTaggedEventStreamEnvelopeRouteCreateSourceCreated = {
+    actor: string;
+    city: string;
+    message?: string;
+    payload: RouteWorkEventPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'route.create.source_created';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedTaggedEventStreamEnvelope route.create.validation_failed
+ */
+export type TypedTaggedEventStreamEnvelopeRouteCreateValidationFailed = {
+    actor: string;
+    city: string;
+    message?: string;
+    payload: RouteWorkEventPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'route.create.validation_failed';
     workflow?: WorkflowEventProjection;
 };
 
@@ -4978,6 +5279,66 @@ export type TypedTaggedEventStreamEnvelopeSessionWorkQueryFailed = {
 };
 
 /**
+ * TypedTaggedEventStreamEnvelope sling.formula_attached
+ */
+export type TypedTaggedEventStreamEnvelopeSlingFormulaAttached = {
+    actor: string;
+    city: string;
+    message?: string;
+    payload: RouteWorkEventPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'sling.formula_attached';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedTaggedEventStreamEnvelope sling.formula_attachment_rejected
+ */
+export type TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentRejected = {
+    actor: string;
+    city: string;
+    message?: string;
+    payload: RouteWorkEventPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'sling.formula_attachment_rejected';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedTaggedEventStreamEnvelope sling.formula_attachment_skipped
+ */
+export type TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentSkipped = {
+    actor: string;
+    city: string;
+    message?: string;
+    payload: RouteWorkEventPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'sling.formula_attachment_skipped';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedTaggedEventStreamEnvelope sling.routed
+ */
+export type TypedTaggedEventStreamEnvelopeSlingRouted = {
+    actor: string;
+    city: string;
+    message?: string;
+    payload: RouteWorkEventPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'sling.routed';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
  * TypedTaggedEventStreamEnvelope supervisor.fs_pressure.skipped_tick
  */
 export type TypedTaggedEventStreamEnvelopeSupervisorFsPressureSkippedTick = {
@@ -5025,6 +5386,37 @@ export type TypedTaggedEventStreamEnvelopeWorkerOperation = {
 export type UnboundEventPayload = {
     count: number;
     session_id: string;
+};
+
+export type WorkSelector = {
+    Any: Array<{
+        Assignee: string;
+        ExcludeType: string;
+        Label: string;
+        Metadata: {
+            [key: string]: string;
+        };
+        Parent: string;
+        Ready: boolean;
+        Sort: string;
+        Status: string;
+        Tier: string;
+        Type: string;
+        Unassigned: boolean;
+    }> | null;
+    Assignee: string;
+    ExcludeType: string;
+    Label: string;
+    Metadata: {
+        [key: string]: string;
+    };
+    Parent: string;
+    Ready: boolean;
+    Sort: string;
+    Status: string;
+    Tier: string;
+    Type: string;
+    Unassigned: boolean;
 };
 
 export type WorkerOperationEventPayload = {

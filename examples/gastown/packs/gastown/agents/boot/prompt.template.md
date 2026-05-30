@@ -94,12 +94,17 @@ Drain-ack and exit. Next Boot wake will re-evaluate.
 
 **Clearly stuck (very stale wisp, no output, errors visible):** File a warrant:
 ```bash
-gc bd create --type=task \
+gc route create --target {{ .BindingPrefix }}dog \
+  --on mol-shutdown-dance \
+  --type task \
+  --label warrant \
   --title="Stuck: {{ .BindingPrefix }}deacon" \
-  --metadata '{"target":"{{ .BindingPrefix }}deacon","reason":"Stale patrol wisp, no activity","requester":"boot","gc.routed_to":"{{ .BindingPrefix }}dog"}' \
-  --label=warrant
+  --metadata target="{{ .BindingPrefix }}deacon" \
+  --metadata reason="Stale patrol wisp, no activity" \
+  --metadata requester="boot"
 ```
-The dog pool picks up the warrant and runs the shutdown dance.
+The warrant bead remains the audit/lifecycle record. The dog pool picks up
+the attached `mol-shutdown-dance` work.
 
 ### Step 4: Signal done and exit
 
@@ -130,7 +135,7 @@ with a fresh provider context.
 | View deacon output | `{{ cmd }} session peek {{ .BindingPrefix }}deacon --lines 30` |
 | Check deacon work | `gc bd list --assignee={{ .BindingPrefix }}deacon --status=in_progress --json` |
 | Nudge deacon | `{{ cmd }} session nudge {{ .BindingPrefix }}deacon "message"` |
-| File stuck warrant | `gc bd create --type=task --label=warrant --metadata '{"target":"{{ .BindingPrefix }}deacon","reason":"...","requester":"boot","gc.routed_to":"{{ .BindingPrefix }}dog"}'` |
+| File stuck warrant | `gc route create --target {{ .BindingPrefix }}dog --on mol-shutdown-dance --type task --label warrant --title="Stuck: {{ .BindingPrefix }}deacon" --metadata target="{{ .BindingPrefix }}deacon" --metadata reason="..." --metadata requester="boot"` |
 | Check active sessions | `{{ cmd }} session list` |
 
 Working directory: {{ .WorkDir }}

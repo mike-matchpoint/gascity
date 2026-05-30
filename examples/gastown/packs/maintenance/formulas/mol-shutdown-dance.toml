@@ -1,18 +1,26 @@
 description = """
 Shutdown dance — due process for stuck agents.
 
-Dispatched by filing a warrant bead routed to the dog pool:
+Dispatched by filing a warrant bead, then attaching this formula through the
+typed dog route:
 
 ```bash
-gc bd create --type=task \
+gc route create --target <binding-prefix>dog \
+  --on mol-shutdown-dance \
+  --type task \
+  --label warrant \
   --title="Stuck: <agent>" \
-  --metadata '{"target":"<session>","reason":"<reason>","requester":"<who>","gc.routed_to":"<binding-prefix>dog"}' \
-  --label=warrant
+  --metadata target="<session>" \
+  --metadata reason="<reason>" \
+  --metadata requester="<who>"
 ```
 
-The dog pool picks up the warrant and pours this formula. Each wisp is
-one shutdown dance for one target. On crash, re-read formula steps and
-resume from context (check target state, attempt history).
+The warrant bead remains the audit/lifecycle record. The dog pool picks
+up only warrant tasks that are both routed to dog and stamped
+`gc.attached_formula=mol-shutdown-dance`; raw metadata-only warrants are
+mis-routed. Each wisp is one shutdown dance for one target. On crash,
+re-read formula steps and resume from context (check target state,
+attempt history).
 
 ## State Machine
 
@@ -63,7 +71,7 @@ required = true
 
 [vars.requester]
 description = "Who filed the warrant (deacon, witness, etc.)"
-default = "deacon"
+required = true
 
 [[steps]]
 id = "receive-warrant"

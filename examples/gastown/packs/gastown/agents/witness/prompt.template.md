@@ -130,14 +130,19 @@ A long tool call is different from an infinite loop.
 for the dog pool:
 
 ```bash
-gc bd create --type=task \
+gc route create --target {{ .BindingPrefix }}dog \
+  --on mol-shutdown-dance \
+  --type task \
+  --label warrant \
   --title="Stuck: <agent>" \
-  --metadata '{"target":"<session>","reason":"<reason>","requester":"witness","gc.routed_to":"{{ .BindingPrefix }}dog"}' \
-  --label=warrant
+  --metadata target="<session>" \
+  --metadata reason="<reason>" \
+  --metadata requester="witness"
 ```
 
-The dog pool runs `mol-shutdown-dance` — a multi-stage interrogation
-that gives the polecat 3 chances to prove it's alive before killing it.
+The warrant bead remains the audit/lifecycle record. The dog pool runs
+the attached `mol-shutdown-dance` work - a multi-stage interrogation that
+gives the polecat 3 chances to prove it's alive before killing it.
 This is due process, not summary execution.
 
 ---
@@ -298,7 +303,7 @@ gc mail send mayor/ -s "ESCALATION: Brief description [HIGH]" -m "Details"
 | Salvage worktree work | `git add -A && git commit && git push origin HEAD` |
 | Delete worktree | `git worktree remove <path> --force` |
 | Set branch metadata | `gc bd update <id> --set-metadata branch=<name>` |
-| File stuck-agent warrant | `gc bd create --type=task --label=warrant --metadata '{"target":"<session>","reason":"<reason>","requester":"witness","gc.routed_to":"{{ .BindingPrefix }}dog"}'` |
+| File stuck-agent warrant | `gc route create --target {{ .BindingPrefix }}dog --on mol-shutdown-dance --type task --label warrant --title="Stuck: <agent>" --metadata target="<session>" --metadata reason="<reason>" --metadata requester="witness"` |
 
 Rig: {{ .RigName }}
 Working directory: {{ .WorkDir }}

@@ -154,6 +154,11 @@ func (w *beadWire) toBead() beads.Bead {
 		cloned := *w.Priority
 		priority = &cloned
 	}
+	metadata := coerceMetadata(w.Metadata)
+	from := w.From
+	if from == "" && metadata != nil {
+		from = metadata["from"]
+	}
 	return beads.Bead{
 		ID:          w.ID,
 		Title:       w.Title,
@@ -162,13 +167,13 @@ func (w *beadWire) toBead() beads.Bead {
 		Priority:    priority,
 		CreatedAt:   w.CreatedAt,
 		Assignee:    w.Assignee,
-		From:        w.From,
+		From:        from,
 		ParentID:    w.ParentID,
 		Ref:         w.Ref,
 		Needs:       w.Needs,
 		Description: w.Description,
 		Labels:      w.Labels,
-		Metadata:    coerceMetadata(w.Metadata),
+		Metadata:    metadata,
 		Ephemeral:   w.Ephemeral,
 	}
 }

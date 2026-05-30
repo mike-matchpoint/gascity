@@ -878,6 +878,31 @@ esac
 	}
 }
 
+func TestList_fromFallsBackToMetadataFrom(t *testing.T) {
+	dir := t.TempDir()
+
+	script := writeScript(t, dir, `
+case "$1" in
+  list)
+    echo '[{"id":"EX-1","title":"status","status":"open","type":"message","created_at":"2026-01-01T00:00:00Z","assignee":"mayor","metadata":{"from":"human"}}]'
+    ;;
+  *) exit 2 ;;
+esac
+`)
+	s := NewStore(script)
+
+	got, err := s.List(beads.ListQuery{Type: "message", Assignee: "mayor", Status: "open"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("List returned %d beads, want 1", len(got))
+	}
+	if got[0].From != "human" {
+		t.Fatalf("From = %q, want metadata from fallback", got[0].From)
+	}
+}
+
 // --- Error handling ---
 
 func TestErrorPropagation(t *testing.T) {

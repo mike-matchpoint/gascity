@@ -23,6 +23,22 @@ func (s noListScanStore) List(query beads.ListQuery) ([]beads.Bead, error) {
 	return s.MemStore.List(query)
 }
 
+type messageListWithoutSenderStore struct {
+	*beads.MemStore
+}
+
+func (s messageListWithoutSenderStore) List(query beads.ListQuery) ([]beads.Bead, error) {
+	items, err := s.MemStore.List(query)
+	for i := range items {
+		if items[i].Type != "message" {
+			continue
+		}
+		items[i].From = ""
+		items[i].Metadata = nil
+	}
+	return items, err
+}
+
 type noBroadSessionRouteStore struct {
 	*beads.MemStore
 	t *testing.T
@@ -533,6 +549,36 @@ func TestInboxFilters(t *testing.T) {
 	}
 	if msgs[0].Body != "for mayor" {
 		t.Errorf("Body = %q, want %q", msgs[0].Body, "for mayor")
+	}
+}
+
+func TestInboxHydratesSenderWhenListOmitsFrom(t *testing.T) {
+	store := beads.NewMemStore()
+	sent, err := store.Create(beads.Bead{
+		Title:       "status",
+		Type:        "message",
+		Assignee:    "mayor",
+		From:        "human",
+		Description: "hello",
+		Metadata:    map[string]string{"from": "human"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	p := New(messageListWithoutSenderStore{MemStore: store})
+
+	msgs, err := p.Inbox("mayor")
+	if err != nil {
+		t.Fatalf("Inbox: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("Inbox returned %d messages, want 1", len(msgs))
+	}
+	if msgs[0].ID != sent.ID {
+		t.Fatalf("Inbox returned %s, want %s", msgs[0].ID, sent.ID)
+	}
+	if msgs[0].From != "human" {
+		t.Fatalf("From = %q, want hydrated sender", msgs[0].From)
 	}
 }
 

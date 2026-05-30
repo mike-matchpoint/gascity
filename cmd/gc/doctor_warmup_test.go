@@ -17,6 +17,7 @@ func TestCommandDoctorChecksWarmupEligibleDefaultsFalse(t *testing.T) {
 		&mcpConfigDoctorCheck{},
 		&mcpSharedTargetDoctorCheck{},
 		&sessionModelDoctorCheck{},
+		&routedWorkDemandContractCheck{},
 		&v2RoutedToNamespaceCheck{},
 		v2FormulasDirCheck{},
 		v2AgentFormatCheck{},

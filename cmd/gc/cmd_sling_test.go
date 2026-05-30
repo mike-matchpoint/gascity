@@ -19,6 +19,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/pgauth"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/shellquote"
@@ -3639,7 +3640,7 @@ func TestOnAndFormulaMutuallyExclusive(t *testing.T) {
 	}
 }
 
-func TestOnFormulaAttachesAndRoutes(t *testing.T) {
+func TestSlingOnFormulaAttachesAndRoutes(t *testing.T) {
 	runner := newFakeRunner()
 	sp := runtime.NewFake()
 	cfg := &config.City{Workspace: config.Workspace{Name: "test-city"}}
@@ -3666,6 +3667,9 @@ func TestOnFormulaAttachesAndRoutes(t *testing.T) {
 	if source.Metadata["gc.routed_to"] != "mayor" {
 		t.Errorf("gc.routed_to = %q, want mayor", source.Metadata["gc.routed_to"])
 	}
+	if source.Metadata["gc.attached_formula"] != "code-review" {
+		t.Errorf("gc.attached_formula = %q, want code-review", source.Metadata["gc.attached_formula"])
+	}
 	rootID := source.Metadata["molecule_id"]
 	if rootID == "" {
 		t.Fatal("source bead missing molecule_id")
@@ -3680,6 +3684,141 @@ func TestOnFormulaAttachesAndRoutes(t *testing.T) {
 	}
 	if b.Ref != "code-review" {
 		t.Errorf("wisp Ref = %q, want %q", b.Ref, "code-review")
+	}
+}
+
+func writeShutdownDanceRequiredVarsFormula(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "mol-shutdown-dance.toml"), []byte(`
+formula = "mol-shutdown-dance"
+version = 1
+
+[vars.warrant_id]
+required = true
+
+[vars.target]
+required = true
+
+[vars.reason]
+required = true
+
+[vars.requester]
+required = true
+
+[[steps]]
+id = "root"
+title = "Shutdown {{warrant_id}}"
+metadata = { "warrant_id" = "{{warrant_id}}", "target" = "{{target}}", "reason" = "{{reason}}", "requester" = "{{requester}}" }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWarrantFormulaAttachUsesSourceMetadataVars(t *testing.T) {
+	runner := newFakeRunner()
+	sp := runtime.NewFake()
+	dir := testFormulaDir(t)
+	writeShutdownDanceRequiredVarsFormula(t, dir)
+	cfg := &config.City{
+		Workspace:     config.Workspace{Name: "test-city"},
+		FormulaLayers: config.FormulaLayers{City: []string{dir}},
+	}
+	a := config.Agent{Name: "mayor", MaxActiveSessions: intPtr(1)}
+
+	deps, stdout, stderr := testDeps(cfg, sp, runner.run)
+	deps.Store = beads.NewMemStoreFrom(1, []beads.Bead{
+		{
+			ID:     "BL-42",
+			Title:  "Warrant",
+			Type:   "task",
+			Status: "open",
+			Metadata: map[string]string{
+				"target":    "session-123",
+				"reason":    "validation",
+				"requester": "operator",
+			},
+		},
+	}, nil)
+	opts := testOpts(a, "BL-42")
+	opts.OnFormula = "mol-shutdown-dance"
+	code := doSling(opts, deps, deps.Store, stdout, stderr)
+
+	if code != 0 {
+		t.Fatalf("doSling returned %d, want 0; stderr: %s", code, stderr.String())
+	}
+	source, err := deps.Store.Get("BL-42")
+	if err != nil {
+		t.Fatalf("store.Get(BL-42): %v", err)
+	}
+	if source.Metadata["gc.attached_formula"] != "mol-shutdown-dance" {
+		t.Fatalf("gc.attached_formula = %q, want mol-shutdown-dance", source.Metadata["gc.attached_formula"])
+	}
+	rootID := source.Metadata["molecule_id"]
+	if rootID == "" {
+		t.Fatal("source bead missing molecule_id")
+	}
+	children, err := deps.Store.List(beads.ListQuery{ParentID: rootID})
+	if err != nil {
+		t.Fatalf("store.List children for %s: %v", rootID, err)
+	}
+	if len(children) != 1 {
+		t.Fatalf("attached formula children = %d, want 1", len(children))
+	}
+	for key, want := range map[string]string{
+		"warrant_id": "BL-42",
+		"target":     "session-123",
+		"reason":     "validation",
+		"requester":  "operator",
+	} {
+		if got := children[0].Metadata[key]; got != want {
+			t.Fatalf("formula child metadata %s = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestWarrantFormulaAttachMissingSourceMetadataFailsBeforeAttachment(t *testing.T) {
+	runner := newFakeRunner()
+	sp := runtime.NewFake()
+	dir := testFormulaDir(t)
+	writeShutdownDanceRequiredVarsFormula(t, dir)
+	cfg := &config.City{
+		Workspace:     config.Workspace{Name: "test-city"},
+		FormulaLayers: config.FormulaLayers{City: []string{dir}},
+	}
+	a := config.Agent{Name: "mayor", MaxActiveSessions: intPtr(1)}
+
+	deps, stdout, stderr := testDeps(cfg, sp, runner.run)
+	deps.Store = beads.NewMemStoreFrom(1, []beads.Bead{
+		{
+			ID:     "BL-42",
+			Title:  "Warrant",
+			Type:   "task",
+			Status: "open",
+			Metadata: map[string]string{
+				"target":    "session-123",
+				"requester": "operator",
+			},
+		},
+	}, nil)
+	opts := testOpts(a, "BL-42")
+	opts.OnFormula = "mol-shutdown-dance"
+	code := doSling(opts, deps, deps.Store, stdout, stderr)
+
+	if code != 1 {
+		t.Fatalf("doSling returned %d, want 1; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), `variable "reason" is required`) {
+		t.Fatalf("stderr = %q, want missing reason validation", stderr.String())
+	}
+	source, err := deps.Store.Get("BL-42")
+	if err != nil {
+		t.Fatalf("store.Get(BL-42): %v", err)
+	}
+	if source.Metadata["molecule_id"] != "" {
+		t.Fatalf("source molecule_id = %q, want empty after validation failure", source.Metadata["molecule_id"])
+	}
+	if source.Metadata["gc.attached_formula"] != "" {
+		t.Fatalf("gc.attached_formula = %q, want empty after validation failure", source.Metadata["gc.attached_formula"])
 	}
 }
 
@@ -4842,6 +4981,9 @@ func TestOnFormulaMetadataAttachmentSkipsIdempotentRetry(t *testing.T) {
 	if firstRootID == "" {
 		t.Fatal("first sling did not set molecule_id")
 	}
+	if source.Metadata["gc.attached_formula"] != "code-review" {
+		t.Fatalf("first sling gc.attached_formula = %q, want code-review", source.Metadata["gc.attached_formula"])
+	}
 	assertStoreRoutedTo(t, deps.Store, "BL-42", "mayor")
 
 	stdout.Reset()
@@ -4870,6 +5012,47 @@ func TestOnFormulaMetadataAttachmentSkipsIdempotentRetry(t *testing.T) {
 	}
 	if updatedSource.Metadata["molecule_id"] != firstRootID {
 		t.Fatalf("source molecule_id = %q, want %q", updatedSource.Metadata["molecule_id"], firstRootID)
+	}
+}
+
+func TestSlingOnFormulaEmitsAttachmentAndDuplicateEvents(t *testing.T) {
+	runner := newFakeRunner()
+	sp := runtime.NewFake()
+	cfg := &config.City{Workspace: config.Workspace{Name: "test-city"}}
+	a := config.Agent{Name: "mayor", MaxActiveSessions: intPtr(1)}
+
+	deps, stdout, stderr := testDeps(cfg, sp, runner.run)
+	rec := events.NewFake()
+	deps.Recorder = rec
+	deps.EventActor = "test"
+	deps.Store = beads.NewMemStoreFrom(1, []beads.Bead{{ID: "BL-42", Title: "Work", Type: "task", Status: "open"}}, nil)
+	opts := testOpts(a, "BL-42")
+	opts.OnFormula = "code-review"
+
+	if code := doSling(opts, deps, deps.Store, stdout, stderr); code != 0 {
+		t.Fatalf("first doSling returned %d, want 0; stderr: %s", code, stderr.String())
+	}
+	for _, want := range []string{events.SlingRouted, events.SlingFormulaAttached} {
+		if !fakeEventsContainType(rec, want) {
+			t.Fatalf("missing event type %q after first sling; events=%v", want, fakeEventTypes(rec))
+		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := doSling(opts, deps, deps.Store, stdout, stderr); code != 0 {
+		t.Fatalf("second doSling returned %d, want 0; stderr: %s", code, stderr.String())
+	}
+	ev, ok := firstFakeEventOfType(rec, events.SlingFormulaAttachmentSkipped)
+	if !ok {
+		t.Fatalf("missing duplicate attachment skipped event; events=%v", fakeEventTypes(rec))
+	}
+	var payload events.RouteWorkEventPayload
+	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+		t.Fatalf("decode payload: %v; raw=%s", err, ev.Payload)
+	}
+	if !payload.Idempotent || payload.BeadID != "BL-42" || payload.Formula != "code-review" || payload.Target != "mayor" {
+		t.Fatalf("payload = %#v, want idempotent duplicate attachment evidence", payload)
 	}
 }
 
@@ -6415,32 +6598,48 @@ func TestDoSlingIdempotentForceOverrides(t *testing.T) {
 	}
 }
 
-func TestDoSlingIdempotentWithOnFormula(t *testing.T) {
+func TestDoSlingOnFormulaPreRoutedBeadAttachesFormula(t *testing.T) {
 	runner := newFakeRunner()
 	runner.on("bd mol cook", "WP-1\n", nil)
 	sp := runtime.NewFake()
 	cfg := &config.City{Workspace: config.Workspace{Name: "test-city"}}
 	a := config.Agent{Name: "mayor", MaxActiveSessions: intPtr(1)}
-	// Bead is already assigned to mayor with a live convoy parent — idempotent.
-	q := &fakeQuerier{
-		bead:   beads.Bead{ID: "BL-42", ParentID: "CVY-1", Assignee: "mayor"},
-		parent: &beads.Bead{ID: "CVY-1", Type: "convoy", Status: "open"},
-	}
 
 	deps, stdout, stderr := testDeps(cfg, sp, runner.run)
+	deps.Store = beads.NewMemStoreFrom(1, []beads.Bead{
+		{ID: "CVY-1", Title: "existing convoy", Type: "convoy", Status: "open"},
+		{
+			ID:       "BL-42",
+			Title:    "pre-routed work",
+			Type:     "task",
+			Status:   "open",
+			ParentID: "CVY-1",
+			Assignee: "mayor",
+			Metadata: map[string]string{"gc.routed_to": "mayor"},
+		},
+	}, nil)
 	opts := testOpts(a, "BL-42")
 	opts.OnFormula = "my-formula"
-	code := doSling(opts, deps, q, stdout, stderr)
+	code := doSling(opts, deps, deps.Store, stdout, stderr)
 
 	if code != 0 {
 		t.Fatalf("doSling returned %d, want 0; stderr: %s", code, stderr.String())
 	}
-	// Idempotent — should skip both wisp attachment and routing.
 	if len(runner.calls) != 0 {
-		t.Errorf("idempotent + --on should skip all mutations; got %d calls: %v", len(runner.calls), runner.calls)
+		t.Errorf("built-in --on routing should not shell out; got %d calls: %v", len(runner.calls), runner.calls)
 	}
-	if !strings.Contains(stdout.String(), "skipping (idempotent)") {
-		t.Errorf("stdout = %q, want idempotent skip message", stdout.String())
+	if strings.Contains(stdout.String(), "skipping (idempotent)") {
+		t.Errorf("stdout = %q, raw pre-routed --on work must not skip formula attachment", stdout.String())
+	}
+	source, err := deps.Store.Get("BL-42")
+	if err != nil {
+		t.Fatalf("store.Get(BL-42): %v", err)
+	}
+	if source.Metadata["molecule_id"] == "" {
+		t.Fatal("source bead missing molecule_id")
+	}
+	if source.Metadata["gc.attached_formula"] != "my-formula" {
+		t.Fatalf("gc.attached_formula = %q, want my-formula", source.Metadata["gc.attached_formula"])
 	}
 }
 

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "gc route create --json result",
+  "description": "One JSONL record describing a formula-backed routed work item created by gc route create.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "ok"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1"
+    },
+    "ok": {
+      "const": true
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Created source bead ID."
+    },
+    "target": {
+      "type": "string",
+      "description": "Resolved routed-work target."
+    },
+    "formula": {
+      "type": "string",
+      "description": "Formula attached to the created source bead."
+    },
+    "method": {
+      "type": "string",
+      "description": "Attachment method used by the routed work primitive."
+    },
+    "wisp_root_id": {
+      "type": "string",
+      "description": "Attached formula wisp root ID, when a formula was attached."
+    },
+    "workflow_id": {
+      "type": "string",
+      "description": "Workflow ID associated with the formula attachment, when available."
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Metadata on the created source bead after routing and formula attachment.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "dry_run": {
+      "type": "boolean",
+      "description": "Whether the command ran without mutating state."
+    }
+  }
+}

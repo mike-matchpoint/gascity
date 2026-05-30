@@ -18,6 +18,7 @@ import (
 	"github.com/gastownhall/gascity/internal/formulatest"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/pidutil"
+	"github.com/gastownhall/gascity/internal/routedwork"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/sourceworkflow"
 )
@@ -1759,11 +1760,12 @@ func TestSlingLaunchFormula(t *testing.T) {
 
 type fakeBeadRouter struct {
 	routed []RouteRequest
+	err    error
 }
 
 func (r *fakeBeadRouter) Route(_ context.Context, req RouteRequest) error {
 	r.routed = append(r.routed, req)
-	return nil
+	return r.err
 }
 
 func TestSlingRouteBeadWithTypedRouter(t *testing.T) {
@@ -1828,6 +1830,222 @@ func TestSlingAttachFormulaRoutesSourceBeadWithTypedRouter(t *testing.T) {
 	}
 	if got.Metadata["molecule_id"] != result.WispRootID {
 		t.Fatalf("molecule_id metadata = %q, want %q", got.Metadata["molecule_id"], result.WispRootID)
+	}
+	if got.Metadata[routedwork.AttachedFormulaMetadataKey] != "code-review" {
+		t.Fatalf("%s metadata = %q, want code-review", routedwork.AttachedFormulaMetadataKey, got.Metadata[routedwork.AttachedFormulaMetadataKey])
+	}
+}
+
+func TestSlingAttachFormulaPreRoutedBeadStillAttachesFormula(t *testing.T) {
+	router := &fakeBeadRouter{}
+	cfg := &config.City{Workspace: config.Workspace{Name: "test"}}
+	deps := testDeps(cfg, runtime.NewFake(), newFakeRunner().run)
+	deps.Router = router
+	convoy, err := deps.Store.Create(beads.Bead{Title: "existing convoy", Type: "convoy", Status: "open"})
+	if err != nil {
+		t.Fatalf("Create(convoy): %v", err)
+	}
+	source, err := deps.Store.Create(beads.Bead{
+		Title:    "pre-routed work",
+		Type:     "task",
+		Status:   "open",
+		ParentID: convoy.ID,
+		Metadata: map[string]string{routedwork.RoutedToMetadataKey: "mayor"},
+	})
+	if err != nil {
+		t.Fatalf("Create(source): %v", err)
+	}
+
+	s, err := New(deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a := config.Agent{Name: "mayor", MaxActiveSessions: intPtr(1)}
+	result, err := s.AttachFormula(context.Background(), "code-review", source.ID, a, FormulaOpts{})
+	if err != nil {
+		t.Fatalf("AttachFormula: %v", err)
+	}
+
+	if result.Idempotent {
+		t.Fatal("AttachFormula treated a raw pre-routed bead as idempotent")
+	}
+	if result.WispRootID == "" {
+		t.Fatal("WispRootID is empty")
+	}
+	if len(router.routed) != 1 {
+		t.Fatalf("got %d route calls, want 1", len(router.routed))
+	}
+	got, err := deps.Store.Get(source.ID)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", source.ID, err)
+	}
+	if got.Metadata["molecule_id"] != result.WispRootID {
+		t.Fatalf("molecule_id metadata = %q, want %q", got.Metadata["molecule_id"], result.WispRootID)
+	}
+	if got.Metadata[routedwork.AttachedFormulaMetadataKey] != "code-review" {
+		t.Fatalf("%s metadata = %q, want code-review", routedwork.AttachedFormulaMetadataKey, got.Metadata[routedwork.AttachedFormulaMetadataKey])
+	}
+}
+
+func TestSlingAttachFormulaRepairsExistingAttachmentWithoutDuplicate(t *testing.T) {
+	router := &fakeBeadRouter{}
+	cfg := &config.City{Workspace: config.Workspace{Name: "test"}}
+	deps := testDeps(cfg, runtime.NewFake(), newFakeRunner().run)
+	deps.Router = router
+	deps.Store = beads.NewMemStoreFrom(10, []beads.Bead{
+		{ID: "CVY-1", Title: "existing convoy", Type: "convoy", Status: "open"},
+		{
+			ID:       "BL-42",
+			Title:    "pre-attached work",
+			Type:     "task",
+			Status:   "open",
+			ParentID: "CVY-1",
+			Metadata: map[string]string{
+				routedwork.RoutedToMetadataKey: "mayor",
+				"molecule_id":                  "MOL-1",
+			},
+		},
+		{ID: "MOL-1", Title: "attached", Type: "molecule", Status: "open", Ref: "code-review"},
+	}, nil)
+
+	s, err := New(deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a := config.Agent{Name: "mayor", MaxActiveSessions: intPtr(1)}
+	result, err := s.AttachFormula(context.Background(), "code-review", "BL-42", a, FormulaOpts{})
+	if err != nil {
+		t.Fatalf("AttachFormula: %v", err)
+	}
+
+	if !result.Idempotent {
+		t.Fatalf("Idempotent = false, want true for existing same-formula attachment")
+	}
+	if result.WispRootID != "MOL-1" {
+		t.Fatalf("WispRootID = %q, want MOL-1", result.WispRootID)
+	}
+	if len(router.routed) != 0 {
+		t.Fatalf("got %d route calls, want 0 for already routed attachment", len(router.routed))
+	}
+	source, err := deps.Store.Get("BL-42")
+	if err != nil {
+		t.Fatalf("Get(BL-42): %v", err)
+	}
+	if source.Metadata["molecule_id"] != "MOL-1" {
+		t.Fatalf("molecule_id = %q, want MOL-1", source.Metadata["molecule_id"])
+	}
+	if source.Metadata[routedwork.AttachedFormulaMetadataKey] != "code-review" {
+		t.Fatalf("%s = %q, want code-review", routedwork.AttachedFormulaMetadataKey, source.Metadata[routedwork.AttachedFormulaMetadataKey])
+	}
+	attached, err := deps.Store.Get("MOL-1")
+	if err != nil {
+		t.Fatalf("Get(MOL-1): %v", err)
+	}
+	if attached.Status != "open" {
+		t.Fatalf("attached status = %q, want open", attached.Status)
+	}
+}
+
+func TestSlingAttachFormulaDoesNotStampWhenRouteFails(t *testing.T) {
+	router := &fakeBeadRouter{err: fmt.Errorf("route failed")}
+	cfg := &config.City{Workspace: config.Workspace{Name: "test"}}
+	deps := testDeps(cfg, runtime.NewFake(), newFakeRunner().run)
+	deps.Router = router
+	source, err := deps.Store.Create(beads.Bead{Title: "work", Type: "task", Status: "open"})
+	if err != nil {
+		t.Fatalf("Create(source): %v", err)
+	}
+
+	s, err := New(deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a := config.Agent{Name: "mayor", MaxActiveSessions: intPtr(1)}
+	_, err = s.AttachFormula(context.Background(), "code-review", source.ID, a, FormulaOpts{})
+	if err == nil {
+		t.Fatal("AttachFormula error = nil, want route failure")
+	}
+	got, getErr := deps.Store.Get(source.ID)
+	if getErr != nil {
+		t.Fatalf("Get(%s): %v", source.ID, getErr)
+	}
+	if got.Metadata[routedwork.AttachedFormulaMetadataKey] != "" {
+		t.Fatalf("%s metadata = %q, want empty after route failure", routedwork.AttachedFormulaMetadataKey, got.Metadata[routedwork.AttachedFormulaMetadataKey])
+	}
+}
+
+func TestSlingAttachFormulaUsesSourceMetadataVars(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "mol-shutdown-dance.toml"), []byte(`
+formula = "mol-shutdown-dance"
+version = 1
+
+[vars.warrant_id]
+required = true
+
+[vars.target]
+required = true
+
+[vars.reason]
+required = true
+
+[vars.requester]
+required = true
+
+[[steps]]
+id = "root"
+title = "Shutdown {{warrant_id}}"
+metadata = { "warrant_id" = "{{warrant_id}}", "target" = "{{target}}", "reason" = "{{reason}}", "requester" = "{{requester}}" }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.City{
+		Workspace:     config.Workspace{Name: "test"},
+		FormulaLayers: config.FormulaLayers{City: []string{dir}},
+	}
+	deps := testDeps(cfg, runtime.NewFake(), newFakeRunner().run)
+	deps.Router = &fakeBeadRouter{}
+	source, err := deps.Store.Create(beads.Bead{
+		Title:  "warrant",
+		Type:   "task",
+		Status: "open",
+		Metadata: map[string]string{
+			"target":    "agent-session",
+			"reason":    "validation",
+			"requester": "operator",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create(source): %v", err)
+	}
+
+	s, err := New(deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := s.AttachFormula(context.Background(), "mol-shutdown-dance", source.ID, config.Agent{Name: "mayor", MaxActiveSessions: intPtr(1)}, FormulaOpts{})
+	if err != nil {
+		t.Fatalf("AttachFormula: %v", err)
+	}
+	children, err := deps.Store.List(beads.ListQuery{ParentID: result.WispRootID})
+	if err != nil {
+		t.Fatalf("List children for %s: %v", result.WispRootID, err)
+	}
+	if len(children) != 1 {
+		t.Fatalf("attached formula children = %d, want 1", len(children))
+	}
+	for key, want := range map[string]string{
+		"warrant_id": source.ID,
+		"target":     "agent-session",
+		"reason":     "validation",
+		"requester":  "operator",
+	} {
+		if got := children[0].Metadata[key]; got != want {
+			t.Fatalf("formula child metadata %s = %q, want %q", key, got, want)
+		}
 	}
 }
 

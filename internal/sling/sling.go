@@ -15,6 +15,7 @@ import (
 	"github.com/gastownhall/gascity/internal/agentutil"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/formula"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/molecule"
@@ -114,6 +115,10 @@ type SlingDeps struct {
 	Runner   SlingRunner
 	Store    beads.Store
 	StoreRef string
+	// Recorder receives structured best-effort route/attachment evidence.
+	Recorder events.Recorder
+	// EventActor overrides the event Actor envelope when Recorder is set.
+	EventActor string
 	// ValidationQuerier overrides Store for existence checks when a caller has
 	// already resolved the bead through a narrower view.
 	ValidationQuerier BeadQuerier
@@ -998,6 +1003,7 @@ func BuildSlingFormulaVars(formulaName, beadID string, userVars []string, a conf
 	if beadID != "" {
 		addVar("issue", beadID)
 	}
+	addSourceBeadFormulaVars(formulaName, beadID, a, deps, addRoutingVar)
 	addRoutingVar("rig_name", a.Dir)
 	addRoutingVar("binding_name", a.BindingName)
 	addRoutingVar("binding_prefix", a.BindingPrefix())
@@ -1011,6 +1017,43 @@ func BuildSlingFormulaVars(formulaName, beadID string, userVars []string, a conf
 	}
 
 	return vars
+}
+
+func addSourceBeadFormulaVars(formulaName, beadID string, a config.Agent, deps SlingDeps, addVar func(string, string)) {
+	if strings.TrimSpace(beadID) == "" || deps.Store == nil {
+		return
+	}
+	source, err := deps.Store.Get(beadID)
+	if err != nil {
+		return
+	}
+	for _, name := range declaredSlingFormulaVars(formulaName, SlingFormulaSearchPaths(deps, a)) {
+		value := source.Metadata[name]
+		if name == "warrant_id" {
+			value = beadID
+		}
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		addVar(name, value)
+	}
+}
+
+func declaredSlingFormulaVars(formulaName string, searchPaths []string) []string {
+	parser := formula.NewParser(searchPaths...).SetSource(formula.SourceFromEnv())
+	f, err := parser.LoadByName(formulaName)
+	if err != nil {
+		return nil
+	}
+	resolved, err := parser.Resolve(f)
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(resolved.Vars))
+	for name := range resolved.Vars {
+		names = append(names, name)
+	}
+	return names
 }
 
 // mergeRigFormulaVars folds rig-scoped formula_vars defaults into vars.

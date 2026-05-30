@@ -448,14 +448,19 @@ Do NOT kill the agent directly. File a warrant bead and let the dog pool
 handle the shutdown dance (multi-stage interrogation with due process):
 
 ```bash
-gc bd create --type=task \
+gc route create --target {{binding_prefix}}dog \
+  --on mol-shutdown-dance \
+  --type task \
+  --label warrant \
   --title="Stuck: <agent>" \
-  --metadata '{"target":"<session-name>","reason":"No progress on <bead> for <duration>","requester":"witness","gc.routed_to":"{{binding_prefix}}dog"}' \
-  --label=warrant
+  --metadata target="<session-name>" \
+  --metadata reason="No progress on <bead> for <duration>" \
+  --metadata requester="witness"
 ```
 
-The dog pool picks up the warrant and runs `mol-shutdown-dance`, which
-gives the polecat 3 chances to prove it's alive before killing it.
+The warrant bead remains the audit/lifecycle record. The dog pool picks
+up the attached `mol-shutdown-dance` work, which gives the polecat 3
+chances to prove it's alive before killing it.
 
 **Step 4: Log assessment:**
 

@@ -1564,11 +1564,11 @@ func TestGastownRoutedToTargetsUseBindingPrefix(t *testing.T) {
 		rel  string
 		want string
 	}{
-		{"packs/gastown/formulas/mol-deacon-patrol.toml", `"gc.routed_to":"{{binding_prefix}}dog"`},
-		{"packs/gastown/formulas/mol-witness-patrol.toml", `"gc.routed_to":"{{binding_prefix}}dog"`},
-		{"packs/gastown/agents/boot/prompt.template.md", `"gc.routed_to":"{{ .BindingPrefix }}dog"`},
-		{"packs/gastown/agents/deacon/prompt.template.md", `"gc.routed_to":"{{ .BindingPrefix }}dog"`},
-		{"packs/gastown/agents/witness/prompt.template.md", `"gc.routed_to":"{{ .BindingPrefix }}dog"`},
+		{"packs/gastown/formulas/mol-deacon-patrol.toml", `gc route create --target {{binding_prefix}}dog`},
+		{"packs/gastown/formulas/mol-witness-patrol.toml", `gc route create --target {{binding_prefix}}dog`},
+		{"packs/gastown/agents/boot/prompt.template.md", `gc route create --target {{ .BindingPrefix }}dog`},
+		{"packs/gastown/agents/deacon/prompt.template.md", `gc route create --target {{ .BindingPrefix }}dog`},
+		{"packs/gastown/agents/witness/prompt.template.md", `gc route create --target {{ .BindingPrefix }}dog`},
 		{"packs/gastown/formulas/mol-polecat-work.toml", `${GC_RIG:+$GC_RIG/}{{binding_prefix}}refinery`},
 		{"packs/gastown/formulas/mol-refinery-patrol.toml", `${GC_RIG:+$GC_RIG/}{{binding_prefix}}polecat`},
 		{"packs/gastown/formulas/mol-idea-to-plan.toml", "$GC_RIG/{{binding_prefix}}polecat"},
@@ -1603,23 +1603,27 @@ func TestGastownRoutedToTargetsUseBindingPrefix(t *testing.T) {
 	}
 }
 
-func TestGastownWarrantCreateCommandsUseCreateMetadata(t *testing.T) {
+func TestGastownWarrantDispatchUsesRouteCreate(t *testing.T) {
 	dir := exampleDir()
-	files := []string{
-		"packs/gastown/agents/boot/prompt.template.md",
-		"packs/gastown/agents/deacon/prompt.template.md",
-		"packs/gastown/agents/witness/prompt.template.md",
-		"packs/gastown/formulas/mol-deacon-patrol.toml",
-		"packs/gastown/formulas/mol-witness-patrol.toml",
-		"packs/maintenance/formulas/mol-shutdown-dance.toml",
+	files := []struct {
+		rel        string
+		targetWant string
+	}{
+		{"packs/gastown/agents/boot/prompt.template.md", `--target {{ .BindingPrefix }}dog`},
+		{"packs/gastown/agents/deacon/prompt.template.md", `--target {{ .BindingPrefix }}dog`},
+		{"packs/gastown/agents/witness/prompt.template.md", `--target {{ .BindingPrefix }}dog`},
+		{"packs/gastown/formulas/mol-deacon-patrol.toml", `--target {{binding_prefix}}dog`},
+		{"packs/gastown/formulas/mol-witness-patrol.toml", `--target {{binding_prefix}}dog`},
+		{"packs/maintenance/formulas/mol-shutdown-dance.toml", `--target <binding-prefix>dog`},
 	}
-	for _, rel := range files {
-		data, err := os.ReadFile(filepath.Join(dir, rel))
+	for _, file := range files {
+		data, err := os.ReadFile(filepath.Join(dir, file.rel))
 		if err != nil {
-			t.Fatalf("reading %s: %v", rel, err)
+			t.Fatalf("reading %s: %v", file.rel, err)
 		}
+		body := string(data)
 		inCreate := false
-		for lineNo, line := range strings.Split(string(data), "\n") {
+		for lineNo, line := range strings.Split(body, "\n") {
 			if strings.Contains(line, "bd create") {
 				inCreate = true
 			}
@@ -1627,12 +1631,72 @@ func TestGastownWarrantCreateCommandsUseCreateMetadata(t *testing.T) {
 				continue
 			}
 			if strings.Contains(line, "--set-metadata") {
-				t.Errorf("%s:%d bd create command uses update-only --set-metadata:\n%s", rel, lineNo+1, line)
+				t.Errorf("%s:%d bd create command uses update-only --set-metadata:\n%s", file.rel, lineNo+1, line)
 			}
 			if !strings.HasSuffix(strings.TrimSpace(line), "\\") {
 				inCreate = false
 			}
 		}
+		for _, bad := range []string{
+			`WARRANT_ID=$(gc bd create`,
+			`gc sling`,
+			`"gc.routed_to":"<binding-prefix>dog"`,
+			`"gc.routed_to":"{{binding_prefix}}dog"`,
+			`"gc.routed_to":"{{ .BindingPrefix }}dog"`,
+		} {
+			if strings.Contains(body, bad) {
+				t.Errorf("%s still routes warrant creation with raw metadata %q", file.rel, bad)
+			}
+		}
+		for _, want := range []string{
+			`gc route create`,
+			file.targetWant,
+			`--on mol-shutdown-dance`,
+			`--type task`,
+			`--label warrant`,
+			`--metadata target=`,
+			`--metadata reason=`,
+			`--metadata requester=`,
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s missing formula-backed warrant dispatch guidance %q", file.rel, want)
+			}
+		}
+	}
+}
+
+func TestGastownDogPromptRejectsRawWarrants(t *testing.T) {
+	dir := exampleDir()
+	data, err := os.ReadFile(filepath.Join(dir, "packs", "maintenance", "agents", "dog", "prompt.template.md"))
+	if err != nil {
+		t.Fatalf("reading dog prompt: %v", err)
+	}
+	body := string(data)
+	for _, want := range []string{
+		`gc.attached_formula=mol-shutdown-dance`,
+		`raw warrant`,
+		`mis-routed`,
+		`Do not improvise`,
+		`shutdown from raw metadata`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dog prompt missing formula-backed warrant guard %q", want)
+		}
+	}
+}
+
+func TestShutdownDanceRequesterVarRequired(t *testing.T) {
+	dir := exampleDir()
+	data, err := os.ReadFile(filepath.Join(dir, "packs", "maintenance", "formulas", "mol-shutdown-dance.toml"))
+	if err != nil {
+		t.Fatalf("reading shutdown dance formula: %v", err)
+	}
+	requesterVar := extractBetween(t, string(data), "[vars.requester]", "[[steps]]")
+	if !strings.Contains(requesterVar, "required = true") {
+		t.Fatalf("mol-shutdown-dance requester var must be required:\n%s", requesterVar)
+	}
+	if strings.Contains(requesterVar, "default =") {
+		t.Fatalf("mol-shutdown-dance requester var must not silently default:\n%s", requesterVar)
 	}
 }
 
@@ -1777,7 +1841,7 @@ func TestGastownPromptPeerAddressesUseBindingPrefix(t *testing.T) {
 				"gc mail count gastown.deacon",
 				"gc session nudge gastown.deacon",
 				`--title="Stuck: gastown.deacon"`,
-				`"target":"gastown.deacon"`,
+				`--metadata target="gastown.deacon"`,
 			},
 			bads: []string{
 				"gc session peek deacon",
@@ -1785,7 +1849,7 @@ func TestGastownPromptPeerAddressesUseBindingPrefix(t *testing.T) {
 				"gc mail count deacon",
 				"gc session nudge deacon",
 				`--title="Stuck: deacon"`,
-				`"target":"deacon"`,
+				`--metadata target="deacon"`,
 			},
 		},
 		{
@@ -1799,7 +1863,7 @@ func TestGastownPromptPeerAddressesUseBindingPrefix(t *testing.T) {
 				"gc mail count deacon",
 				"gc session nudge deacon",
 				`--title="Stuck: deacon"`,
-				`"target":"deacon"`,
+				`--metadata target="deacon"`,
 			},
 			bads: []string{
 				"gastown.deacon",
@@ -2309,8 +2373,10 @@ func TestRefineryPatrolRestartGuidanceAssignsSuccessor(t *testing.T) {
 // (BindingPrefix="gastown.", GC_RIG="cashmaster") and shell-evaluates each
 // `gc.routed_to=` handoff expression they emit. It asserts every rendered
 // route resolves to a fully-qualified `<rig>/gastown.<role>` value rather
-// than the bare `gastown.<role>` short-name that broke rejection drop-back
-// in cashmaster convoys (upstream gastownhall/gascity#1397).
+// than the bare short-name that broke rejection drop-back in cashmaster
+// convoys (upstream gastownhall/gascity#1397). Warrant producers now use
+// formula-backed `gc sling` dispatch, so dog handoffs are checked as rendered
+// sling targets rather than raw `gc.routed_to` JSON.
 //
 // The chain has two layers — Go template rendering and POSIX shell expansion
 // — and a regression in either layer produces the same symptom. This test
@@ -2340,9 +2406,7 @@ func TestGastownPromptRoutedToHandoffIsFullyQualifiedUnderBinding(t *testing.T) 
 			rel:          "packs/gastown/agents/witness/prompt.template.md",
 			agentName:    rigName + "/" + bindingPrefix + "witness",
 			templateName: "witness",
-			wantRoutes: map[string]string{
-				`"gastown.dog"`: bindingPrefix + "dog",
-			},
+			wantRoutes:   map[string]string{},
 		},
 		{
 			rel:          "packs/gastown/agents/refinery/prompt.template.md",
@@ -2354,6 +2418,9 @@ func TestGastownPromptRoutedToHandoffIsFullyQualifiedUnderBinding(t *testing.T) 
 	for _, tc := range cases {
 		t.Run(filepath.Base(filepath.Dir(tc.rel)), func(t *testing.T) {
 			body := renderGastownPromptForPack(t, tc.rel, tc.agentName, tc.templateName, rigName, bindingName, bindingPrefix)
+			if tc.templateName == "witness" && !strings.Contains(body, `gc route create --target gastown.dog`) {
+				t.Errorf("%s: rendered template missing binding-prefixed dog route-create target", tc.rel)
+			}
 
 			// Every rendered gc.routed_to reference must be either a shell
 			// variable expansion or an expression that contains the binding
@@ -3248,7 +3315,9 @@ func TestDeaconPatrolDetectsQueueStarvation(t *testing.T) {
 		"gc bd list --status=open --assignee=",
 		"bead.updated_at",
 		"30min",
-		`"gc.routed_to":"{{binding_prefix}}dog"`,
+		`gc route create --target {{binding_prefix}}dog`,
+		`--on mol-shutdown-dance`,
+		`--metadata reason=`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("deacon formula missing queue-starvation guidance %q", want)
