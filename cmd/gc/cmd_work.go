@@ -317,9 +317,9 @@ func workSelectorListForController(store beads.Store, selector config.WorkSelect
 		items, readyErr := beads.RuntimeReadyList(context.Background(), store, compiled.Query,
 			beads.RuntimeReadPolicy(beads.ReadClassHotDegradedOK, "controller.demand.ready-selector"))
 		if readyErr != nil {
-			return 0, readyErr
+			return nil, readyErr
 		}
-		return len(workselect.ApplyPostFilters(items, compiled)), nil
+		return workselect.ApplyPostFilters(items, compiled), nil
 	}
 	items, err := listForControllerDemand(store, compiled.Query)
 	if err != nil {
