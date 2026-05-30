@@ -27,6 +27,9 @@ const (
 // The dir argument sets the working directory; name and args specify the command.
 type CommandRunner func(dir, name string, args ...string) ([]byte, error)
 
+// ContextCommandRunner executes a command with caller-owned cancellation.
+type ContextCommandRunner func(ctx context.Context, dir, name string, args ...string) ([]byte, error)
+
 var (
 	bdCommandTimeout = 120 * time.Second
 	// bdReadCommandTimeout bounds bd read-only subcommands (count, list,
@@ -53,7 +56,16 @@ func ExecCommandRunner() CommandRunner {
 // applies the provided environment overrides. Explicit keys replace any
 // inherited values from the parent process.
 func ExecCommandRunnerWithEnv(env map[string]string) CommandRunner {
+	runner := ExecContextCommandRunnerWithEnv(env)
 	return func(dir, name string, args ...string) ([]byte, error) {
+		return runner(context.Background(), dir, name, args...)
+	}
+}
+
+// ExecContextCommandRunnerWithEnv returns a ContextCommandRunner that uses
+// os/exec and applies the provided environment overrides.
+func ExecContextCommandRunnerWithEnv(env map[string]string) ContextCommandRunner {
+	return func(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 		start := time.Now()
 		trace := func(status string, err error) {
 			path := strings.TrimSpace(os.Getenv("GC_BD_TRACE"))
@@ -74,18 +86,18 @@ func ExecCommandRunnerWithEnv(env map[string]string) CommandRunner {
 		}
 		trace("start", nil)
 		timeout := bdCommandTimeoutFor(name, args)
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		cmdCtx, cancel := contextWithCommandTimeout(ctx, timeout)
 		defer cancel()
 		var slowTimer *time.Timer
 		if name == "bd" {
 			bdArgs := append([]string(nil), args...)
 			agentID := bdTelemetryAgentID(env)
 			slowTimer = time.AfterFunc(bdSlowTelemetryThreshold, func() {
-				telemetry.RecordBDSlow(ctx, bdArgs, dir, agentID)
+				telemetry.RecordBDSlow(cmdCtx, bdArgs, dir, agentID)
 			})
 			defer slowTimer.Stop()
 		}
-		cmd := exec.CommandContext(ctx, name, args...)
+		cmd := exec.CommandContext(cmdCtx, name, args...)
 		cmd.WaitDelay = 2 * time.Second
 		prepareCommandForTimeout(cmd)
 		cmd.Dir = dir
@@ -103,7 +115,7 @@ func ExecCommandRunnerWithEnv(env map[string]string) CommandRunner {
 				args, float64(time.Since(start).Milliseconds()),
 				err, out, stderr.String())
 		}
-		if ctx.Err() == context.DeadlineExceeded {
+		if cmdCtx.Err() == context.DeadlineExceeded {
 			timeoutErr := fmt.Errorf("timed out after %s", timeout)
 			trace("timeout", timeoutErr)
 			if stderr.Len() > 0 {
@@ -128,6 +140,19 @@ func ExecCommandRunnerWithEnv(env map[string]string) CommandRunner {
 		trace("done", err)
 		return out, err
 	}
+}
+
+func contextWithCommandTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if timeout <= 0 {
+		return context.WithCancel(ctx)
+	}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= timeout {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 func bdTelemetryAgentID(env map[string]string) string {
@@ -191,8 +216,9 @@ type PurgeResult struct {
 // BdStore implements Store by shelling out to the bd CLI (beads v0.55.1+).
 // It delegates all persistence to bd's embedded Dolt database.
 type BdStore struct {
-	dir           string          // city root directory (where .beads/ lives)
-	runner        CommandRunner   // injectable for testing
+	dir           string        // city root directory (where .beads/ lives)
+	runner        CommandRunner // injectable for testing
+	ctxRunner     ContextCommandRunner
 	purgeRunner   PurgeRunnerFunc // injectable for testing; nil uses exec default
 	idPrefix      string          // bead ID prefix owned by this store, without trailing "-"
 	indexedReader IndexedLister   // optional read-only active list accelerator
@@ -208,6 +234,14 @@ func NewBdStore(dir string, runner CommandRunner) *BdStore {
 // NewBdStoreWithPrefix creates a BdStore with an explicit owned bead ID prefix.
 func NewBdStoreWithPrefix(dir string, runner CommandRunner, idPrefix string) *BdStore {
 	return &BdStore{dir: dir, runner: runner, idPrefix: normalizeIDPrefix(idPrefix)}
+}
+
+// WithContextRunner attaches a context-aware command runner for runtime writes.
+func (s *BdStore) WithContextRunner(runner ContextCommandRunner) *BdStore {
+	if s != nil {
+		s.ctxRunner = runner
+	}
+	return s
 }
 
 // WithIndexedReader attaches a read-only active list accelerator.
@@ -695,8 +729,7 @@ func mapBdStatus(s string) string {
 	}
 }
 
-// Create persists a new bead via bd create.
-func (s *BdStore) Create(b Bead) (Bead, error) {
+func bdCreateArgs(b Bead) ([]string, map[string]string, error) {
 	typ := b.Type
 	if typ == "" {
 		typ = "task"
@@ -738,34 +771,45 @@ func (s *BdStore) Create(b Bead) (Bead, error) {
 	if len(metadata) > 0 {
 		metaJSON, err := json.Marshal(metadata)
 		if err != nil {
-			return Bead{}, fmt.Errorf("bd create: marshaling metadata: %w", err)
+			return nil, nil, fmt.Errorf("bd create: marshaling metadata: %w", err)
 		}
 		args = append(args, "--metadata", string(metaJSON))
 	}
-	out, err := s.runner(s.dir, "bd", args...)
-	if err != nil {
-		return Bead{}, fmt.Errorf("bd create: %w", err)
-	}
+	return args, metadata, nil
+}
+
+func beadFromCreateOutput(out []byte, seed Bead, metadata map[string]string) (Bead, error) {
 	var issue bdIssue
 	if err := json.Unmarshal(extractJSON(out), &issue); err != nil {
 		return Bead{}, fmt.Errorf("bd create: parsing JSON: %w", err)
 	}
 	created := issue.toBead()
 	if created.Assignee == "" {
-		created.Assignee = b.Assignee
+		created.Assignee = seed.Assignee
 	}
 	if created.From == "" {
-		created.From = b.From
+		created.From = seed.From
 	}
-	if created.Priority == nil && b.Priority != nil {
-		created.Priority = cloneIntPtr(b.Priority)
+	if created.Priority == nil && seed.Priority != nil {
+		created.Priority = cloneIntPtr(seed.Priority)
 	}
-	if len(metadata) > 0 {
-		if created.Metadata == nil {
-			created.Metadata = maps.Clone(metadata)
-		}
+	if len(metadata) > 0 && created.Metadata == nil {
+		created.Metadata = maps.Clone(metadata)
 	}
 	return created, nil
+}
+
+// Create persists a new bead via bd create.
+func (s *BdStore) Create(b Bead) (Bead, error) {
+	args, metadata, err := bdCreateArgs(b)
+	if err != nil {
+		return Bead{}, err
+	}
+	out, err := s.runner(s.dir, "bd", args...)
+	if err != nil {
+		return Bead{}, fmt.Errorf("bd create: %w", err)
+	}
+	return beadFromCreateOutput(out, b, metadata)
 }
 
 // Get retrieves a bead by ID via bd show.
@@ -787,8 +831,7 @@ func (s *BdStore) Get(id string) (Bead, error) {
 	return issues[0].toBead(), nil
 }
 
-// Update modifies fields of an existing bead via bd update.
-func (s *BdStore) Update(id string, opts UpdateOpts) error {
+func bdUpdateArgs(id string, opts UpdateOpts) []string {
 	args := []string{"update", "--json", id}
 	if opts.Title != nil {
 		args = append(args, "--title", *opts.Title)
@@ -829,6 +872,15 @@ func (s *BdStore) Update(id string, opts UpdateOpts) error {
 	}
 	// No fields to update — no-op (bd errors on empty update).
 	if len(args) == 3 {
+		return nil
+	}
+	return args
+}
+
+// Update modifies fields of an existing bead via bd update.
+func (s *BdStore) Update(id string, opts UpdateOpts) error {
+	args := bdUpdateArgs(id, opts)
+	if len(args) == 0 {
 		return nil
 	}
 	err := s.runBDTransientWrite(args...)
@@ -1320,6 +1372,291 @@ func isBdTransientWriteError(err error) bool {
 		strings.Contains(msg, "broken pipe") ||
 		strings.Contains(msg, "timed out after") ||
 		strings.Contains(msg, "deadline exceeded")
+}
+
+// RuntimeWriteStoreKey returns the canonical non-secret key used to share one
+// runtime writer manager across BdStore instances for the same backing store.
+func (s *BdStore) RuntimeWriteStoreKey() string {
+	if s == nil {
+		return ""
+	}
+	return runtimeWriteStoreKey(s.dir, "bd", "bd", "")
+}
+
+// RuntimeWriteManagerStats returns the current runtime writer manager state.
+func (s *BdStore) RuntimeWriteManagerStats() RuntimeWriteManagerStats {
+	if s == nil {
+		return RuntimeWriteManagerStats{}
+	}
+	return s.runtimeWriteManager().stats()
+}
+
+func (s *BdStore) runtimeWriteManager() *runtimeWriteManager {
+	return runtimeWriteManagerForKey(s.RuntimeWriteStoreKey())
+}
+
+// RuntimeCreate persists a new bead through a bounded runtime write policy.
+func (s *BdStore) RuntimeCreate(ctx context.Context, b Bead, policy WritePolicy) (Bead, error) {
+	if s == nil {
+		return Bead{}, degradedWrite(policy, "", "create", WriteOutcomeUnsupported, errors.New("nil BdStore"))
+	}
+	policy = normalizeWritePolicy(policy)
+	args, metadata, err := bdCreateArgs(b)
+	if err != nil {
+		return Bead{}, err
+	}
+	key := strings.TrimSpace(b.ID)
+	if key == "" {
+		key = strings.TrimSpace(policy.IdempotencyKey)
+	}
+	value, err := s.runtimeWriteManager().do(ctx, policy, "create", key, func(writeCtx context.Context) (any, error) {
+		out, runErr := s.runRuntimeBD(writeCtx, policy, "create", args...)
+		if runErr != nil {
+			if isBdDuplicateID(runErr) && strings.TrimSpace(b.ID) != "" {
+				existing, getErr := s.runtimeGet(writeCtx, b.ID, policy)
+				if getErr != nil {
+					return Bead{}, getErr
+				}
+				if runtimeCreateDuplicateMatches(existing, b) {
+					return existing, nil
+				}
+				return Bead{}, degradedWrite(policy, s.RuntimeWriteStoreKey(), "create", WriteOutcomeFailed,
+					fmt.Errorf("duplicate bead id %q has mismatched reservation metadata", b.ID))
+			}
+			return Bead{}, runErr
+		}
+		return beadFromCreateOutput(out, b, metadata)
+	})
+	if err != nil {
+		return Bead{}, err
+	}
+	created, ok := value.(Bead)
+	if !ok {
+		return Bead{}, degradedWrite(policy, s.RuntimeWriteStoreKey(), "create", WriteOutcomeFailed, errors.New("runtime create returned non-bead result"))
+	}
+	return created, nil
+}
+
+// RuntimeUpdate modifies a bead through a bounded runtime write policy.
+func (s *BdStore) RuntimeUpdate(ctx context.Context, id string, opts UpdateOpts, policy WritePolicy) error {
+	if s == nil {
+		return degradedWrite(policy, "", "update", WriteOutcomeUnsupported, errors.New("nil BdStore"))
+	}
+	args := bdUpdateArgs(id, opts)
+	if len(args) == 0 {
+		return nil
+	}
+	policy = normalizeWritePolicy(policy)
+	_, err := s.runtimeWriteManager().do(ctx, policy, "update", id, func(writeCtx context.Context) (any, error) {
+		_, runErr := s.runRuntimeBD(writeCtx, policy, "update", args...)
+		if isBdNotFound(runErr) {
+			return nil, fmt.Errorf("updating bead %q: %w", id, ErrNotFound)
+		}
+		return nil, runErr
+	})
+	return err
+}
+
+// RuntimeCloseAll closes beads through a bounded runtime write policy. It does
+// not run the foreground CloseAll fallback or post-close read verification.
+func (s *BdStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy WritePolicy) (int, error) {
+	if s == nil {
+		return 0, degradedWrite(policy, "", "close-all", WriteOutcomeUnsupported, errors.New("nil BdStore"))
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	policy = normalizeWritePolicy(policy)
+	objectKey := strings.Join(ids, ",")
+	value, err := s.runtimeWriteManager().do(ctx, policy, "close-all", objectKey, func(writeCtx context.Context) (any, error) {
+		preCloseMetadata := metadataExcludingCloseReason(metadata)
+		if len(preCloseMetadata) > 0 {
+			for _, id := range ids {
+				args := bdUpdateArgs(id, UpdateOpts{Metadata: preCloseMetadata})
+				if len(args) == 0 {
+					continue
+				}
+				if _, runErr := s.runRuntimeBD(writeCtx, policy, "close-all.metadata", args...); runErr != nil {
+					return 0, runErr
+				}
+			}
+		}
+		reason := strings.TrimSpace(metadata["close_reason"])
+		_, runErr := s.runRuntimeBD(writeCtx, policy, "close-all.close", bdCloseArgs(reason, ids...)...)
+		if runErr != nil {
+			return 0, runErr
+		}
+		return len(ids), nil
+	})
+	if err != nil {
+		if n, ok := value.(int); ok {
+			return n, err
+		}
+		return 0, err
+	}
+	n, ok := value.(int)
+	if !ok {
+		return 0, degradedWrite(policy, s.RuntimeWriteStoreKey(), "close-all", WriteOutcomeFailed, errors.New("runtime close-all returned non-int result"))
+	}
+	return n, nil
+}
+
+// RuntimePing verifies bd write-health with a short runtime budget.
+func (s *BdStore) RuntimePing(ctx context.Context, policy WritePolicy) error {
+	if s == nil {
+		return degradedWrite(policy, "", "ping", WriteOutcomeUnsupported, errors.New("nil BdStore"))
+	}
+	policy = normalizeWritePolicy(policy)
+	_, err := s.runtimeWriteManager().do(ctx, policy, "ping", "ping", func(writeCtx context.Context) (any, error) {
+		_, runErr := s.runRuntimeBD(writeCtx, policy, "ping", "list", "--json", "--limit", "0")
+		return nil, runErr
+	})
+	return err
+}
+
+func (s *BdStore) runRuntimeBD(ctx context.Context, policy WritePolicy, operation string, args ...string) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	start := time.Now()
+	run := s.ctxRunner
+	if run != nil {
+		out, err := run(ctx, s.dir, "bd", args...)
+		if err != nil {
+			wrapped := s.runtimeCommandError(ctx, policy, operation, err)
+			s.traceRuntimeWrite(policy, operation, args, time.Since(start), wrapped)
+			return out, wrapped
+		}
+		s.traceRuntimeWrite(policy, operation, args, time.Since(start), nil)
+		return out, nil
+	}
+	if s.runner == nil {
+		err := degradedWrite(policy, s.RuntimeWriteStoreKey(), operation, WriteOutcomeUnsupported, errors.New("nil bd command runner"))
+		s.traceRuntimeWrite(policy, operation, args, time.Since(start), err)
+		return nil, err
+	}
+	type result struct {
+		out []byte
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		out, err := s.runner(s.dir, "bd", args...)
+		done <- result{out: out, err: err}
+	}()
+	select {
+	case res := <-done:
+		if res.err != nil {
+			wrapped := s.runtimeCommandError(ctx, policy, operation, res.err)
+			s.traceRuntimeWrite(policy, operation, args, time.Since(start), wrapped)
+			return res.out, wrapped
+		}
+		s.traceRuntimeWrite(policy, operation, args, time.Since(start), nil)
+		return res.out, nil
+	case <-ctx.Done():
+		err := degradedWrite(policy, s.RuntimeWriteStoreKey(), operation, WriteOutcomeAmbiguousTimeout, ctx.Err())
+		s.traceRuntimeWrite(policy, operation, args, time.Since(start), err)
+		return nil, err
+	}
+}
+
+func (s *BdStore) runtimeCommandError(ctx context.Context, policy WritePolicy, operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	outcome := WriteOutcomeFailed
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		strings.Contains(strings.ToLower(err.Error()), "timed out after") ||
+		strings.Contains(strings.ToLower(err.Error()), "deadline exceeded") {
+		outcome = WriteOutcomeAmbiguousTimeout
+	}
+	return degradedWrite(policy, s.RuntimeWriteStoreKey(), operation, outcome, err)
+}
+
+func (s *BdStore) traceRuntimeWrite(policy WritePolicy, operation string, args []string, duration time.Duration, err error) {
+	path := strings.TrimSpace(os.Getenv("GC_BD_TRACE"))
+	if path == "" {
+		return
+	}
+	f, openErr := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if openErr != nil {
+		return
+	}
+	defer f.Close() //nolint:errcheck // best-effort diagnostic trace
+	subcommand := ""
+	if len(args) > 0 {
+		subcommand = args[0]
+	}
+	errMsg := ""
+	if err != nil {
+		errMsg = err.Error()
+	}
+	fmt.Fprintf(f, "%s runtime_write caller=%s class=%s op=%s command=bd:%s duration=%s timeout=%s outcome=%s store_key=%s err=%q\n", //nolint:errcheck // best-effort diagnostic trace
+		time.Now().UTC().Format(time.RFC3339Nano),
+		strings.TrimSpace(policy.Caller),
+		policy.Class,
+		strings.TrimSpace(operation),
+		strings.TrimSpace(subcommand),
+		duration,
+		policy.Timeout,
+		runtimeWriteOutcomeForTrace(err),
+		s.RuntimeWriteStoreKey(),
+		errMsg)
+}
+
+func runtimeWriteOutcomeForTrace(err error) WriteOutcome {
+	if err == nil {
+		return "success"
+	}
+	var degraded *DegradedWriteError
+	if errors.As(err, &degraded) && degraded.Outcome != "" {
+		return degraded.Outcome
+	}
+	return WriteOutcomeFailed
+}
+
+func (s *BdStore) runtimeGet(ctx context.Context, id string, policy WritePolicy) (Bead, error) {
+	out, err := s.runRuntimeBD(ctx, policy, "get", "show", "--json", id)
+	if err != nil {
+		if isBdNotFound(err) {
+			return Bead{}, fmt.Errorf("getting bead %q: %w", id, ErrNotFound)
+		}
+		return Bead{}, err
+	}
+	var issues []bdIssue
+	if err := json.Unmarshal(extractJSON(out), &issues); err != nil {
+		return Bead{}, degradedWrite(policy, s.RuntimeWriteStoreKey(), "get", WriteOutcomeFailed, fmt.Errorf("bd show: parsing JSON: %w", err))
+	}
+	if len(issues) == 0 {
+		return Bead{}, fmt.Errorf("getting bead %q: %w", id, ErrNotFound)
+	}
+	return issues[0].toBead(), nil
+}
+
+func isBdDuplicateID(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "duplicate") ||
+		strings.Contains(msg, "already exists") ||
+		strings.Contains(msg, "unique constraint")
+}
+
+func runtimeCreateDuplicateMatches(existing, seed Bead) bool {
+	if strings.TrimSpace(seed.ID) == "" || existing.ID != seed.ID {
+		return false
+	}
+	hash := strings.TrimSpace(seed.Metadata["gc.order.reservation_hash"])
+	if hash != "" {
+		return strings.TrimSpace(existing.Metadata["gc.order.reservation_hash"]) == hash
+	}
+	key := strings.TrimSpace(seed.Metadata["gc.idempotency_key"])
+	if key != "" {
+		return strings.TrimSpace(existing.Metadata["gc.idempotency_key"]) == key
+	}
+	return false
 }
 
 // Ping verifies the bd binary is accessible by running a no-op command.

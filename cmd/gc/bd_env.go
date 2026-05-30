@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -35,13 +36,22 @@ func bdCommandRunnerForCity(cityPath string) beads.CommandRunner {
 	})
 }
 
+func bdContextCommandRunnerForCity(cityPath string) beads.ContextCommandRunner {
+	return bdContextCommandRunnerWithManagedRetryErr(cityPath, func(dir string) (map[string]string, error) {
+		env, err := bdRuntimeEnvWithError(cityPath)
+		env["BEADS_DIR"] = filepath.Join(dir, ".beads")
+		return env, err
+	})
+}
+
 func bdStoreForCity(dir, cityPath string) *beads.BdStore {
 	cfg, err := loadCityConfig(cityPath, io.Discard)
 	if err != nil {
 		cfg = nil
 	}
 	reapStaleBdExportJSONL(dir)
-	store := beads.NewBdStoreWithPrefix(dir, bdCommandRunnerForCity(cityPath), issuePrefixForScope(dir, cityPath, cfg))
+	store := beads.NewBdStoreWithPrefix(dir, bdCommandRunnerForCity(cityPath), issuePrefixForScope(dir, cityPath, cfg)).
+		WithContextRunner(bdContextCommandRunnerForCity(cityPath))
 	return attachIndexedDoltReader(store, cityPath, dir)
 }
 
@@ -59,7 +69,8 @@ func bdStoreForRig(rigDir, cityPath string, cfg *config.City, knownPrefix ...str
 		}
 	}
 	reapStaleBdExportJSONL(rigDir)
-	store := beads.NewBdStoreWithPrefix(rigDir, bdCommandRunnerForRig(cityPath, cfg, rigDir), prefix)
+	store := beads.NewBdStoreWithPrefix(rigDir, bdCommandRunnerForRig(cityPath, cfg, rigDir), prefix).
+		WithContextRunner(bdContextCommandRunnerForRig(cityPath, cfg, rigDir))
 	return attachIndexedDoltReader(store, cityPath, rigDir)
 }
 
@@ -145,7 +156,8 @@ func scopeIsGCManaged(scopeRoot string) bool {
 
 func controlBdStoreForCity(dir, cityPath string, cfg *config.City) *beads.BdStore {
 	reapStaleBdExportJSONL(dir)
-	store := beads.NewBdStoreWithPrefix(dir, controlBdCommandRunnerForCity(cityPath), issuePrefixForScope(dir, cityPath, cfg))
+	store := beads.NewBdStoreWithPrefix(dir, controlBdCommandRunnerForCity(cityPath), issuePrefixForScope(dir, cityPath, cfg)).
+		WithContextRunner(controlBdContextCommandRunnerForCity(cityPath))
 	return attachIndexedDoltReader(store, cityPath, dir)
 }
 
@@ -160,7 +172,8 @@ func controlBdStoreForRig(rigDir, cityPath string, cfg *config.City, knownPrefix
 		}
 	}
 	reapStaleBdExportJSONL(rigDir)
-	store := beads.NewBdStoreWithPrefix(rigDir, controlBdCommandRunnerForRig(cityPath, cfg, rigDir), prefix)
+	store := beads.NewBdStoreWithPrefix(rigDir, controlBdCommandRunnerForRig(cityPath, cfg, rigDir), prefix).
+		WithContextRunner(controlBdContextCommandRunnerForRig(cityPath, cfg, rigDir))
 	return attachIndexedDoltReader(store, cityPath, rigDir)
 }
 
@@ -203,8 +216,31 @@ func controlBdCommandRunnerForCity(cityPath string) beads.CommandRunner {
 	})
 }
 
+func controlBdContextCommandRunnerForCity(cityPath string) beads.ContextCommandRunner {
+	return bdContextCommandRunnerWithManagedRetryErr(cityPath, func(dir string) (map[string]string, error) {
+		env, err := bdRuntimeEnvWithError(cityPath)
+		env["BEADS_DIR"] = filepath.Join(dir, ".beads")
+		applyControllerBdEnv(env)
+		return env, err
+	})
+}
+
 func controlBdCommandRunnerForRig(cityPath string, cfg *config.City, rigDir string) beads.CommandRunner {
 	return bdCommandRunnerWithManagedRetryErr(cityPath, func(_ string) (map[string]string, error) {
+		env, err := bdRuntimeEnvForRigWithError(cityPath, cfg, rigDir)
+		applyControllerBdEnv(env)
+		return env, err
+	})
+}
+
+func bdContextCommandRunnerForRig(cityPath string, cfg *config.City, rigDir string) beads.ContextCommandRunner {
+	return bdContextCommandRunnerWithManagedRetryErr(cityPath, func(_ string) (map[string]string, error) {
+		return bdRuntimeEnvForRigWithError(cityPath, cfg, rigDir)
+	})
+}
+
+func controlBdContextCommandRunnerForRig(cityPath string, cfg *config.City, rigDir string) beads.ContextCommandRunner {
+	return bdContextCommandRunnerWithManagedRetryErr(cityPath, func(_ string) (map[string]string, error) {
 		env, err := bdRuntimeEnvForRigWithError(cityPath, cfg, rigDir)
 		applyControllerBdEnv(env)
 		return env, err
@@ -563,7 +599,10 @@ var projectedDoltEnvKeys = []string{
 	"BEADS_DOLT_PASSWORD",
 }
 
-var beadsExecCommandRunnerWithEnv = beads.ExecCommandRunnerWithEnv
+var (
+	beadsExecCommandRunnerWithEnv        = beads.ExecCommandRunnerWithEnv
+	beadsExecContextCommandRunnerWithEnv = beads.ExecContextCommandRunnerWithEnv
+)
 
 var recoverManagedBDCommand = func(cityPath string) error {
 	script := gcBeadsBdScriptPath(cityPath)
@@ -897,6 +936,53 @@ func bdCommandRunnerWithManagedRetryErr(cityPath string, envFn func(dir string) 
 		ensureProjectedPostgresEnvExplicit(retryEnv)
 		retryRunner := beadsExecCommandRunnerWithEnv(retryEnv)
 		return retryRunner(dir, name, args...)
+	}
+}
+
+func bdContextCommandRunnerWithManagedRetryErr(cityPath string, envFn func(dir string) (map[string]string, error)) beads.ContextCommandRunner {
+	return func(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+		env, envErr := envFn(dir)
+		if envErr != nil {
+			return nil, envErr
+		}
+		if env == nil {
+			env = map[string]string{}
+		}
+		ensureProjectedDoltEnvExplicit(env)
+		ensureProjectedPostgresEnvExplicit(env)
+		runner := beadsExecContextCommandRunnerWithEnv(env)
+		out, err := runner(ctx, dir, name, args...)
+		if name != "bd" {
+			return out, err
+		}
+		if err != nil {
+			meta, ok, classifyErr := postgresMetadataForScope(cityPath, dir)
+			if classifyErr != nil {
+				return out, fmt.Errorf("classifying scope backend (bd error: %w): %w", err, classifyErr)
+			}
+			if ok {
+				return out, fmt.Errorf("postgres at %s:%s: gc does not manage external PG endpoints (no managed recovery attempted): %w", meta.PostgresHost, meta.PostgresPort, err)
+			}
+		}
+		if err == nil && scopeBackendIsPostgres(cityPath, dir) {
+			return out, err
+		}
+		if !bdTransportRetryableError(cityPath, dir, env, err) {
+			return out, err
+		}
+		if bdTransportRecoverableError(cityPath, dir, env, err) {
+			if recErr := recoverManagedBDCommand(cityPath); recErr != nil {
+				return out, err
+			}
+		}
+		retryEnv, retryEnvErr := envFn(dir)
+		if retryEnvErr != nil {
+			return nil, retryEnvErr
+		}
+		ensureProjectedDoltEnvExplicit(retryEnv)
+		ensureProjectedPostgresEnvExplicit(retryEnv)
+		retryRunner := beadsExecContextCommandRunnerWithEnv(retryEnv)
+		return retryRunner(ctx, dir, name, args...)
 	}
 }
 

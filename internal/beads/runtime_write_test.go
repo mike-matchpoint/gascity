@@ -1,0 +1,472 @@
+package beads
+
+import (
+	"context"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestRuntimeWritePolicyDefaults(t *testing.T) {
+	tests := []struct {
+		class WriteClass
+		want  time.Duration
+	}{
+		{WriteClassReservation, time.Second},
+		{WriteClassCursorReservation, time.Second},
+		{WriteClassPostActionCritical, 2 * time.Second},
+		{WriteClassAuditRepair, time.Second},
+		{WriteClassHotState, 2 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.class), func(t *testing.T) {
+			got := RuntimeWritePolicy(tt.class, "test", "key")
+			if got.Timeout != tt.want {
+				t.Fatalf("Timeout = %s, want %s", got.Timeout, tt.want)
+			}
+			if got.AllowFallback {
+				t.Fatalf("AllowFallback = true, want false")
+			}
+		})
+	}
+}
+
+func TestBdStoreRuntimeCreateTimeoutReturnsDegradedWithinBudget(t *testing.T) {
+	var runnerCalls atomic.Int64
+	store := NewBdStore(t.TempDir(), func(string, string, ...string) ([]byte, error) {
+		t.Fatal("foreground runner must not be used by RuntimeCreate")
+		return nil, nil
+	}).WithContextRunner(func(ctx context.Context, _ string, name string, args ...string) ([]byte, error) {
+		runnerCalls.Add(1)
+		if name != "bd" || len(args) == 0 || args[0] != "create" {
+			t.Fatalf("command = %s %v, want bd create", name, args)
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+
+	policy := RuntimeWritePolicy(WriteClassReservation, "test.reservation", "reservation-1")
+	policy.Timeout = 20 * time.Millisecond
+	start := time.Now()
+	_, err := store.RuntimeCreate(context.Background(), Bead{
+		ID:    "gc-order-test",
+		Title: "tracking",
+		Metadata: map[string]string{
+			"gc.order.reservation_hash": "abc",
+		},
+	}, policy)
+	elapsed := time.Since(start)
+	if !IsDegradedWrite(err) {
+		t.Fatalf("err = %v, want degraded write", err)
+	}
+	var degraded *DegradedWriteError
+	if !errors.As(err, &degraded) || degraded.Outcome != WriteOutcomeAmbiguousTimeout {
+		t.Fatalf("degraded = %#v, want ambiguous timeout", degraded)
+	}
+	if elapsed > 250*time.Millisecond {
+		t.Fatalf("elapsed = %s, want bounded runtime write", elapsed)
+	}
+	if runnerCalls.Load() != 1 {
+		t.Fatalf("runner calls = %d, want 1", runnerCalls.Load())
+	}
+}
+
+func TestRuntimeWriteBypassesCachingStoreRefresh(t *testing.T) {
+	backing := &runtimeWriteCountingStore{Store: NewMemStore()}
+	cache := NewCachingStoreForTest(backing, nil)
+	policy := RuntimeWritePolicy(WriteClassReservation, "test.cache-bypass", "key")
+
+	created, err := RuntimeCreate(context.Background(), cache, Bead{ID: "gc-fixed", Title: "fixed"}, policy)
+	if err != nil {
+		t.Fatalf("RuntimeCreate: %v", err)
+	}
+	if created.ID != "gc-fixed" {
+		t.Fatalf("created ID = %q, want caller-provided ID", created.ID)
+	}
+	if backing.runtimeCreateCalls != 1 {
+		t.Fatalf("runtime create calls = %d, want 1", backing.runtimeCreateCalls)
+	}
+	if backing.getCalls != 0 {
+		t.Fatalf("backing Get calls = %d, want 0 runtime writes must bypass CachingStore refresh", backing.getCalls)
+	}
+	if err := RuntimeUpdate(context.Background(), cache, "gc-fixed", UpdateOpts{Metadata: map[string]string{"seen": "true"}}, policy); err != nil {
+		t.Fatalf("RuntimeUpdate: %v", err)
+	}
+	if _, err := RuntimeCloseAll(context.Background(), cache, []string{"gc-fixed"}, map[string]string{"close_reason": "done"}, policy); err != nil {
+		t.Fatalf("RuntimeCloseAll: %v", err)
+	}
+	if backing.runtimeUpdateCalls != 1 {
+		t.Fatalf("runtime update calls = %d, want 1", backing.runtimeUpdateCalls)
+	}
+	if backing.runtimeCloseAllCalls != 1 {
+		t.Fatalf("runtime close calls = %d, want 1", backing.runtimeCloseAllCalls)
+	}
+	if backing.getCalls != 0 {
+		t.Fatalf("backing Get calls = %d, want 0 runtime writes must bypass CachingStore readbacks", backing.getCalls)
+	}
+}
+
+type runtimeWriteCountingStore struct {
+	Store
+	runtimeCreateCalls   int
+	runtimeUpdateCalls   int
+	runtimeCloseAllCalls int
+	getCalls             int
+}
+
+func (s *runtimeWriteCountingStore) RuntimeCreate(_ context.Context, b Bead, _ WritePolicy) (Bead, error) {
+	s.runtimeCreateCalls++
+	return s.Create(b)
+}
+
+func (s *runtimeWriteCountingStore) RuntimeUpdate(_ context.Context, id string, opts UpdateOpts, _ WritePolicy) error {
+	s.runtimeUpdateCalls++
+	return s.Update(id, opts)
+}
+
+func (s *runtimeWriteCountingStore) RuntimeCloseAll(_ context.Context, ids []string, metadata map[string]string, _ WritePolicy) (int, error) {
+	s.runtimeCloseAllCalls++
+	return s.CloseAll(ids, metadata)
+}
+
+func (s *runtimeWriteCountingStore) RuntimePing(_ context.Context, _ WritePolicy) error {
+	return s.Ping()
+}
+
+func (s *runtimeWriteCountingStore) Get(id string) (Bead, error) {
+	s.getCalls++
+	return s.Store.Get(id)
+}
+
+func TestMemStoreRuntimeCreatePreservesCallerProvidedID(t *testing.T) {
+	store := NewMemStore()
+	policy := RuntimeWritePolicy(WriteClassReservation, "test.mem", "fixed")
+	created, err := store.RuntimeCreate(context.Background(), Bead{ID: "gc-order-fixed", Title: "fixed"}, policy)
+	if err != nil {
+		t.Fatalf("RuntimeCreate: %v", err)
+	}
+	if created.ID != "gc-order-fixed" {
+		t.Fatalf("ID = %q, want caller-provided ID", created.ID)
+	}
+}
+
+func TestBdStoreRuntimeWriterRegistryReusesManagerForSameStoreKey(t *testing.T) {
+	dir := t.TempDir()
+	first := NewBdStore(dir, nil)
+	second := NewBdStore(dir, nil)
+	if first.RuntimeWriteStoreKey() == "" {
+		t.Fatal("empty store key")
+	}
+	if first.RuntimeWriteStoreKey() != second.RuntimeWriteStoreKey() {
+		t.Fatalf("store keys differ: %q vs %q", first.RuntimeWriteStoreKey(), second.RuntimeWriteStoreKey())
+	}
+	if first.runtimeWriteManager() != second.runtimeWriteManager() {
+		t.Fatal("same canonical store key did not reuse one runtime write manager")
+	}
+}
+
+func TestBdStoreRuntimeWriterSerializesPerStore(t *testing.T) {
+	var active atomic.Int64
+	var maxActive atomic.Int64
+	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(ctx context.Context, _ string, _ string, _ ...string) ([]byte, error) {
+		now := active.Add(1)
+		for {
+			old := maxActive.Load()
+			if now <= old || maxActive.CompareAndSwap(old, now) {
+				break
+			}
+		}
+		defer active.Add(-1)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(30 * time.Millisecond):
+			return []byte(`[]`), nil
+		}
+	})
+	policy := RuntimeWritePolicy(WriteClassAuditRepair, "test.serialize", "same")
+	policy.Timeout = time.Second
+
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if err := store.RuntimeUpdate(context.Background(), "gc-1", UpdateOpts{Metadata: map[string]string{"i": string(rune('0' + i))}}, policy); err != nil {
+				t.Errorf("RuntimeUpdate(%d): %v", i, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if maxActive.Load() != 1 {
+		t.Fatalf("max active bd commands = %d, want 1", maxActive.Load())
+	}
+}
+
+func TestBdStoreRuntimeWriteCircuitBreakerOpensAfterTimeouts(t *testing.T) {
+	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(ctx context.Context, _ string, _ string, _ ...string) ([]byte, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	for i := 0; i < 3; i++ {
+		policy := RuntimeWritePolicy(WriteClassAuditRepair, "test.breaker", "key-"+string(rune('0'+i)))
+		policy.Timeout = 5 * time.Millisecond
+		_ = store.RuntimeUpdate(context.Background(), "gc-1", UpdateOpts{Metadata: map[string]string{"i": "1"}}, policy)
+	}
+	var stats RuntimeWriteManagerStats
+	for range 100 {
+		stats = store.RuntimeWriteManagerStats()
+		if stats.BreakerState == RuntimeWriteBreakerOpen {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if stats.BreakerState != RuntimeWriteBreakerOpen {
+		t.Fatalf("breaker state = %q, want open (stats=%+v)", stats.BreakerState, stats)
+	}
+}
+
+func TestBdStoreRuntimeWriteCoalescesIdempotencyKey(t *testing.T) {
+	var runnerCalls atomic.Int64
+	started := make(chan struct{})
+	release := make(chan struct{})
+	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(ctx context.Context, _ string, _ string, _ ...string) ([]byte, error) {
+		if runnerCalls.Add(1) == 1 {
+			close(started)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-release:
+			return []byte(`[]`), nil
+		}
+	})
+	policy := RuntimeWritePolicy(WriteClassAuditRepair, "test.coalesce", "same-key")
+	policy.Timeout = time.Second
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errs <- store.RuntimeUpdate(context.Background(), "gc-1", UpdateOpts{Metadata: map[string]string{"same": "true"}}, policy)
+	}()
+	<-started
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errs <- store.RuntimeUpdate(context.Background(), "gc-1", UpdateOpts{Metadata: map[string]string{"same": "true"}}, policy)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if store.RuntimeWriteManagerStats().Collapsed > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	close(release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("RuntimeUpdate: %v", err)
+		}
+	}
+	if runnerCalls.Load() != 1 {
+		t.Fatalf("runner calls = %d, want one coalesced runtime write", runnerCalls.Load())
+	}
+	if got := store.RuntimeWriteManagerStats().Collapsed; got != 1 {
+		t.Fatalf("collapsed = %d, want 1", got)
+	}
+}
+
+func TestBdStoreRuntimeCreateDuplicateMatchingReservationSucceeds(t *testing.T) {
+	var createCalls atomic.Int64
+	var showCalls atomic.Int64
+	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(_ context.Context, _ string, _ string, args ...string) ([]byte, error) {
+		switch args[0] {
+		case "create":
+			createCalls.Add(1)
+			return nil, errors.New("duplicate id already exists")
+		case "show":
+			showCalls.Add(1)
+			return []byte(`[{"id":"gc-order-fixed","title":"fixed","metadata":{"gc.order.reservation_hash":"hash-1"}}]`), nil
+		default:
+			t.Fatalf("unexpected bd args: %v", args)
+			return nil, nil
+		}
+	})
+	policy := RuntimeWritePolicy(WriteClassReservation, "test.duplicate", "reservation-key")
+	created, err := store.RuntimeCreate(context.Background(), Bead{
+		ID:    "gc-order-fixed",
+		Title: "fixed",
+		Metadata: map[string]string{
+			"gc.order.reservation_hash": "hash-1",
+		},
+	}, policy)
+	if err != nil {
+		t.Fatalf("RuntimeCreate duplicate: %v", err)
+	}
+	if created.ID != "gc-order-fixed" {
+		t.Fatalf("created ID = %q, want existing duplicate bead", created.ID)
+	}
+	if createCalls.Load() != 1 || showCalls.Load() != 1 {
+		t.Fatalf("calls create=%d show=%d, want 1/1", createCalls.Load(), showCalls.Load())
+	}
+}
+
+func TestBdStoreRuntimeCreateDuplicateMismatchedReservationFails(t *testing.T) {
+	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(_ context.Context, _ string, _ string, args ...string) ([]byte, error) {
+		switch args[0] {
+		case "create":
+			return nil, errors.New("duplicate id already exists")
+		case "show":
+			return []byte(`[{"id":"gc-order-fixed","title":"fixed","metadata":{"gc.order.reservation_hash":"other"}}]`), nil
+		default:
+			t.Fatalf("unexpected bd args: %v", args)
+			return nil, nil
+		}
+	})
+	policy := RuntimeWritePolicy(WriteClassReservation, "test.duplicate", "reservation-key")
+	_, err := store.RuntimeCreate(context.Background(), Bead{
+		ID:    "gc-order-fixed",
+		Title: "fixed",
+		Metadata: map[string]string{
+			"gc.order.reservation_hash": "hash-1",
+		},
+	}, policy)
+	if !IsDegradedWrite(err) || !strings.Contains(err.Error(), "mismatched reservation metadata") {
+		t.Fatalf("err = %v, want degraded mismatched reservation", err)
+	}
+}
+
+func TestBdStoreRuntimePingUsesRuntimeBudget(t *testing.T) {
+	var sawDeadline atomic.Bool
+	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(ctx context.Context, _ string, name string, args ...string) ([]byte, error) {
+		if name != "bd" || strings.Join(args, " ") != "list --json --limit 0" {
+			t.Fatalf("command = %s %v, want bd list --json --limit 0", name, args)
+		}
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < time.Second {
+			sawDeadline.Store(true)
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	policy := RuntimeWritePolicy(WriteClassAuditRepair, "test.ping", "ping")
+	policy.Timeout = 20 * time.Millisecond
+	start := time.Now()
+	err := store.RuntimePing(context.Background(), policy)
+	elapsed := time.Since(start)
+	if !IsDegradedWrite(err) {
+		t.Fatalf("err = %v, want degraded ping timeout", err)
+	}
+	if elapsed > 250*time.Millisecond {
+		t.Fatalf("elapsed = %s, want runtime ping budget", elapsed)
+	}
+	if !sawDeadline.Load() {
+		t.Fatal("runtime ping runner did not receive a short context deadline")
+	}
+}
+
+func TestBdStoreRuntimeWriteTraceIncludesPolicy(t *testing.T) {
+	tracePath := filepath.Join(t.TempDir(), "bd.trace")
+	t.Setenv("GC_BD_TRACE", tracePath)
+	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(_ context.Context, _ string, _ string, _ ...string) ([]byte, error) {
+		return []byte(`[]`), nil
+	})
+	policy := RuntimeWritePolicy(WriteClassAuditRepair, "test.trace", "trace-key")
+	if err := store.RuntimeUpdate(context.Background(), "gc-1", UpdateOpts{Metadata: map[string]string{"safe": "true"}}, policy); err != nil {
+		t.Fatalf("RuntimeUpdate: %v", err)
+	}
+	data, err := os.ReadFile(tracePath)
+	if err != nil {
+		t.Fatalf("read trace: %v", err)
+	}
+	trace := string(data)
+	for _, want := range []string{
+		"runtime_write",
+		"caller=test.trace",
+		"class=audit-repair",
+		"op=update",
+		"command=bd:update",
+		"outcome=success",
+		"store_key=",
+	} {
+		if !strings.Contains(trace, want) {
+			t.Fatalf("trace missing %q:\n%s", want, trace)
+		}
+	}
+}
+
+func TestExecContextCommandRunnerCancellationKillsDoltRemoteChild(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh unavailable")
+	}
+	binDir := t.TempDir()
+	pidFile := filepath.Join(binDir, "dolt.pid")
+	writeRuntimeWriteExecutable(t, filepath.Join(binDir, "dolt"), `#!/bin/sh
+echo "$$" > "`+pidFile+`"
+sleep 30
+`)
+	writeRuntimeWriteExecutable(t, filepath.Join(binDir, "bd"), `#!/bin/sh
+dolt remote -v &
+while [ ! -s "`+pidFile+`" ]; do sleep 0.01; done
+	wait
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := ExecContextCommandRunnerWithEnv(nil)(ctx, t.TempDir(), "bd", "show", "gc-1")
+		done <- err
+	}()
+	childPID := waitForRuntimeWriteTestPID(t, pidFile)
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("runner unexpectedly succeeded after context cancellation")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runner did not return after context cancellation")
+	}
+	for range 50 {
+		if exec.Command("kill", "-0", childPID).Run() != nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	_ = exec.Command("kill", "-KILL", childPID).Run()
+	t.Fatalf("dolt remote child pid %s survived context timeout", childPID)
+}
+
+func writeRuntimeWriteExecutable(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatalf("write executable %s: %v", path, err)
+	}
+}
+
+func waitForRuntimeWriteTestPID(t *testing.T, path string) string {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			pid := strings.TrimSpace(string(data))
+			if pid != "" {
+				return pid
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("pid file %s was not written", path)
+	return ""
+}

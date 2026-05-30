@@ -74,8 +74,17 @@ func (m *MemStore) Create(b Bead) (Bead, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if strings.TrimSpace(b.ID) != "" {
+		for _, existing := range m.beads {
+			if existing.ID == b.ID {
+				return Bead{}, fmt.Errorf("creating bead %q: duplicate id", b.ID)
+			}
+		}
+	}
 	m.seq++
-	b.ID = fmt.Sprintf("gc-%d", m.seq)
+	if strings.TrimSpace(b.ID) == "" {
+		b.ID = fmt.Sprintf("gc-%d", m.seq)
+	}
 	b.Status = "open"
 	if b.Type == "" {
 		b.Type = "task"
@@ -101,6 +110,37 @@ func (m *MemStore) Create(b Bead) (Bead, error) {
 		})
 	}
 	return cloneBead(stored), nil
+}
+
+// RuntimeCreate persists a bead under a runtime write policy. MemStore is
+// in-process, so it preserves foreground semantics while honoring cancellation.
+func (m *MemStore) RuntimeCreate(ctx context.Context, b Bead, policy WritePolicy) (Bead, error) {
+	select {
+	case <-ctxDone(ctx):
+		return Bead{}, degradedWrite(normalizeWritePolicy(policy), "memory", "create", WriteOutcomeNotStarted, ctx.Err())
+	default:
+	}
+	return m.Create(b)
+}
+
+// RuntimeUpdate updates a bead under a runtime write policy.
+func (m *MemStore) RuntimeUpdate(ctx context.Context, id string, opts UpdateOpts, policy WritePolicy) error {
+	select {
+	case <-ctxDone(ctx):
+		return degradedWrite(normalizeWritePolicy(policy), "memory", "update", WriteOutcomeNotStarted, ctx.Err())
+	default:
+	}
+	return m.Update(id, opts)
+}
+
+// RuntimeCloseAll closes beads under a runtime write policy.
+func (m *MemStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy WritePolicy) (int, error) {
+	select {
+	case <-ctxDone(ctx):
+		return 0, degradedWrite(normalizeWritePolicy(policy), "memory", "close-all", WriteOutcomeNotStarted, ctx.Err())
+	default:
+	}
+	return m.CloseAll(ids, metadata)
 }
 
 // Update modifies fields of an existing bead. Only non-nil fields in opts
@@ -479,6 +519,16 @@ func (m *MemStore) Delete(id string) error {
 
 // Ping always succeeds for MemStore (in-memory, always available).
 func (m *MemStore) Ping() error {
+	return nil
+}
+
+// RuntimePing reports in-process store health under a runtime write policy.
+func (m *MemStore) RuntimePing(ctx context.Context, policy WritePolicy) error {
+	select {
+	case <-ctxDone(ctx):
+		return degradedWrite(normalizeWritePolicy(policy), "memory", "ping", WriteOutcomeNotStarted, ctx.Err())
+	default:
+	}
 	return nil
 }
 
