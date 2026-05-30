@@ -2120,12 +2120,15 @@ export interface components {
             acp_command?: string;
             args?: string[] | null;
             command?: string;
+            continuation_integrity?: string;
             display_name?: string;
             env?: {
                 [key: string]: string;
             };
+            fatal_resume_errors?: string[] | null;
             /** @description Provider origin: builtin, city, or builtin+city. */
             origin: string;
+            private_history_policy?: string;
             prompt_flag?: string;
             prompt_mode?: string;
             /** Format: int64 */
@@ -3401,16 +3404,22 @@ export interface components {
             base?: string;
             /** @description Provider command binary. Omit for base-only descendants. */
             command?: string;
+            /** @description Provider continuation reuse policy. */
+            continuation_integrity?: string;
             /** @description Human-readable display name. */
             display_name?: string;
             /** @description Environment variables. */
             env?: {
                 [key: string]: string;
             };
+            /** @description Provider output classifiers that force fresh continuation. */
+            fatal_resume_errors?: string[] | null;
             /** @description Provider name. */
             name: string;
             /** @description Options schema merge mode across inheritance chain. */
             options_schema_merge?: string;
+            /** @description Opaque provider-private transcript handling policy. */
+            private_history_policy?: string;
             /** @description Flag for prompt delivery. */
             prompt_flag?: string;
             /** @description Prompt delivery mode. */
@@ -3445,12 +3454,15 @@ export interface components {
             ArgsAppend: string[] | null;
             Base: string | null;
             Command: string | null;
+            ContinuationIntegrity: string | null;
             Env: {
                 [key: string]: string;
             };
             EnvRemove: string[] | null;
+            FatalResumeErrors: string[] | null;
             Name: string;
             OptionsSchemaMerge: string | null;
+            PrivateHistoryPolicy: string | null;
             PromptFlag: string | null;
             PromptMode: string | null;
             /** Format: int64 */
@@ -3537,10 +3549,13 @@ export interface components {
             acp_command?: string;
             args?: string[] | null;
             command?: string;
+            continuation_integrity?: string;
             display_name?: string;
             env?: {
                 [key: string]: string;
             };
+            fatal_resume_errors?: string[] | null;
+            private_history_policy?: string;
             prompt_flag?: string;
             prompt_mode?: string;
             /** Format: int64 */
@@ -3559,14 +3574,20 @@ export interface components {
             base?: string;
             /** @description Provider command binary. */
             command?: string;
+            /** @description Provider continuation reuse policy. */
+            continuation_integrity?: string;
             /** @description Human-readable display name. */
             display_name?: string;
             /** @description Environment variables. */
             env?: {
                 [key: string]: string;
             };
+            /** @description Provider output classifiers that force fresh continuation. */
+            fatal_resume_errors?: string[] | null;
             /** @description Options schema merge mode across inheritance chain. */
             options_schema_merge?: string;
+            /** @description Opaque provider-private transcript handling policy. */
+            private_history_policy?: string;
             /** @description Flag for prompt delivery. */
             prompt_flag?: string;
             /** @description Prompt delivery mode. */
