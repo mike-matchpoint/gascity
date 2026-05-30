@@ -215,14 +215,17 @@ export type AnnotatedProviderResponse = {
     acp_command?: string;
     args?: Array<string> | null;
     command?: string;
+    continuation_integrity?: string;
     display_name?: string;
     env?: {
         [key: string]: string;
     };
+    fatal_resume_errors?: Array<string> | null;
     /**
      * Provider origin: builtin, city, or builtin+city.
      */
     origin: string;
+    private_history_policy?: string;
     prompt_flag?: string;
     prompt_mode?: string;
     ready_delay_ms?: number;
@@ -1931,6 +1934,10 @@ export type ProviderCreateInputBody = {
      */
     command?: string;
     /**
+     * Provider continuation reuse policy.
+     */
+    continuation_integrity?: string;
+    /**
      * Human-readable display name.
      */
     display_name?: string;
@@ -1941,6 +1948,10 @@ export type ProviderCreateInputBody = {
         [key: string]: string;
     };
     /**
+     * Provider output classifiers that force fresh continuation.
+     */
+    fatal_resume_errors?: Array<string> | null;
+    /**
      * Provider name.
      */
     name: string;
@@ -1948,6 +1959,10 @@ export type ProviderCreateInputBody = {
      * Options schema merge mode across inheritance chain.
      */
     options_schema_merge?: string;
+    /**
+     * Opaque provider-private transcript handling policy.
+     */
+    private_history_policy?: string;
     /**
      * Flag for prompt delivery.
      */
@@ -1989,12 +2004,15 @@ export type ProviderPatch = {
     ArgsAppend: Array<string> | null;
     Base: string | null;
     Command: string | null;
+    ContinuationIntegrity: string | null;
     Env: {
         [key: string]: string;
     };
     EnvRemove: Array<string> | null;
+    FatalResumeErrors: Array<string> | null;
     Name: string;
     OptionsSchemaMerge: string | null;
+    PrivateHistoryPolicy: string | null;
     PromptFlag: string | null;
     PromptMode: string | null;
     ReadyDelayMs: number | null;
@@ -2106,10 +2124,13 @@ export type ProviderSpecJson = {
     acp_command?: string;
     args?: Array<string> | null;
     command?: string;
+    continuation_integrity?: string;
     display_name?: string;
     env?: {
         [key: string]: string;
     };
+    fatal_resume_errors?: Array<string> | null;
+    private_history_policy?: string;
     prompt_flag?: string;
     prompt_mode?: string;
     ready_delay_ms?: number;
@@ -2141,6 +2162,10 @@ export type ProviderUpdateInputBody = {
      */
     command?: string;
     /**
+     * Provider continuation reuse policy.
+     */
+    continuation_integrity?: string;
+    /**
      * Human-readable display name.
      */
     display_name?: string;
@@ -2151,9 +2176,17 @@ export type ProviderUpdateInputBody = {
         [key: string]: string;
     };
     /**
+     * Provider output classifiers that force fresh continuation.
+     */
+    fatal_resume_errors?: Array<string> | null;
+    /**
      * Options schema merge mode across inheritance chain.
      */
     options_schema_merge?: string;
+    /**
+     * Opaque provider-private transcript handling policy.
+     */
+    private_history_policy?: string;
     /**
      * Flag for prompt delivery.
      */
