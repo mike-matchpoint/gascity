@@ -118,6 +118,16 @@ const (
 	// each scheduled maintenance cycle completes or fails.
 	StoreMaintenanceDone   = "gc.store.maintenance.done"
 	StoreMaintenanceFailed = "gc.store.maintenance.failed"
+
+	// Formula-backed routed work creation and sling attachment evidence.
+	RouteCreateSourceCreated       = "route.create.source_created"
+	RouteCreateFormulaAttached     = "route.create.formula_attached"
+	RouteCreateRouted              = "route.create.routed"
+	RouteCreateValidationFailed    = "route.create.validation_failed"
+	SlingRouted                    = "sling.routed"
+	SlingFormulaAttached           = "sling.formula_attached"
+	SlingFormulaAttachmentSkipped  = "sling.formula_attachment_skipped"
+	SlingFormulaAttachmentRejected = "sling.formula_attachment_rejected"
 )
 
 // KnownEventTypes lists every event-type constant this package defines.
@@ -149,6 +159,8 @@ var KnownEventTypes = []string{
 	ExtMsgInbound, ExtMsgOutbound,
 	EventsRotated,
 	StoreMaintenanceDone, StoreMaintenanceFailed,
+	RouteCreateSourceCreated, RouteCreateFormulaAttached, RouteCreateRouted, RouteCreateValidationFailed,
+	SlingRouted, SlingFormulaAttached, SlingFormulaAttachmentSkipped, SlingFormulaAttachmentRejected,
 }
 
 // Event is a single recorded occurrence in the system.

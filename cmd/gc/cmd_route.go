@@ -12,6 +12,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/formula"
 	"github.com/gastownhall/gascity/internal/molecule"
 	"github.com/gastownhall/gascity/internal/routedwork"
@@ -38,6 +39,7 @@ type routeCreateOptions struct {
 }
 
 type routeCreateDeps struct {
+	Rec   events.Recorder
 	Sling slingDeps
 }
 
@@ -140,13 +142,15 @@ func cmdRouteCreate(opts routeCreateOptions, stdout, stderr io.Writer) int {
 		}
 	}
 	deps := routeCreateDeps{Sling: slingDeps{
-		CityName: cityName,
-		CityPath: cityPath,
-		Cfg:      cfg,
-		SP:       newSessionProvider(),
-		Runner:   runner,
-		Store:    store,
-		StoreRef: storeRef,
+		CityName:   cityName,
+		CityPath:   cityPath,
+		Cfg:        cfg,
+		SP:         newSessionProvider(),
+		Runner:     runner,
+		Store:      store,
+		StoreRef:   storeRef,
+		Recorder:   openCityRecorderAt(cityPath, stderr),
+		EventActor: eventActor(),
 		SourceWorkflowStores: func() ([]sling.SourceWorkflowStore, error) {
 			stores, skips, err := openSourceWorkflowStores(cfg, cityPath, "")
 			if err != nil {
@@ -165,6 +169,7 @@ func cmdRouteCreate(opts routeCreateOptions, stdout, stderr io.Writer) int {
 			return out, nil
 		},
 	}}
+	deps.Rec = deps.Sling.Recorder
 	return doRouteCreate(opts, deps, stdout, stderr)
 }
 
@@ -177,6 +182,18 @@ func doRouteCreate(opts routeCreateOptions, deps routeCreateDeps, stdout, stderr
 	}
 	if deps.Sling.Store == nil {
 		return routeCreateError(opts, stdout, stderr, "store_missing", fmt.Errorf("bead store is required"))
+	}
+	if deps.Rec == nil {
+		deps.Rec = deps.Sling.Recorder
+	}
+	if deps.Rec == nil {
+		deps.Rec = events.Discard
+	}
+	if deps.Sling.Recorder == nil {
+		deps.Sling.Recorder = deps.Rec
+	}
+	if strings.TrimSpace(deps.Sling.EventActor) == "" {
+		deps.Sling.EventActor = eventActor()
 	}
 	populateSlingDepsCallbacks(&deps.Sling)
 
@@ -205,6 +222,16 @@ func doRouteCreate(opts routeCreateOptions, deps routeCreateDeps, stdout, stderr
 	sourceMetadata[routeCreateClaimStoreRefMetadataKey] = storeRef
 
 	if err := prevalidateRouteCreateFormula(opts, deps.Sling, a, sourceMetadata); err != nil {
+		recordRouteCreateEvent(deps.Rec, deps.Sling.EventActor, events.RouteCreateValidationFailed, "", events.RouteWorkEventPayload{
+			RequestedTarget: plan.RequestedTarget,
+			Target:          plan.Target,
+			ClaimStoreRef:   storeRef,
+			Formula:         opts.On,
+			Method:          "on-formula",
+			StoreRef:        storeRef,
+			ErrorCode:       "formula_validation_failed",
+			ErrorMessage:    err.Error(),
+		})
 		return routeCreateError(opts, stdout, stderr, "formula_validation_failed", err)
 	}
 	if opts.DryRun {
@@ -233,6 +260,15 @@ func doRouteCreate(opts routeCreateOptions, deps routeCreateDeps, stdout, stderr
 	if err != nil {
 		return routeCreateError(opts, stdout, stderr, "bead_create_failed", fmt.Errorf("creating source bead: %w", err))
 	}
+	recordRouteCreateEvent(deps.Rec, deps.Sling.EventActor, events.RouteCreateSourceCreated, created.ID, events.RouteWorkEventPayload{
+		BeadID:          created.ID,
+		RequestedTarget: plan.RequestedTarget,
+		Target:          plan.Target,
+		ClaimStoreRef:   storeRef,
+		Formula:         opts.On,
+		Method:          "on-formula",
+		StoreRef:        storeRef,
+	})
 	slingOpts := slingOpts{
 		Target:        a,
 		BeadOrFormula: created.ID,
@@ -244,6 +280,30 @@ func doRouteCreate(opts routeCreateOptions, deps routeCreateDeps, stdout, stderr
 	if err != nil {
 		return routeCreateError(opts, stdout, stderr, "route_attach_failed", err)
 	}
+	recordRouteCreateEvent(deps.Rec, deps.Sling.EventActor, events.RouteCreateFormulaAttached, created.ID, events.RouteWorkEventPayload{
+		BeadID:          created.ID,
+		RequestedTarget: plan.RequestedTarget,
+		Target:          result.Target,
+		ClaimStoreRef:   storeRef,
+		Formula:         result.FormulaName,
+		Method:          result.Method,
+		WispRootID:      result.WispRootID,
+		WorkflowID:      result.WorkflowID,
+		StoreRef:        storeRef,
+		Idempotent:      result.Idempotent,
+	})
+	recordRouteCreateEvent(deps.Rec, deps.Sling.EventActor, events.RouteCreateRouted, created.ID, events.RouteWorkEventPayload{
+		BeadID:          created.ID,
+		RequestedTarget: plan.RequestedTarget,
+		Target:          result.Target,
+		ClaimStoreRef:   storeRef,
+		Formula:         result.FormulaName,
+		Method:          result.Method,
+		WispRootID:      result.WispRootID,
+		WorkflowID:      result.WorkflowID,
+		StoreRef:        storeRef,
+		Idempotent:      result.Idempotent,
+	})
 	if opts.JSON {
 		fresh, _ := deps.Sling.Store.Get(created.ID)
 		return writeCLIJSONLineOrExit(stdout, stderr, "gc route create", routeCreateJSONResult{
@@ -261,6 +321,22 @@ func doRouteCreate(opts routeCreateOptions, deps routeCreateDeps, stdout, stderr
 	fmt.Fprintf(stdout, "Created %s -- %q\n", created.ID, created.Title) //nolint:errcheck
 	printSlingResult(result, stdout, stderr)
 	return 0
+}
+
+func recordRouteCreateEvent(rec events.Recorder, actor, eventType, subject string, payload events.RouteWorkEventPayload) {
+	if rec == nil {
+		return
+	}
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		actor = "gc route create"
+	}
+	rec.Record(events.Event{
+		Type:    eventType,
+		Actor:   actor,
+		Subject: subject,
+		Payload: events.RouteWorkPayloadJSON(payload),
+	})
 }
 
 func validateRouteCreateOptions(opts routeCreateOptions) error {
