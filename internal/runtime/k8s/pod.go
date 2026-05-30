@@ -378,8 +378,9 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 			},
 		},
 		Spec: corev1.PodSpec{
-			ServiceAccountName: p.serviceAccount,
-			RestartPolicy:      corev1.RestartPolicyNever,
+			ServiceAccountName:    p.serviceAccount,
+			RestartPolicy:         corev1.RestartPolicyNever,
+			ShareProcessNamespace: boolPtr(true),
 			Containers: []corev1.Container{{
 				Name:            "agent",
 				Image:           p.image,

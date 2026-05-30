@@ -113,6 +113,9 @@ func TestSessionScriptStartRigManifestUsesPodPaths(t *testing.T) {
 	if result.err != nil {
 		t.Fatalf("gc-session-k8s start error = %v\noutput:\n%s", result.err, result.output)
 	}
+	if !result.shareProcessNS {
+		t.Fatal("manifest shareProcessNamespace = false, want true")
+	}
 	if got := result.manifestEnv["GC_CITY"]; got != "/workspace" {
 		t.Fatalf("manifest GC_CITY = %q, want /workspace", got)
 	}
@@ -149,6 +152,7 @@ type sessionScriptStartResult struct {
 	manifestMounts      map[string]string
 	containerWorkingDir string
 	containerArgs       []string
+	shareProcessNS      bool
 	callLog             string
 	output              string
 	err                 error
@@ -233,11 +237,13 @@ exit 1
 	manifestMounts := map[string]string{}
 	containerWorkingDir := ""
 	containerArgs := []string{}
+	shareProcessNS := false
 	manifestBytes, readManifestErr := os.ReadFile(manifestPath)
 	if readManifestErr == nil && len(manifestBytes) > 0 {
 		var manifest struct {
 			Spec struct {
-				Containers []struct {
+				ShareProcessNamespace bool `json:"shareProcessNamespace"`
+				Containers            []struct {
 					WorkingDir string   `json:"workingDir"`
 					Args       []string `json:"args"`
 					Env        []struct {
@@ -254,6 +260,7 @@ exit 1
 		if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
 			t.Fatalf("parse manifest json: %v\n%s", err, string(manifestBytes))
 		}
+		shareProcessNS = manifest.Spec.ShareProcessNamespace
 		if len(manifest.Spec.Containers) > 0 {
 			containerWorkingDir = manifest.Spec.Containers[0].WorkingDir
 			containerArgs = manifest.Spec.Containers[0].Args
@@ -278,6 +285,7 @@ exit 1
 		manifestMounts:      manifestMounts,
 		containerWorkingDir: containerWorkingDir,
 		containerArgs:       containerArgs,
+		shareProcessNS:      shareProcessNS,
 		callLog:             string(callLogBytes),
 		output:              string(out),
 		err:                 err,
