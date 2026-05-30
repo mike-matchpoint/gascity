@@ -3694,7 +3694,7 @@ func TestReaperCityDatabaseUsesShellFallbackWhenJSONParsersUnavailable(t *testin
 	cityDir := t.TempDir()
 	writeCityBeadsMetadata(t, cityDir, "citydb")
 	binDir := t.TempDir()
-	for _, tool := range []string{"bash", "dirname", "tail", "grep", "cut", "tr", "mktemp", "rm", "sed", "wc", "cat", "head"} {
+	for _, tool := range []string{"bash", "dirname", "tail", "grep", "cut", "tr", "mktemp", "rm", "sed", "wc", "cat", "head", "mkdir", "rmdir", "date", "mv", "python3"} {
 		linkTestPathTool(t, binDir, tool)
 	}
 	doltLog := filepath.Join(t.TempDir(), "dolt-args.log")

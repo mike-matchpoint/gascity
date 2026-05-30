@@ -116,6 +116,18 @@ func (e *Env) With(key, val string) *Env {
 	return e
 }
 
+// Clone returns an independent copy of the environment.
+func (e *Env) Clone() *Env {
+	if e == nil {
+		return &Env{vars: make(map[string]string)}
+	}
+	clone := &Env{vars: make(map[string]string, len(e.vars))}
+	for key, val := range e.vars {
+		clone.vars[key] = val
+	}
+	return clone
+}
+
 // Without removes a variable.
 func (e *Env) Without(key string) *Env {
 	delete(e.vars, key)
