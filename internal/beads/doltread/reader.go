@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	mysql "github.com/go-sql-driver/mysql"
@@ -26,7 +27,9 @@ type Config struct {
 
 // Reader serves supported active Beads list queries from bounded SQL reads.
 type Reader struct {
-	db *sql.DB
+	db                      *sql.DB
+	mu                      sync.Mutex
+	depTargetColumnsByTable map[string][]string
 }
 
 // Open creates a Reader with a small connection pool.
@@ -179,10 +182,11 @@ func isBoundedHistoryQuery(query beads.ListQuery) bool {
 }
 
 type tierSpec struct {
-	beadTable  string
-	labelTable string
-	depTable   string
-	ephemeral  bool
+	beadTable        string
+	labelTable       string
+	depTable         string
+	depTargetColumns []string
+	ephemeral        bool
 }
 
 var (
@@ -190,7 +194,35 @@ var (
 	tierWisps  = tierSpec{beadTable: "wisps", labelTable: "wisp_labels", depTable: "wisp_dependencies", ephemeral: true}
 )
 
+const (
+	dependencyIssueTargetColumn    = "depends_on_issue_id"
+	dependencyWispTargetColumn     = "depends_on_wisp_id"
+	dependencyExternalTargetColumn = "depends_on_external"
+	legacyDependencyTargetColumn   = "depends_on_id"
+)
+
+var (
+	splitDependencyTargetColumns = []string{
+		dependencyIssueTargetColumn,
+		dependencyWispTargetColumn,
+		dependencyExternalTargetColumn,
+	}
+	allDependencyTargetColumns = []string{
+		dependencyIssueTargetColumn,
+		dependencyWispTargetColumn,
+		dependencyExternalTargetColumn,
+		legacyDependencyTargetColumn,
+	}
+)
+
 func (r *Reader) listTier(ctx context.Context, query beads.ListQuery, tier tierSpec, applyLimit bool) (beads.IndexedListResult, error) {
+	var err error
+	if query.ParentID != "" {
+		tier, err = r.tierWithDependencyTargetColumns(ctx, tier)
+		if err != nil {
+			return beads.IndexedListResult{}, err
+		}
+	}
 	sqlText, args := buildListSQL(query, tier, applyLimit)
 	rows, err := r.db.QueryContext(ctx, sqlText, args...)
 	if err != nil {
@@ -221,7 +253,7 @@ func (r *Reader) listTier(ctx context.Context, query beads.ListQuery, tier tierS
 			items[i].Labels = labelsByID[items[i].ID]
 		}
 	}
-	depsByID, err := r.loadDependencies(ctx, tier.depTable, ids)
+	depsByID, err := r.loadDependencies(ctx, tier, ids)
 	if err != nil {
 		return beads.IndexedListResult{Beads: items, LabelsCoverage: labelsCoverage}, err
 	}
@@ -245,6 +277,13 @@ func (r *Reader) listTier(ctx context.Context, query beads.ListQuery, tier tierS
 }
 
 func (r *Reader) countTier(ctx context.Context, query beads.ListQuery, tier tierSpec) (int, error) {
+	var err error
+	if query.ParentID != "" {
+		tier, err = r.tierWithDependencyTargetColumns(ctx, tier)
+		if err != nil {
+			return 0, err
+		}
+	}
 	sqlText, args := buildCountSQL(query, tier)
 	var count int
 	if err := r.db.QueryRowContext(ctx, sqlText, args...).Scan(&count); err != nil {
@@ -286,7 +325,7 @@ func buildWhereSQL(query beads.ListQuery, tier tierSpec) ([]string, []any) {
 		args = append(args, query.Label)
 	}
 	if query.ParentID != "" {
-		where = append(where, "EXISTS (SELECT 1 FROM "+tier.depTable+" d WHERE d.issue_id = b.id AND d.type = 'parent-child' AND "+dependencyTargetExpr("d")+" = ?)")
+		where = append(where, "EXISTS (SELECT 1 FROM "+tier.depTable+" d WHERE d.issue_id = b.id AND d.type = 'parent-child' AND "+dependencyTargetExprForTier(tier, "d")+" = ?)")
 		args = append(args, query.ParentID)
 	}
 	if !query.CreatedBefore.IsZero() {
@@ -331,7 +370,7 @@ func buildFromWhereSQL(query beads.ListQuery, tier tierSpec) (string, []string, 
 		args = append(args, query.Label)
 	}
 	if query.ParentID != "" {
-		where = append(where, dependencyTargetExpr("d")+" = ?")
+		where = append(where, dependencyTargetExprForTier(tier, "d")+" = ?")
 		args = append(args, query.ParentID)
 	}
 	return from, where, args
@@ -447,21 +486,28 @@ func (r *Reader) loadLabels(ctx context.Context, table string, ids []string) (ma
 	return out, nil
 }
 
-func (r *Reader) loadDependencies(ctx context.Context, table string, ids []string) (map[string][]beads.Dep, error) {
+func (r *Reader) loadDependencies(ctx context.Context, tier tierSpec, ids []string) (map[string][]beads.Dep, error) {
 	out := make(map[string][]beads.Dep, len(ids))
 	if len(ids) == 0 {
 		return out, nil
 	}
-	query, args := inQuery("SELECT issue_id, "+dependencyTargetExpr("")+" AS depends_on_id, type FROM "+table+" WHERE issue_id IN ", ids)
+	if len(tier.depTargetColumns) == 0 {
+		var err error
+		tier, err = r.tierWithDependencyTargetColumns(ctx, tier)
+		if err != nil {
+			return out, err
+		}
+	}
+	query, args := inQuery("SELECT issue_id, "+dependencyTargetExprForTier(tier, "")+" AS depends_on_id, type FROM "+tier.depTable+" WHERE issue_id IN ", ids)
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return out, fmt.Errorf("indexed dependencies %s: %w", table, err)
+		return out, fmt.Errorf("indexed dependencies %s: %w", tier.depTable, err)
 	}
 	defer rows.Close() //nolint:errcheck // best-effort cleanup
 	for rows.Next() {
 		var dep beads.Dep
 		if err := rows.Scan(&dep.IssueID, &dep.DependsOnID, &dep.Type); err != nil {
-			return out, fmt.Errorf("indexed dependencies scan %s: %w", table, err)
+			return out, fmt.Errorf("indexed dependencies scan %s: %w", tier.depTable, err)
 		}
 		if dep.IssueID == "" || dep.DependsOnID == "" {
 			continue
@@ -469,17 +515,114 @@ func (r *Reader) loadDependencies(ctx context.Context, table string, ids []strin
 		out[dep.IssueID] = append(out[dep.IssueID], dep)
 	}
 	if err := rows.Err(); err != nil {
-		return out, fmt.Errorf("indexed dependencies rows %s: %w", table, err)
+		return out, fmt.Errorf("indexed dependencies rows %s: %w", tier.depTable, err)
 	}
 	return out, nil
 }
 
 func dependencyTargetExpr(alias string) string {
+	return dependencyTargetExprFromColumns(alias, splitDependencyTargetColumns)
+}
+
+func dependencyTargetExprForTier(tier tierSpec, alias string) string {
+	columns := tier.depTargetColumns
+	if len(columns) == 0 {
+		columns = splitDependencyTargetColumns
+	}
+	return dependencyTargetExprFromColumns(alias, columns)
+}
+
+func dependencyTargetExprFromColumns(alias string, columns []string) string {
 	prefix := ""
 	if alias != "" {
 		prefix = alias + "."
 	}
-	return "COALESCE(" + prefix + "depends_on_issue_id, " + prefix + "depends_on_wisp_id, " + prefix + "depends_on_external)"
+	if len(columns) == 1 {
+		return prefix + columns[0]
+	}
+	parts := make([]string, 0, len(columns))
+	for _, column := range columns {
+		parts = append(parts, prefix+column)
+	}
+	return "COALESCE(" + strings.Join(parts, ", ") + ")"
+}
+
+func (r *Reader) tierWithDependencyTargetColumns(ctx context.Context, tier tierSpec) (tierSpec, error) {
+	columns, err := r.dependencyTargetColumns(ctx, tier.depTable)
+	if err != nil {
+		return tier, fmt.Errorf("indexed dependencies schema %s: %w", tier.depTable, err)
+	}
+	tier.depTargetColumns = columns
+	return tier, nil
+}
+
+func (r *Reader) dependencyTargetColumns(ctx context.Context, table string) ([]string, error) {
+	r.mu.Lock()
+	if columns, ok := r.depTargetColumnsByTable[table]; ok {
+		r.mu.Unlock()
+		return append([]string(nil), columns...), nil
+	}
+	r.mu.Unlock()
+
+	columns, err := r.detectDependencyTargetColumns(ctx, table)
+	if err != nil {
+		return nil, err
+	}
+
+	r.mu.Lock()
+	if r.depTargetColumnsByTable == nil {
+		r.depTargetColumnsByTable = make(map[string][]string)
+	}
+	r.depTargetColumnsByTable[table] = append([]string(nil), columns...)
+	r.mu.Unlock()
+	return append([]string(nil), columns...), nil
+}
+
+func (r *Reader) detectDependencyTargetColumns(ctx context.Context, table string) ([]string, error) {
+	query := "SELECT column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name IN (?, ?, ?, ?)"
+	args := []any{table}
+	for _, column := range allDependencyTargetColumns {
+		args = append(args, column)
+	}
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck // best-effort cleanup
+
+	available := make(map[string]bool, len(allDependencyTargetColumns))
+	for rows.Next() {
+		var column string
+		if err := rows.Scan(&column); err != nil {
+			return nil, err
+		}
+		available[strings.ToLower(column)] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	columns := dependencyTargetColumnsFromAvailable(available)
+	if len(columns) == 0 {
+		return nil, fmt.Errorf("no supported dependency target columns")
+	}
+	return columns, nil
+}
+
+func dependencyTargetColumnsFromAvailable(available map[string]bool) []string {
+	columns := make([]string, 0, len(splitDependencyTargetColumns))
+	for _, column := range splitDependencyTargetColumns {
+		if available[column] {
+			columns = append(columns, column)
+		}
+	}
+	if len(columns) > 0 {
+		return columns
+	}
+	if available[legacyDependencyTargetColumn] {
+		return []string{legacyDependencyTargetColumn}
+	}
+	return nil
 }
 
 func metadataJSONPath(key string) string {

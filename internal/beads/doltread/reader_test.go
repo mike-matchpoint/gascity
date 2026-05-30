@@ -141,6 +141,38 @@ func TestBuildListSQLUsesBoundedSplitDependencySelectors(t *testing.T) {
 	}
 }
 
+func TestBuildListSQLSupportsLegacyDependencySelector(t *testing.T) {
+	legacyTier := tierIssues
+	legacyTier.depTargetColumns = []string{legacyDependencyTargetColumn}
+
+	sqlText, args := buildListSQL(beads.ListQuery{
+		Status:   "open",
+		ParentID: "bd-parent",
+	}, legacyTier, true)
+
+	for _, want := range []string{
+		"FROM dependencies d JOIN issues b ON b.id = d.issue_id AND d.type = 'parent-child'",
+		"b.status NOT IN ('closed', 'in_progress')",
+		"d.depends_on_id = ?",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("SQL missing %q:\n%s", want, sqlText)
+		}
+	}
+	for _, unexpected := range []string{
+		"depends_on_issue_id",
+		"depends_on_wisp_id",
+		"depends_on_external",
+	} {
+		if strings.Contains(sqlText, unexpected) {
+			t.Fatalf("legacy SQL references split column %q:\n%s", unexpected, sqlText)
+		}
+	}
+	if !reflect.DeepEqual(args, []any{"bd-parent"}) {
+		t.Fatalf("args = %#v, want [bd-parent]", args)
+	}
+}
+
 func TestBuildListSQLStatusSemantics(t *testing.T) {
 	sqlText, args := buildListSQL(beads.ListQuery{AllowScan: true}, tierIssues, true)
 	if !strings.Contains(sqlText, "b.status <> 'closed'") {
@@ -252,6 +284,34 @@ func TestDependencyTargetExprUsesSplitColumns(t *testing.T) {
 	want := "COALESCE(d.depends_on_issue_id, d.depends_on_wisp_id, d.depends_on_external)"
 	if got != want {
 		t.Fatalf("dependencyTargetExpr() = %q, want %q", got, want)
+	}
+}
+
+func TestDependencyTargetColumnsFromAvailablePrefersSplitColumns(t *testing.T) {
+	got := dependencyTargetColumnsFromAvailable(map[string]bool{
+		dependencyIssueTargetColumn:  true,
+		dependencyWispTargetColumn:   true,
+		legacyDependencyTargetColumn: true,
+	})
+	want := []string{dependencyIssueTargetColumn, dependencyWispTargetColumn}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("dependencyTargetColumnsFromAvailable() = %#v, want %#v", got, want)
+	}
+
+	got = dependencyTargetColumnsFromAvailable(map[string]bool{
+		legacyDependencyTargetColumn: true,
+	})
+	want = []string{legacyDependencyTargetColumn}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("dependencyTargetColumnsFromAvailable(legacy) = %#v, want %#v", got, want)
+	}
+}
+
+func TestDependencyTargetExprSupportsLegacyColumn(t *testing.T) {
+	got := dependencyTargetExprFromColumns("d", []string{legacyDependencyTargetColumn})
+	want := "d.depends_on_id"
+	if got != want {
+		t.Fatalf("dependencyTargetExprFromColumns() = %q, want %q", got, want)
 	}
 }
 
