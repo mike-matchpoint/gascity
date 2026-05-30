@@ -1428,6 +1428,119 @@ func TestTypedScaleCheckQueryCountsReadyExplicitStepDemand(t *testing.T) {
 	}
 }
 
+func TestTypedScaleCheckQueryCountsFormulaBackedWarrantLabelDemand(t *testing.T) {
+	const route = "gastown.dog"
+	activeSparse := beads.IndexedListResult{
+		Beads: []beads.Bead{{
+			ID:     "vg-warrant",
+			Title:  "dog warrant",
+			Type:   "task",
+			Status: "open",
+			Metadata: map[string]string{
+				"gc.routed_to":        route,
+				"gc.attached_formula": "mol-shutdown-dance",
+			},
+		}},
+		DependencyCoverage: true,
+		LabelsCoverage:     false,
+	}
+	activeWithLabels := beads.IndexedListResult{
+		Beads: []beads.Bead{{
+			ID:     "vg-warrant",
+			Title:  "dog warrant",
+			Type:   "task",
+			Status: "open",
+			Labels: []string{"warrant"},
+			Metadata: map[string]string{
+				"gc.routed_to":        route,
+				"gc.attached_formula": "mol-shutdown-dance",
+			},
+		}},
+		DependencyCoverage: true,
+		LabelsCoverage:     true,
+	}
+	indexed := &indexedListSequenceReader{results: []indexedListSequenceResult{
+		{result: activeSparse},
+		{result: activeWithLabels},
+	}}
+	runnerCalls := 0
+	backing := beads.NewBdStore("/city", func(string, string, ...string) ([]byte, error) {
+		runnerCalls++
+		return nil, errors.New("bd command fallback should not be used")
+	}).WithIndexedReader(indexed)
+	cache := beads.NewCachingStoreForTest(backing, nil)
+	if err := cache.PrimeActive(); err != nil {
+		t.Fatalf("PrimeActive: %v", err)
+	}
+
+	selector := config.WorkSelector{Any: []config.WorkSelector{
+		{
+			Status:     "open",
+			Type:       "step",
+			Unassigned: true,
+			Metadata: map[string]string{
+				"gc.routed_to": route,
+			},
+		},
+		{
+			Status:     "open",
+			Type:       "task",
+			Label:      "warrant",
+			Unassigned: true,
+			Metadata: map[string]string{
+				"gc.routed_to":        route,
+				"gc.attached_formula": "mol-shutdown-dance",
+			},
+		},
+	}}
+	cfg := &config.City{Agents: []config.Agent{{
+		Name:              "dog",
+		BindingName:       "gastown",
+		WorkSelector:      selector,
+		ScaleCheckQuery:   selector,
+		MinActiveSessions: intPtr(0),
+		MaxActiveSessions: intPtr(3),
+	}}}
+	template := cfg.Agents[0].QualifiedName()
+	if template != route {
+		t.Fatalf("QualifiedName = %q, want %s", template, route)
+	}
+	selected, ok := typedDemandSelectorForAgent(&cfg.Agents[0])
+	if !ok {
+		t.Fatal("typedDemandSelectorForAgent returned no selector")
+	}
+
+	var stderr strings.Builder
+	counts, partials := evaluateTypedPendingPoolsMap(cfg, []typedPoolEvalWork{
+		typedPoolEvalWorkForAgent(t.TempDir(), cfg, &cfg.Agents[0], selected, cache, nil),
+	}, &stderr, nil)
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want no typed scale_check_query degradation", stderr.String())
+	}
+	if len(partials) != 0 {
+		t.Fatalf("partials = %v, want no partial typed scale_check_query", partials)
+	}
+	if got := counts[template]; got != 1 {
+		t.Fatalf("typed scale_check_query count = %d, counts = %v, want formula-backed warrant demand", got, counts)
+	}
+	poolDesired := PoolDesiredCounts(ComputePoolDesiredStates(cfg, nil, nil, counts))
+	if got := poolDesired[template]; got != 1 {
+		t.Fatalf("pool desired count = %d, poolDesired = %v, want dog session demand", got, poolDesired)
+	}
+	if indexed.calls < 2 {
+		t.Fatalf("ListIndexed calls = %d, want prime plus label-filtered hot read", indexed.calls)
+	}
+	if indexed.queries[0].SkipLabels != true {
+		t.Fatalf("prime query SkipLabels = false, want true")
+	}
+	if indexed.queries[1].Label != "warrant" || indexed.queries[1].SkipLabels {
+		t.Fatalf("label demand query = %+v, want label warrant with hydrated labels", indexed.queries[1])
+	}
+	if runnerCalls != 0 {
+		t.Fatalf("bd runner calls = %d, want no bd fallback", runnerCalls)
+	}
+}
+
 func TestDefaultScaleCheckCountsUsesPartialReadyRows(t *testing.T) {
 	store := &partialAssignedWorkStore{MemStore: beads.NewMemStore(), partialReady: true}
 	if _, err := store.Create(beads.Bead{
