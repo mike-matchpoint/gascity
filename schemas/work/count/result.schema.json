@@ -4,9 +4,13 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "ok",
     "count"
   ],
   "properties": {
+    "ok": {
+      "const": true
+    },
     "count": {
       "type": "integer",
       "minimum": 0

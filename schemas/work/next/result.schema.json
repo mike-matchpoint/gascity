@@ -4,11 +4,15 @@
   "type": "object",
   "additionalProperties": true,
   "required": [
+    "ok",
     "id",
     "status",
     "issue_type"
   ],
   "properties": {
+    "ok": {
+      "const": true
+    },
     "id": {
       "type": "string"
     },

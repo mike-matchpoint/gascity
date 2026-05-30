@@ -4,12 +4,16 @@
   "type": "object",
   "additionalProperties": true,
   "required": [
+    "ok",
     "id",
     "status",
     "issue_type",
     "assignee"
   ],
   "properties": {
+    "ok": {
+      "const": true
+    },
     "id": {
       "type": "string"
     },
