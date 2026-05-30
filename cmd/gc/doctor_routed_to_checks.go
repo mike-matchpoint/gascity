@@ -2,12 +2,16 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/doctor"
+	"github.com/gastownhall/gascity/internal/routedwork"
+	"github.com/gastownhall/gascity/internal/workselect"
 )
 
 type v2RoutedToNamespaceCheck struct {
@@ -18,6 +22,210 @@ type v2RoutedToNamespaceCheck struct {
 
 func newV2RoutedToNamespaceCheck(cfg *config.City, cityPath string, newStore func(string) (beads.Store, error)) *v2RoutedToNamespaceCheck {
 	return &v2RoutedToNamespaceCheck{cfg: cfg, cityPath: cityPath, newStore: newStore}
+}
+
+type routedWorkDemandContractCheck struct {
+	cfg      *config.City
+	cityPath string
+	newStore func(string) (beads.Store, error)
+}
+
+type routedWorkDemandScope struct {
+	label string
+	path  string
+}
+
+type routedWorkClaimCacheEntry struct {
+	ids map[string]bool
+	err error
+}
+
+func newRoutedWorkDemandContractCheck(cfg *config.City, cityPath string, newStore func(string) (beads.Store, error)) *routedWorkDemandContractCheck {
+	return &routedWorkDemandContractCheck{cfg: cfg, cityPath: cityPath, newStore: newStore}
+}
+
+func (c *routedWorkDemandContractCheck) Name() string { return "routed-work-demand-contract" }
+
+func (c *routedWorkDemandContractCheck) CanFix() bool { return false }
+
+func (c *routedWorkDemandContractCheck) Fix(_ *doctor.CheckContext) error { return nil }
+
+func (c *routedWorkDemandContractCheck) Run(_ *doctor.CheckContext) *doctor.CheckResult {
+	if c.cfg == nil {
+		return okCheck(c.Name(), "no city config loaded")
+	}
+	if c.newStore == nil || strings.TrimSpace(c.cityPath) == "" {
+		return warnCheck(c.Name(),
+			"routed work demand contract check skipped: bead store unavailable",
+			"fix bead store access, then rerun gc doctor",
+			nil)
+	}
+
+	var findings []string
+	var skipped []string
+	claimCache := map[string]routedWorkClaimCacheEntry{}
+	for _, scope := range c.scopes() {
+		store, err := c.newStore(scope.path)
+		if err != nil {
+			skipped = append(skipped, fmt.Sprintf("%s skipped: opening bead store: %v", scope.label, err))
+			continue
+		}
+		items, err := store.List(beads.ListQuery{
+			Status:    "open",
+			AllowScan: true,
+			TierMode:  beads.TierBoth,
+			Sort:      beads.SortCreatedAsc,
+		})
+		if err != nil {
+			skipped = append(skipped, fmt.Sprintf("%s skipped: listing open routed beads: %v", scope.label, err))
+			continue
+		}
+		for _, bead := range items {
+			if strings.TrimSpace(bead.Metadata[routedwork.RoutedToMetadataKey]) == "" {
+				continue
+			}
+			c.scanDemandBead(scope, store, bead, claimCache, &findings, &skipped)
+		}
+	}
+
+	details := append([]string{}, findings...)
+	details = append(details, skipped...)
+	sort.Strings(details)
+	if len(findings) == 0 && len(skipped) == 0 {
+		return okCheck(c.Name(), "routed work demand contract is satisfied")
+	}
+	if len(findings) == 0 {
+		return warnCheck(c.Name(),
+			fmt.Sprintf("routed work demand contract check skipped %d scope(s)", len(skipped)),
+			"fix bead store access, then rerun gc doctor",
+			details)
+	}
+	return warnCheck(c.Name(),
+		fmt.Sprintf("%d routed work demand contract issue(s) found", len(findings)),
+		"create routed work through gc route create or formula-order dispatch, then remove or repair stale incompatible beads",
+		details)
+}
+
+func (c *routedWorkDemandContractCheck) scopes() []routedWorkDemandScope {
+	scopes := []routedWorkDemandScope{{
+		label: "city",
+		path:  filepath.Clean(c.cityPath),
+	}}
+	for _, rig := range c.cfg.Rigs {
+		if rig.Suspended || strings.TrimSpace(rig.Path) == "" {
+			continue
+		}
+		scopes = append(scopes, routedWorkDemandScope{
+			label: "rig " + rig.Name,
+			path:  resolveStoreScopeRoot(c.cityPath, rig.Path),
+		})
+	}
+	return scopes
+}
+
+func (c *routedWorkDemandContractCheck) scanDemandBead(scope routedWorkDemandScope, store beads.Store, bead beads.Bead, claimCache map[string]routedWorkClaimCacheEntry, findings, skipped *[]string) {
+	route := strings.TrimSpace(bead.Metadata[routedwork.RoutedToMetadataKey])
+	if route == "" {
+		return
+	}
+	if isFormulaOrderRootMissingPoolDemand(bead) {
+		*findings = append(*findings, fmt.Sprintf("missing order demand sentinel: %s bead %s has gc.routed_to=%q and an order-run label but missing %s=%q",
+			scope.label, bead.ID, route, routedwork.PoolDemandMetadataKey, routedwork.PoolDemandOrderValue))
+	}
+
+	plan, err := routedwork.PlanRoute(c.cfg, route, routedwork.DemandGeneric)
+	if err != nil {
+		if strings.TrimSpace(bead.Assignee) == "" {
+			*findings = append(*findings, fmt.Sprintf("unclaimable routed work: %s bead %s has gc.routed_to=%q but no configured target can claim it: %v",
+				scope.label, bead.ID, route, err))
+		}
+		return
+	}
+	wantStore := routeCreateStoreRoot(c.cfg, c.cityPath, plan)
+	if strings.TrimSpace(wantStore) != "" && !samePath(wantStore, scope.path) {
+		*findings = append(*findings, fmt.Sprintf("wrong claim store: %s bead %s has gc.routed_to=%q but target %q claims from %s",
+			scope.label, bead.ID, route, plan.Target, routedWorkScopeLabelForPath(c.cfg, c.cityPath, wantStore)))
+		return
+	}
+	if strings.TrimSpace(bead.Assignee) != "" {
+		return
+	}
+	agentCfg, ok := findAgentByQualified(c.cfg, plan.Target)
+	if !ok {
+		*findings = append(*findings, fmt.Sprintf("unclaimable routed work: %s bead %s has gc.routed_to=%q but resolved target %q is not configured",
+			scope.label, bead.ID, route, plan.Target))
+		return
+	}
+	if agentCfg.Suspended {
+		*findings = append(*findings, fmt.Sprintf("unclaimable routed work: %s bead %s has gc.routed_to=%q but target %q is suspended",
+			scope.label, bead.ID, route, plan.Target))
+		return
+	}
+	if !agentCfg.SupportsGenericEphemeralSessions() {
+		*findings = append(*findings, fmt.Sprintf("unclaimable routed work: %s bead %s has gc.routed_to=%q but target %q cannot start generic ephemeral sessions",
+			scope.label, bead.ID, route, plan.Target))
+		return
+	}
+	if agentCfg.WorkSelector.IsZero() {
+		*findings = append(*findings, fmt.Sprintf("unclaimable routed work: %s bead %s has gc.routed_to=%q but target %q has no work_selector",
+			scope.label, bead.ID, route, plan.Target))
+		return
+	}
+	ids, err := c.claimableIDs(scope, store, agentCfg, claimCache)
+	if err != nil {
+		*skipped = append(*skipped, fmt.Sprintf("%s skipped: evaluating work_selector for %s: %v", scope.label, plan.Target, err))
+		return
+	}
+	if !ids[bead.ID] {
+		*findings = append(*findings, fmt.Sprintf("unclaimable routed work: %s bead %s has gc.routed_to=%q but target %q does not match work_selector",
+			scope.label, bead.ID, route, plan.Target))
+	}
+}
+
+func (c *routedWorkDemandContractCheck) claimableIDs(scope routedWorkDemandScope, store beads.Store, agentCfg config.Agent, claimCache map[string]routedWorkClaimCacheEntry) (map[string]bool, error) {
+	key := scope.path + "\x00" + agentCfg.QualifiedName()
+	if cached, ok := claimCache[key]; ok {
+		return cached.ids, cached.err
+	}
+	selector := expandWorkSelectorTemplates(c.cityPath, loadedCityName(c.cfg, c.cityPath), &agentCfg, c.cfg.Rigs, "work_selector", agentCfg.WorkSelector, io.Discard)
+	items, err := workselect.List(store, selector, 0)
+	entry := routedWorkClaimCacheEntry{ids: map[string]bool{}, err: err}
+	if err == nil {
+		for _, item := range items {
+			entry.ids[item.ID] = true
+		}
+	}
+	claimCache[key] = entry
+	return entry.ids, entry.err
+}
+
+func isFormulaOrderRootMissingPoolDemand(bead beads.Bead) bool {
+	if strings.TrimSpace(bead.Metadata[routedwork.PoolDemandMetadataKey]) == routedwork.PoolDemandOrderValue {
+		return false
+	}
+	for _, label := range bead.Labels {
+		if strings.HasPrefix(label, "order-run:") {
+			return true
+		}
+	}
+	return false
+}
+
+func routedWorkScopeLabelForPath(cfg *config.City, cityPath, path string) string {
+	if samePath(path, cityPath) {
+		return "city"
+	}
+	if cfg != nil {
+		for _, rig := range cfg.Rigs {
+			if strings.TrimSpace(rig.Path) == "" {
+				continue
+			}
+			if samePath(resolveStoreScopeRoot(cityPath, rig.Path), path) {
+				return "rig " + rig.Name
+			}
+		}
+	}
+	return path
 }
 
 func (c *v2RoutedToNamespaceCheck) Name() string { return "v2-routed-to-namespace" }

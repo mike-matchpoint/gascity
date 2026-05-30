@@ -2300,6 +2300,22 @@ type RotatedPayload struct {
 	PriorLastSeq  int64  `json:"prior_last_seq"`
 }
 
+// RouteWorkEventPayload defines model for RouteWorkEventPayload.
+type RouteWorkEventPayload struct {
+	BeadId          *string `json:"bead_id,omitempty"`
+	ClaimStoreRef   *string `json:"claim_store_ref,omitempty"`
+	ErrorCode       *string `json:"error_code,omitempty"`
+	ErrorMessage    *string `json:"error_message,omitempty"`
+	Formula         *string `json:"formula,omitempty"`
+	Idempotent      *bool   `json:"idempotent,omitempty"`
+	Method          *string `json:"method,omitempty"`
+	RequestedTarget *string `json:"requested_target,omitempty"`
+	StoreRef        *string `json:"store_ref,omitempty"`
+	Target          *string `json:"target,omitempty"`
+	WispRootId      *string `json:"wisp_root_id,omitempty"`
+	WorkflowId      *string `json:"workflow_id,omitempty"`
+}
+
 // ScopeGroup defines model for ScopeGroup.
 type ScopeGroup = map[string]interface{}
 
@@ -3480,6 +3496,54 @@ type TypedEventStreamEnvelopeRequestResultSessionSubmit struct {
 	Workflow *WorkflowEventProjection      `json:"workflow,omitempty"`
 }
 
+// TypedEventStreamEnvelopeRouteCreateFormulaAttached defines model for TypedEventStreamEnvelopeRouteCreateFormulaAttached.
+type TypedEventStreamEnvelopeRouteCreateFormulaAttached struct {
+	Actor    string                   `json:"actor"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RouteWorkEventPayload    `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedEventStreamEnvelopeRouteCreateRouted defines model for TypedEventStreamEnvelopeRouteCreateRouted.
+type TypedEventStreamEnvelopeRouteCreateRouted struct {
+	Actor    string                   `json:"actor"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RouteWorkEventPayload    `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedEventStreamEnvelopeRouteCreateSourceCreated defines model for TypedEventStreamEnvelopeRouteCreateSourceCreated.
+type TypedEventStreamEnvelopeRouteCreateSourceCreated struct {
+	Actor    string                   `json:"actor"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RouteWorkEventPayload    `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedEventStreamEnvelopeRouteCreateValidationFailed defines model for TypedEventStreamEnvelopeRouteCreateValidationFailed.
+type TypedEventStreamEnvelopeRouteCreateValidationFailed struct {
+	Actor    string                   `json:"actor"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RouteWorkEventPayload    `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
 // TypedEventStreamEnvelopeSessionCrashed defines model for TypedEventStreamEnvelopeSessionCrashed.
 type TypedEventStreamEnvelopeSessionCrashed struct {
 	Actor    string                   `json:"actor"`
@@ -3629,6 +3693,54 @@ type TypedEventStreamEnvelopeSessionWorkQueryFailed struct {
 	Actor    string                   `json:"actor"`
 	Message  *string                  `json:"message,omitempty"`
 	Payload  SessionLifecyclePayload  `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedEventStreamEnvelopeSlingFormulaAttached defines model for TypedEventStreamEnvelopeSlingFormulaAttached.
+type TypedEventStreamEnvelopeSlingFormulaAttached struct {
+	Actor    string                   `json:"actor"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RouteWorkEventPayload    `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedEventStreamEnvelopeSlingFormulaAttachmentRejected defines model for TypedEventStreamEnvelopeSlingFormulaAttachmentRejected.
+type TypedEventStreamEnvelopeSlingFormulaAttachmentRejected struct {
+	Actor    string                   `json:"actor"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RouteWorkEventPayload    `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedEventStreamEnvelopeSlingFormulaAttachmentSkipped defines model for TypedEventStreamEnvelopeSlingFormulaAttachmentSkipped.
+type TypedEventStreamEnvelopeSlingFormulaAttachmentSkipped struct {
+	Actor    string                   `json:"actor"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RouteWorkEventPayload    `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedEventStreamEnvelopeSlingRouted defines model for TypedEventStreamEnvelopeSlingRouted.
+type TypedEventStreamEnvelopeSlingRouted struct {
+	Actor    string                   `json:"actor"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RouteWorkEventPayload    `json:"payload"`
 	Seq      int64                    `json:"seq"`
 	Subject  *string                  `json:"subject,omitempty"`
 	Ts       time.Time                `json:"ts"`
@@ -4210,6 +4322,58 @@ type TypedTaggedEventStreamEnvelopeRequestResultSessionSubmit struct {
 	Workflow *WorkflowEventProjection      `json:"workflow,omitempty"`
 }
 
+// TypedTaggedEventStreamEnvelopeRouteCreateFormulaAttached defines model for TypedTaggedEventStreamEnvelopeRouteCreateFormulaAttached.
+type TypedTaggedEventStreamEnvelopeRouteCreateFormulaAttached struct {
+	Actor    string                   `json:"actor"`
+	City     string                   `json:"city"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RouteWorkEventPayload    `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedTaggedEventStreamEnvelopeRouteCreateRouted defines model for TypedTaggedEventStreamEnvelopeRouteCreateRouted.
+type TypedTaggedEventStreamEnvelopeRouteCreateRouted struct {
+	Actor    string                   `json:"actor"`
+	City     string                   `json:"city"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RouteWorkEventPayload    `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedTaggedEventStreamEnvelopeRouteCreateSourceCreated defines model for TypedTaggedEventStreamEnvelopeRouteCreateSourceCreated.
+type TypedTaggedEventStreamEnvelopeRouteCreateSourceCreated struct {
+	Actor    string                   `json:"actor"`
+	City     string                   `json:"city"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RouteWorkEventPayload    `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedTaggedEventStreamEnvelopeRouteCreateValidationFailed defines model for TypedTaggedEventStreamEnvelopeRouteCreateValidationFailed.
+type TypedTaggedEventStreamEnvelopeRouteCreateValidationFailed struct {
+	Actor    string                   `json:"actor"`
+	City     string                   `json:"city"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RouteWorkEventPayload    `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
 // TypedTaggedEventStreamEnvelopeSessionCrashed defines model for TypedTaggedEventStreamEnvelopeSessionCrashed.
 type TypedTaggedEventStreamEnvelopeSessionCrashed struct {
 	Actor    string                   `json:"actor"`
@@ -4372,6 +4536,58 @@ type TypedTaggedEventStreamEnvelopeSessionWorkQueryFailed struct {
 	City     string                   `json:"city"`
 	Message  *string                  `json:"message,omitempty"`
 	Payload  SessionLifecyclePayload  `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedTaggedEventStreamEnvelopeSlingFormulaAttached defines model for TypedTaggedEventStreamEnvelopeSlingFormulaAttached.
+type TypedTaggedEventStreamEnvelopeSlingFormulaAttached struct {
+	Actor    string                   `json:"actor"`
+	City     string                   `json:"city"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RouteWorkEventPayload    `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentRejected defines model for TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentRejected.
+type TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentRejected struct {
+	Actor    string                   `json:"actor"`
+	City     string                   `json:"city"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RouteWorkEventPayload    `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentSkipped defines model for TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentSkipped.
+type TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentSkipped struct {
+	Actor    string                   `json:"actor"`
+	City     string                   `json:"city"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RouteWorkEventPayload    `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedTaggedEventStreamEnvelopeSlingRouted defines model for TypedTaggedEventStreamEnvelopeSlingRouted.
+type TypedTaggedEventStreamEnvelopeSlingRouted struct {
+	Actor    string                   `json:"actor"`
+	City     string                   `json:"city"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RouteWorkEventPayload    `json:"payload"`
 	Seq      int64                    `json:"seq"`
 	Subject  *string                  `json:"subject,omitempty"`
 	Ts       time.Time                `json:"ts"`
@@ -6044,6 +6260,32 @@ func (t *EventPayload) MergeRotatedPayload(v RotatedPayload) error {
 	return err
 }
 
+// AsRouteWorkEventPayload returns the union data inside the EventPayload as a RouteWorkEventPayload
+func (t EventPayload) AsRouteWorkEventPayload() (RouteWorkEventPayload, error) {
+	var body RouteWorkEventPayload
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromRouteWorkEventPayload overwrites any union data inside the EventPayload as the provided RouteWorkEventPayload
+func (t *EventPayload) FromRouteWorkEventPayload(v RouteWorkEventPayload) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeRouteWorkEventPayload performs a merge with any union data inside the EventPayload, using the provided RouteWorkEventPayload
+func (t *EventPayload) MergeRouteWorkEventPayload(v RouteWorkEventPayload) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
 // AsSessionCreateSucceededPayload returns the union data inside the EventPayload as a SessionCreateSucceededPayload
 func (t EventPayload) AsSessionCreateSucceededPayload() (SessionCreateSucceededPayload, error) {
 	var body SessionCreateSucceededPayload
@@ -7548,6 +7790,118 @@ func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeRequestResultSes
 	return err
 }
 
+// AsTypedEventStreamEnvelopeRouteCreateFormulaAttached returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeRouteCreateFormulaAttached
+func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeRouteCreateFormulaAttached() (TypedEventStreamEnvelopeRouteCreateFormulaAttached, error) {
+	var body TypedEventStreamEnvelopeRouteCreateFormulaAttached
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedEventStreamEnvelopeRouteCreateFormulaAttached overwrites any union data inside the TypedEventStreamEnvelope as the provided TypedEventStreamEnvelopeRouteCreateFormulaAttached
+func (t *TypedEventStreamEnvelope) FromTypedEventStreamEnvelopeRouteCreateFormulaAttached(v TypedEventStreamEnvelopeRouteCreateFormulaAttached) error {
+	v.Type = "route.create.formula_attached"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedEventStreamEnvelopeRouteCreateFormulaAttached performs a merge with any union data inside the TypedEventStreamEnvelope, using the provided TypedEventStreamEnvelopeRouteCreateFormulaAttached
+func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeRouteCreateFormulaAttached(v TypedEventStreamEnvelopeRouteCreateFormulaAttached) error {
+	v.Type = "route.create.formula_attached"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedEventStreamEnvelopeRouteCreateRouted returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeRouteCreateRouted
+func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeRouteCreateRouted() (TypedEventStreamEnvelopeRouteCreateRouted, error) {
+	var body TypedEventStreamEnvelopeRouteCreateRouted
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedEventStreamEnvelopeRouteCreateRouted overwrites any union data inside the TypedEventStreamEnvelope as the provided TypedEventStreamEnvelopeRouteCreateRouted
+func (t *TypedEventStreamEnvelope) FromTypedEventStreamEnvelopeRouteCreateRouted(v TypedEventStreamEnvelopeRouteCreateRouted) error {
+	v.Type = "route.create.routed"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedEventStreamEnvelopeRouteCreateRouted performs a merge with any union data inside the TypedEventStreamEnvelope, using the provided TypedEventStreamEnvelopeRouteCreateRouted
+func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeRouteCreateRouted(v TypedEventStreamEnvelopeRouteCreateRouted) error {
+	v.Type = "route.create.routed"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedEventStreamEnvelopeRouteCreateSourceCreated returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeRouteCreateSourceCreated
+func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeRouteCreateSourceCreated() (TypedEventStreamEnvelopeRouteCreateSourceCreated, error) {
+	var body TypedEventStreamEnvelopeRouteCreateSourceCreated
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedEventStreamEnvelopeRouteCreateSourceCreated overwrites any union data inside the TypedEventStreamEnvelope as the provided TypedEventStreamEnvelopeRouteCreateSourceCreated
+func (t *TypedEventStreamEnvelope) FromTypedEventStreamEnvelopeRouteCreateSourceCreated(v TypedEventStreamEnvelopeRouteCreateSourceCreated) error {
+	v.Type = "route.create.source_created"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedEventStreamEnvelopeRouteCreateSourceCreated performs a merge with any union data inside the TypedEventStreamEnvelope, using the provided TypedEventStreamEnvelopeRouteCreateSourceCreated
+func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeRouteCreateSourceCreated(v TypedEventStreamEnvelopeRouteCreateSourceCreated) error {
+	v.Type = "route.create.source_created"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedEventStreamEnvelopeRouteCreateValidationFailed returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeRouteCreateValidationFailed
+func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeRouteCreateValidationFailed() (TypedEventStreamEnvelopeRouteCreateValidationFailed, error) {
+	var body TypedEventStreamEnvelopeRouteCreateValidationFailed
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedEventStreamEnvelopeRouteCreateValidationFailed overwrites any union data inside the TypedEventStreamEnvelope as the provided TypedEventStreamEnvelopeRouteCreateValidationFailed
+func (t *TypedEventStreamEnvelope) FromTypedEventStreamEnvelopeRouteCreateValidationFailed(v TypedEventStreamEnvelopeRouteCreateValidationFailed) error {
+	v.Type = "route.create.validation_failed"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedEventStreamEnvelopeRouteCreateValidationFailed performs a merge with any union data inside the TypedEventStreamEnvelope, using the provided TypedEventStreamEnvelopeRouteCreateValidationFailed
+func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeRouteCreateValidationFailed(v TypedEventStreamEnvelopeRouteCreateValidationFailed) error {
+	v.Type = "route.create.validation_failed"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
 // AsTypedEventStreamEnvelopeSessionCrashed returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeSessionCrashed
 func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeSessionCrashed() (TypedEventStreamEnvelopeSessionCrashed, error) {
 	var body TypedEventStreamEnvelopeSessionCrashed
@@ -7912,6 +8266,118 @@ func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeSessionWorkQuery
 	return err
 }
 
+// AsTypedEventStreamEnvelopeSlingFormulaAttached returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeSlingFormulaAttached
+func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeSlingFormulaAttached() (TypedEventStreamEnvelopeSlingFormulaAttached, error) {
+	var body TypedEventStreamEnvelopeSlingFormulaAttached
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedEventStreamEnvelopeSlingFormulaAttached overwrites any union data inside the TypedEventStreamEnvelope as the provided TypedEventStreamEnvelopeSlingFormulaAttached
+func (t *TypedEventStreamEnvelope) FromTypedEventStreamEnvelopeSlingFormulaAttached(v TypedEventStreamEnvelopeSlingFormulaAttached) error {
+	v.Type = "sling.formula_attached"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedEventStreamEnvelopeSlingFormulaAttached performs a merge with any union data inside the TypedEventStreamEnvelope, using the provided TypedEventStreamEnvelopeSlingFormulaAttached
+func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeSlingFormulaAttached(v TypedEventStreamEnvelopeSlingFormulaAttached) error {
+	v.Type = "sling.formula_attached"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedEventStreamEnvelopeSlingFormulaAttachmentRejected returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeSlingFormulaAttachmentRejected
+func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeSlingFormulaAttachmentRejected() (TypedEventStreamEnvelopeSlingFormulaAttachmentRejected, error) {
+	var body TypedEventStreamEnvelopeSlingFormulaAttachmentRejected
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedEventStreamEnvelopeSlingFormulaAttachmentRejected overwrites any union data inside the TypedEventStreamEnvelope as the provided TypedEventStreamEnvelopeSlingFormulaAttachmentRejected
+func (t *TypedEventStreamEnvelope) FromTypedEventStreamEnvelopeSlingFormulaAttachmentRejected(v TypedEventStreamEnvelopeSlingFormulaAttachmentRejected) error {
+	v.Type = "sling.formula_attachment_rejected"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedEventStreamEnvelopeSlingFormulaAttachmentRejected performs a merge with any union data inside the TypedEventStreamEnvelope, using the provided TypedEventStreamEnvelopeSlingFormulaAttachmentRejected
+func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeSlingFormulaAttachmentRejected(v TypedEventStreamEnvelopeSlingFormulaAttachmentRejected) error {
+	v.Type = "sling.formula_attachment_rejected"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedEventStreamEnvelopeSlingFormulaAttachmentSkipped returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeSlingFormulaAttachmentSkipped
+func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeSlingFormulaAttachmentSkipped() (TypedEventStreamEnvelopeSlingFormulaAttachmentSkipped, error) {
+	var body TypedEventStreamEnvelopeSlingFormulaAttachmentSkipped
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedEventStreamEnvelopeSlingFormulaAttachmentSkipped overwrites any union data inside the TypedEventStreamEnvelope as the provided TypedEventStreamEnvelopeSlingFormulaAttachmentSkipped
+func (t *TypedEventStreamEnvelope) FromTypedEventStreamEnvelopeSlingFormulaAttachmentSkipped(v TypedEventStreamEnvelopeSlingFormulaAttachmentSkipped) error {
+	v.Type = "sling.formula_attachment_skipped"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedEventStreamEnvelopeSlingFormulaAttachmentSkipped performs a merge with any union data inside the TypedEventStreamEnvelope, using the provided TypedEventStreamEnvelopeSlingFormulaAttachmentSkipped
+func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeSlingFormulaAttachmentSkipped(v TypedEventStreamEnvelopeSlingFormulaAttachmentSkipped) error {
+	v.Type = "sling.formula_attachment_skipped"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedEventStreamEnvelopeSlingRouted returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeSlingRouted
+func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeSlingRouted() (TypedEventStreamEnvelopeSlingRouted, error) {
+	var body TypedEventStreamEnvelopeSlingRouted
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedEventStreamEnvelopeSlingRouted overwrites any union data inside the TypedEventStreamEnvelope as the provided TypedEventStreamEnvelopeSlingRouted
+func (t *TypedEventStreamEnvelope) FromTypedEventStreamEnvelopeSlingRouted(v TypedEventStreamEnvelopeSlingRouted) error {
+	v.Type = "sling.routed"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedEventStreamEnvelopeSlingRouted performs a merge with any union data inside the TypedEventStreamEnvelope, using the provided TypedEventStreamEnvelopeSlingRouted
+func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeSlingRouted(v TypedEventStreamEnvelopeSlingRouted) error {
+	v.Type = "sling.routed"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
 // AsTypedEventStreamEnvelopeSupervisorFsPressureSkippedTick returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeSupervisorFsPressureSkippedTick
 func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeSupervisorFsPressureSkippedTick() (TypedEventStreamEnvelopeSupervisorFsPressureSkippedTick, error) {
 	var body TypedEventStreamEnvelopeSupervisorFsPressureSkippedTick
@@ -8120,6 +8586,14 @@ func (t TypedEventStreamEnvelope) ValueByDiscriminator() (interface{}, error) {
 		return t.AsTypedEventStreamEnvelopeRequestResultSessionMessage()
 	case "request.result.session.submit":
 		return t.AsTypedEventStreamEnvelopeRequestResultSessionSubmit()
+	case "route.create.formula_attached":
+		return t.AsTypedEventStreamEnvelopeRouteCreateFormulaAttached()
+	case "route.create.routed":
+		return t.AsTypedEventStreamEnvelopeRouteCreateRouted()
+	case "route.create.source_created":
+		return t.AsTypedEventStreamEnvelopeRouteCreateSourceCreated()
+	case "route.create.validation_failed":
+		return t.AsTypedEventStreamEnvelopeRouteCreateValidationFailed()
 	case "session.crashed":
 		return t.AsTypedEventStreamEnvelopeSessionCrashed()
 	case "session.drain_acked_with_assigned_work":
@@ -8146,6 +8620,14 @@ func (t TypedEventStreamEnvelope) ValueByDiscriminator() (interface{}, error) {
 		return t.AsTypedEventStreamEnvelopeSessionWoke()
 	case "session.work_query_failed":
 		return t.AsTypedEventStreamEnvelopeSessionWorkQueryFailed()
+	case "sling.formula_attached":
+		return t.AsTypedEventStreamEnvelopeSlingFormulaAttached()
+	case "sling.formula_attachment_rejected":
+		return t.AsTypedEventStreamEnvelopeSlingFormulaAttachmentRejected()
+	case "sling.formula_attachment_skipped":
+		return t.AsTypedEventStreamEnvelopeSlingFormulaAttachmentSkipped()
+	case "sling.routed":
+		return t.AsTypedEventStreamEnvelopeSlingRouted()
 	case "supervisor.fs_pressure.skipped_tick":
 		return t.AsTypedEventStreamEnvelopeSupervisorFsPressureSkippedTick()
 	case "supervisor.shutdown_requested":
@@ -9287,6 +9769,118 @@ func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeRequ
 	return err
 }
 
+// AsTypedTaggedEventStreamEnvelopeRouteCreateFormulaAttached returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeRouteCreateFormulaAttached
+func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeRouteCreateFormulaAttached() (TypedTaggedEventStreamEnvelopeRouteCreateFormulaAttached, error) {
+	var body TypedTaggedEventStreamEnvelopeRouteCreateFormulaAttached
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedTaggedEventStreamEnvelopeRouteCreateFormulaAttached overwrites any union data inside the TypedTaggedEventStreamEnvelope as the provided TypedTaggedEventStreamEnvelopeRouteCreateFormulaAttached
+func (t *TypedTaggedEventStreamEnvelope) FromTypedTaggedEventStreamEnvelopeRouteCreateFormulaAttached(v TypedTaggedEventStreamEnvelopeRouteCreateFormulaAttached) error {
+	v.Type = "route.create.formula_attached"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedTaggedEventStreamEnvelopeRouteCreateFormulaAttached performs a merge with any union data inside the TypedTaggedEventStreamEnvelope, using the provided TypedTaggedEventStreamEnvelopeRouteCreateFormulaAttached
+func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeRouteCreateFormulaAttached(v TypedTaggedEventStreamEnvelopeRouteCreateFormulaAttached) error {
+	v.Type = "route.create.formula_attached"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedTaggedEventStreamEnvelopeRouteCreateRouted returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeRouteCreateRouted
+func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeRouteCreateRouted() (TypedTaggedEventStreamEnvelopeRouteCreateRouted, error) {
+	var body TypedTaggedEventStreamEnvelopeRouteCreateRouted
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedTaggedEventStreamEnvelopeRouteCreateRouted overwrites any union data inside the TypedTaggedEventStreamEnvelope as the provided TypedTaggedEventStreamEnvelopeRouteCreateRouted
+func (t *TypedTaggedEventStreamEnvelope) FromTypedTaggedEventStreamEnvelopeRouteCreateRouted(v TypedTaggedEventStreamEnvelopeRouteCreateRouted) error {
+	v.Type = "route.create.routed"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedTaggedEventStreamEnvelopeRouteCreateRouted performs a merge with any union data inside the TypedTaggedEventStreamEnvelope, using the provided TypedTaggedEventStreamEnvelopeRouteCreateRouted
+func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeRouteCreateRouted(v TypedTaggedEventStreamEnvelopeRouteCreateRouted) error {
+	v.Type = "route.create.routed"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedTaggedEventStreamEnvelopeRouteCreateSourceCreated returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeRouteCreateSourceCreated
+func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeRouteCreateSourceCreated() (TypedTaggedEventStreamEnvelopeRouteCreateSourceCreated, error) {
+	var body TypedTaggedEventStreamEnvelopeRouteCreateSourceCreated
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedTaggedEventStreamEnvelopeRouteCreateSourceCreated overwrites any union data inside the TypedTaggedEventStreamEnvelope as the provided TypedTaggedEventStreamEnvelopeRouteCreateSourceCreated
+func (t *TypedTaggedEventStreamEnvelope) FromTypedTaggedEventStreamEnvelopeRouteCreateSourceCreated(v TypedTaggedEventStreamEnvelopeRouteCreateSourceCreated) error {
+	v.Type = "route.create.source_created"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedTaggedEventStreamEnvelopeRouteCreateSourceCreated performs a merge with any union data inside the TypedTaggedEventStreamEnvelope, using the provided TypedTaggedEventStreamEnvelopeRouteCreateSourceCreated
+func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeRouteCreateSourceCreated(v TypedTaggedEventStreamEnvelopeRouteCreateSourceCreated) error {
+	v.Type = "route.create.source_created"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedTaggedEventStreamEnvelopeRouteCreateValidationFailed returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeRouteCreateValidationFailed
+func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeRouteCreateValidationFailed() (TypedTaggedEventStreamEnvelopeRouteCreateValidationFailed, error) {
+	var body TypedTaggedEventStreamEnvelopeRouteCreateValidationFailed
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedTaggedEventStreamEnvelopeRouteCreateValidationFailed overwrites any union data inside the TypedTaggedEventStreamEnvelope as the provided TypedTaggedEventStreamEnvelopeRouteCreateValidationFailed
+func (t *TypedTaggedEventStreamEnvelope) FromTypedTaggedEventStreamEnvelopeRouteCreateValidationFailed(v TypedTaggedEventStreamEnvelopeRouteCreateValidationFailed) error {
+	v.Type = "route.create.validation_failed"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedTaggedEventStreamEnvelopeRouteCreateValidationFailed performs a merge with any union data inside the TypedTaggedEventStreamEnvelope, using the provided TypedTaggedEventStreamEnvelopeRouteCreateValidationFailed
+func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeRouteCreateValidationFailed(v TypedTaggedEventStreamEnvelopeRouteCreateValidationFailed) error {
+	v.Type = "route.create.validation_failed"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
 // AsTypedTaggedEventStreamEnvelopeSessionCrashed returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeSessionCrashed
 func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeSessionCrashed() (TypedTaggedEventStreamEnvelopeSessionCrashed, error) {
 	var body TypedTaggedEventStreamEnvelopeSessionCrashed
@@ -9651,6 +10245,118 @@ func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeSess
 	return err
 }
 
+// AsTypedTaggedEventStreamEnvelopeSlingFormulaAttached returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeSlingFormulaAttached
+func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeSlingFormulaAttached() (TypedTaggedEventStreamEnvelopeSlingFormulaAttached, error) {
+	var body TypedTaggedEventStreamEnvelopeSlingFormulaAttached
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedTaggedEventStreamEnvelopeSlingFormulaAttached overwrites any union data inside the TypedTaggedEventStreamEnvelope as the provided TypedTaggedEventStreamEnvelopeSlingFormulaAttached
+func (t *TypedTaggedEventStreamEnvelope) FromTypedTaggedEventStreamEnvelopeSlingFormulaAttached(v TypedTaggedEventStreamEnvelopeSlingFormulaAttached) error {
+	v.Type = "sling.formula_attached"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedTaggedEventStreamEnvelopeSlingFormulaAttached performs a merge with any union data inside the TypedTaggedEventStreamEnvelope, using the provided TypedTaggedEventStreamEnvelopeSlingFormulaAttached
+func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeSlingFormulaAttached(v TypedTaggedEventStreamEnvelopeSlingFormulaAttached) error {
+	v.Type = "sling.formula_attached"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedTaggedEventStreamEnvelopeSlingFormulaAttachmentRejected returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentRejected
+func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeSlingFormulaAttachmentRejected() (TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentRejected, error) {
+	var body TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentRejected
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedTaggedEventStreamEnvelopeSlingFormulaAttachmentRejected overwrites any union data inside the TypedTaggedEventStreamEnvelope as the provided TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentRejected
+func (t *TypedTaggedEventStreamEnvelope) FromTypedTaggedEventStreamEnvelopeSlingFormulaAttachmentRejected(v TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentRejected) error {
+	v.Type = "sling.formula_attachment_rejected"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedTaggedEventStreamEnvelopeSlingFormulaAttachmentRejected performs a merge with any union data inside the TypedTaggedEventStreamEnvelope, using the provided TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentRejected
+func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeSlingFormulaAttachmentRejected(v TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentRejected) error {
+	v.Type = "sling.formula_attachment_rejected"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedTaggedEventStreamEnvelopeSlingFormulaAttachmentSkipped returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentSkipped
+func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeSlingFormulaAttachmentSkipped() (TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentSkipped, error) {
+	var body TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentSkipped
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedTaggedEventStreamEnvelopeSlingFormulaAttachmentSkipped overwrites any union data inside the TypedTaggedEventStreamEnvelope as the provided TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentSkipped
+func (t *TypedTaggedEventStreamEnvelope) FromTypedTaggedEventStreamEnvelopeSlingFormulaAttachmentSkipped(v TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentSkipped) error {
+	v.Type = "sling.formula_attachment_skipped"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedTaggedEventStreamEnvelopeSlingFormulaAttachmentSkipped performs a merge with any union data inside the TypedTaggedEventStreamEnvelope, using the provided TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentSkipped
+func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeSlingFormulaAttachmentSkipped(v TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentSkipped) error {
+	v.Type = "sling.formula_attachment_skipped"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedTaggedEventStreamEnvelopeSlingRouted returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeSlingRouted
+func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeSlingRouted() (TypedTaggedEventStreamEnvelopeSlingRouted, error) {
+	var body TypedTaggedEventStreamEnvelopeSlingRouted
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedTaggedEventStreamEnvelopeSlingRouted overwrites any union data inside the TypedTaggedEventStreamEnvelope as the provided TypedTaggedEventStreamEnvelopeSlingRouted
+func (t *TypedTaggedEventStreamEnvelope) FromTypedTaggedEventStreamEnvelopeSlingRouted(v TypedTaggedEventStreamEnvelopeSlingRouted) error {
+	v.Type = "sling.routed"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedTaggedEventStreamEnvelopeSlingRouted performs a merge with any union data inside the TypedTaggedEventStreamEnvelope, using the provided TypedTaggedEventStreamEnvelopeSlingRouted
+func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeSlingRouted(v TypedTaggedEventStreamEnvelopeSlingRouted) error {
+	v.Type = "sling.routed"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
 // AsTypedTaggedEventStreamEnvelopeSupervisorFsPressureSkippedTick returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeSupervisorFsPressureSkippedTick
 func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeSupervisorFsPressureSkippedTick() (TypedTaggedEventStreamEnvelopeSupervisorFsPressureSkippedTick, error) {
 	var body TypedTaggedEventStreamEnvelopeSupervisorFsPressureSkippedTick
@@ -9859,6 +10565,14 @@ func (t TypedTaggedEventStreamEnvelope) ValueByDiscriminator() (interface{}, err
 		return t.AsTypedTaggedEventStreamEnvelopeRequestResultSessionMessage()
 	case "request.result.session.submit":
 		return t.AsTypedTaggedEventStreamEnvelopeRequestResultSessionSubmit()
+	case "route.create.formula_attached":
+		return t.AsTypedTaggedEventStreamEnvelopeRouteCreateFormulaAttached()
+	case "route.create.routed":
+		return t.AsTypedTaggedEventStreamEnvelopeRouteCreateRouted()
+	case "route.create.source_created":
+		return t.AsTypedTaggedEventStreamEnvelopeRouteCreateSourceCreated()
+	case "route.create.validation_failed":
+		return t.AsTypedTaggedEventStreamEnvelopeRouteCreateValidationFailed()
 	case "session.crashed":
 		return t.AsTypedTaggedEventStreamEnvelopeSessionCrashed()
 	case "session.drain_acked_with_assigned_work":
@@ -9885,6 +10599,14 @@ func (t TypedTaggedEventStreamEnvelope) ValueByDiscriminator() (interface{}, err
 		return t.AsTypedTaggedEventStreamEnvelopeSessionWoke()
 	case "session.work_query_failed":
 		return t.AsTypedTaggedEventStreamEnvelopeSessionWorkQueryFailed()
+	case "sling.formula_attached":
+		return t.AsTypedTaggedEventStreamEnvelopeSlingFormulaAttached()
+	case "sling.formula_attachment_rejected":
+		return t.AsTypedTaggedEventStreamEnvelopeSlingFormulaAttachmentRejected()
+	case "sling.formula_attachment_skipped":
+		return t.AsTypedTaggedEventStreamEnvelopeSlingFormulaAttachmentSkipped()
+	case "sling.routed":
+		return t.AsTypedTaggedEventStreamEnvelopeSlingRouted()
 	case "supervisor.fs_pressure.skipped_tick":
 		return t.AsTypedTaggedEventStreamEnvelopeSupervisorFsPressureSkippedTick()
 	case "supervisor.shutdown_requested":

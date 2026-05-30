@@ -376,13 +376,15 @@ func cmdSlingWithJSON(args []string, isFormula, doNudge, force bool, title strin
 		}
 	}
 	deps := slingDeps{
-		CityName: cityName,
-		CityPath: cityPath,
-		Cfg:      cfg,
-		SP:       sp,
-		Runner:   runner,
-		Store:    store,
-		StoreRef: storeRef,
+		CityName:   cityName,
+		CityPath:   cityPath,
+		Cfg:        cfg,
+		SP:         sp,
+		Runner:     runner,
+		Store:      store,
+		StoreRef:   storeRef,
+		Recorder:   openCityRecorderAt(cityPath, stderr),
+		EventActor: eventActor(),
 		SourceWorkflowStores: func() ([]sling.SourceWorkflowStore, error) {
 			stores, skips, err := openSourceWorkflowStores(cfg, cityPath, "")
 			if err != nil {

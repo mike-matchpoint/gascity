@@ -2072,6 +2072,9 @@
             "$ref": "#/components/schemas/RotatedPayload"
           },
           {
+            "$ref": "#/components/schemas/RouteWorkEventPayload"
+          },
+          {
             "$ref": "#/components/schemas/SessionCreateSucceededPayload"
           },
           {
@@ -5731,6 +5734,48 @@
         ],
         "type": "object"
       },
+      "RouteWorkEventPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "bead_id": {
+            "type": "string"
+          },
+          "claim_store_ref": {
+            "type": "string"
+          },
+          "error_code": {
+            "type": "string"
+          },
+          "error_message": {
+            "type": "string"
+          },
+          "formula": {
+            "type": "string"
+          },
+          "idempotent": {
+            "type": "boolean"
+          },
+          "method": {
+            "type": "string"
+          },
+          "requested_target": {
+            "type": "string"
+          },
+          "store_ref": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "wisp_root_id": {
+            "type": "string"
+          },
+          "workflow_id": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "ScopeGroup": {
         "additionalProperties": false,
         "type": "object"
@@ -7379,6 +7424,10 @@
             "request.result.session.create": "#/components/schemas/TypedEventStreamEnvelopeRequestResultSessionCreate",
             "request.result.session.message": "#/components/schemas/TypedEventStreamEnvelopeRequestResultSessionMessage",
             "request.result.session.submit": "#/components/schemas/TypedEventStreamEnvelopeRequestResultSessionSubmit",
+            "route.create.formula_attached": "#/components/schemas/TypedEventStreamEnvelopeRouteCreateFormulaAttached",
+            "route.create.routed": "#/components/schemas/TypedEventStreamEnvelopeRouteCreateRouted",
+            "route.create.source_created": "#/components/schemas/TypedEventStreamEnvelopeRouteCreateSourceCreated",
+            "route.create.validation_failed": "#/components/schemas/TypedEventStreamEnvelopeRouteCreateValidationFailed",
             "session.crashed": "#/components/schemas/TypedEventStreamEnvelopeSessionCrashed",
             "session.drain_acked_with_assigned_work": "#/components/schemas/TypedEventStreamEnvelopeSessionDrainAckedWithAssignedWork",
             "session.draining": "#/components/schemas/TypedEventStreamEnvelopeSessionDraining",
@@ -7392,6 +7441,10 @@
             "session.updated": "#/components/schemas/TypedEventStreamEnvelopeSessionUpdated",
             "session.woke": "#/components/schemas/TypedEventStreamEnvelopeSessionWoke",
             "session.work_query_failed": "#/components/schemas/TypedEventStreamEnvelopeSessionWorkQueryFailed",
+            "sling.formula_attached": "#/components/schemas/TypedEventStreamEnvelopeSlingFormulaAttached",
+            "sling.formula_attachment_rejected": "#/components/schemas/TypedEventStreamEnvelopeSlingFormulaAttachmentRejected",
+            "sling.formula_attachment_skipped": "#/components/schemas/TypedEventStreamEnvelopeSlingFormulaAttachmentSkipped",
+            "sling.routed": "#/components/schemas/TypedEventStreamEnvelopeSlingRouted",
             "supervisor.fs_pressure.skipped_tick": "#/components/schemas/TypedEventStreamEnvelopeSupervisorFsPressureSkippedTick",
             "supervisor.shutdown_requested": "#/components/schemas/TypedEventStreamEnvelopeSupervisorShutdownRequested",
             "worker.operation": "#/components/schemas/TypedEventStreamEnvelopeWorkerOperation"
@@ -7520,6 +7573,18 @@
             "$ref": "#/components/schemas/TypedEventStreamEnvelopeRequestResultSessionSubmit"
           },
           {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelopeRouteCreateFormulaAttached"
+          },
+          {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelopeRouteCreateRouted"
+          },
+          {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelopeRouteCreateSourceCreated"
+          },
+          {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelopeRouteCreateValidationFailed"
+          },
+          {
             "$ref": "#/components/schemas/TypedEventStreamEnvelopeSessionCrashed"
           },
           {
@@ -7557,6 +7622,18 @@
           },
           {
             "$ref": "#/components/schemas/TypedEventStreamEnvelopeSessionWorkQueryFailed"
+          },
+          {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelopeSlingFormulaAttached"
+          },
+          {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelopeSlingFormulaAttachmentRejected"
+          },
+          {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelopeSlingFormulaAttachmentSkipped"
+          },
+          {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelopeSlingRouted"
           },
           {
             "$ref": "#/components/schemas/TypedEventStreamEnvelopeSupervisorFsPressureSkippedTick"
@@ -8115,7 +8192,15 @@
                 "events.rotated",
                 "gc.store.maintenance.done",
                 "gc.store.maintenance.failed",
-                "pg.credential_resolved"
+                "pg.credential_resolved",
+                "route.create.source_created",
+                "route.create.formula_attached",
+                "route.create.routed",
+                "route.create.validation_failed",
+                "sling.routed",
+                "sling.formula_attached",
+                "sling.formula_attachment_skipped",
+                "sling.formula_attachment_rejected"
               ]
             },
             "type": "string"
@@ -9352,6 +9437,174 @@
         "title": "TypedEventStreamEnvelope request.result.session.submit",
         "type": "object"
       },
+      "TypedEventStreamEnvelopeRouteCreateFormulaAttached": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RouteWorkEventPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "route.create.formula_attached",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload"
+        ],
+        "title": "TypedEventStreamEnvelope route.create.formula_attached",
+        "type": "object"
+      },
+      "TypedEventStreamEnvelopeRouteCreateRouted": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RouteWorkEventPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "route.create.routed",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload"
+        ],
+        "title": "TypedEventStreamEnvelope route.create.routed",
+        "type": "object"
+      },
+      "TypedEventStreamEnvelopeRouteCreateSourceCreated": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RouteWorkEventPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "route.create.source_created",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload"
+        ],
+        "title": "TypedEventStreamEnvelope route.create.source_created",
+        "type": "object"
+      },
+      "TypedEventStreamEnvelopeRouteCreateValidationFailed": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RouteWorkEventPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "route.create.validation_failed",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload"
+        ],
+        "title": "TypedEventStreamEnvelope route.create.validation_failed",
+        "type": "object"
+      },
       "TypedEventStreamEnvelopeSessionCrashed": {
         "additionalProperties": false,
         "properties": {
@@ -9898,6 +10151,174 @@
         "title": "TypedEventStreamEnvelope session.work_query_failed",
         "type": "object"
       },
+      "TypedEventStreamEnvelopeSlingFormulaAttached": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RouteWorkEventPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "sling.formula_attached",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload"
+        ],
+        "title": "TypedEventStreamEnvelope sling.formula_attached",
+        "type": "object"
+      },
+      "TypedEventStreamEnvelopeSlingFormulaAttachmentRejected": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RouteWorkEventPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "sling.formula_attachment_rejected",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload"
+        ],
+        "title": "TypedEventStreamEnvelope sling.formula_attachment_rejected",
+        "type": "object"
+      },
+      "TypedEventStreamEnvelopeSlingFormulaAttachmentSkipped": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RouteWorkEventPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "sling.formula_attachment_skipped",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload"
+        ],
+        "title": "TypedEventStreamEnvelope sling.formula_attachment_skipped",
+        "type": "object"
+      },
+      "TypedEventStreamEnvelopeSlingRouted": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RouteWorkEventPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "sling.routed",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload"
+        ],
+        "title": "TypedEventStreamEnvelope sling.routed",
+        "type": "object"
+      },
       "TypedEventStreamEnvelopeSupervisorFsPressureSkippedTick": {
         "additionalProperties": false,
         "properties": {
@@ -10068,6 +10489,10 @@
             "request.result.session.create": "#/components/schemas/TypedTaggedEventStreamEnvelopeRequestResultSessionCreate",
             "request.result.session.message": "#/components/schemas/TypedTaggedEventStreamEnvelopeRequestResultSessionMessage",
             "request.result.session.submit": "#/components/schemas/TypedTaggedEventStreamEnvelopeRequestResultSessionSubmit",
+            "route.create.formula_attached": "#/components/schemas/TypedTaggedEventStreamEnvelopeRouteCreateFormulaAttached",
+            "route.create.routed": "#/components/schemas/TypedTaggedEventStreamEnvelopeRouteCreateRouted",
+            "route.create.source_created": "#/components/schemas/TypedTaggedEventStreamEnvelopeRouteCreateSourceCreated",
+            "route.create.validation_failed": "#/components/schemas/TypedTaggedEventStreamEnvelopeRouteCreateValidationFailed",
             "session.crashed": "#/components/schemas/TypedTaggedEventStreamEnvelopeSessionCrashed",
             "session.drain_acked_with_assigned_work": "#/components/schemas/TypedTaggedEventStreamEnvelopeSessionDrainAckedWithAssignedWork",
             "session.draining": "#/components/schemas/TypedTaggedEventStreamEnvelopeSessionDraining",
@@ -10081,6 +10506,10 @@
             "session.updated": "#/components/schemas/TypedTaggedEventStreamEnvelopeSessionUpdated",
             "session.woke": "#/components/schemas/TypedTaggedEventStreamEnvelopeSessionWoke",
             "session.work_query_failed": "#/components/schemas/TypedTaggedEventStreamEnvelopeSessionWorkQueryFailed",
+            "sling.formula_attached": "#/components/schemas/TypedTaggedEventStreamEnvelopeSlingFormulaAttached",
+            "sling.formula_attachment_rejected": "#/components/schemas/TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentRejected",
+            "sling.formula_attachment_skipped": "#/components/schemas/TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentSkipped",
+            "sling.routed": "#/components/schemas/TypedTaggedEventStreamEnvelopeSlingRouted",
             "supervisor.fs_pressure.skipped_tick": "#/components/schemas/TypedTaggedEventStreamEnvelopeSupervisorFsPressureSkippedTick",
             "supervisor.shutdown_requested": "#/components/schemas/TypedTaggedEventStreamEnvelopeSupervisorShutdownRequested",
             "worker.operation": "#/components/schemas/TypedTaggedEventStreamEnvelopeWorkerOperation"
@@ -10209,6 +10638,18 @@
             "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeRequestResultSessionSubmit"
           },
           {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeRouteCreateFormulaAttached"
+          },
+          {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeRouteCreateRouted"
+          },
+          {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeRouteCreateSourceCreated"
+          },
+          {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeRouteCreateValidationFailed"
+          },
+          {
             "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeSessionCrashed"
           },
           {
@@ -10246,6 +10687,18 @@
           },
           {
             "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeSessionWorkQueryFailed"
+          },
+          {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeSlingFormulaAttached"
+          },
+          {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentRejected"
+          },
+          {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentSkipped"
+          },
+          {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeSlingRouted"
           },
           {
             "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeSupervisorFsPressureSkippedTick"
@@ -10851,7 +11304,15 @@
                 "events.rotated",
                 "gc.store.maintenance.done",
                 "gc.store.maintenance.failed",
-                "pg.credential_resolved"
+                "pg.credential_resolved",
+                "route.create.source_created",
+                "route.create.formula_attached",
+                "route.create.routed",
+                "route.create.validation_failed",
+                "sling.routed",
+                "sling.formula_attached",
+                "sling.formula_attachment_skipped",
+                "sling.formula_attachment_rejected"
               ]
             },
             "type": "string"
@@ -12205,6 +12666,190 @@
         "title": "TypedTaggedEventStreamEnvelope request.result.session.submit",
         "type": "object"
       },
+      "TypedTaggedEventStreamEnvelopeRouteCreateFormulaAttached": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RouteWorkEventPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "route.create.formula_attached",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload",
+          "city"
+        ],
+        "title": "TypedTaggedEventStreamEnvelope route.create.formula_attached",
+        "type": "object"
+      },
+      "TypedTaggedEventStreamEnvelopeRouteCreateRouted": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RouteWorkEventPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "route.create.routed",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload",
+          "city"
+        ],
+        "title": "TypedTaggedEventStreamEnvelope route.create.routed",
+        "type": "object"
+      },
+      "TypedTaggedEventStreamEnvelopeRouteCreateSourceCreated": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RouteWorkEventPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "route.create.source_created",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload",
+          "city"
+        ],
+        "title": "TypedTaggedEventStreamEnvelope route.create.source_created",
+        "type": "object"
+      },
+      "TypedTaggedEventStreamEnvelopeRouteCreateValidationFailed": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RouteWorkEventPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "route.create.validation_failed",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload",
+          "city"
+        ],
+        "title": "TypedTaggedEventStreamEnvelope route.create.validation_failed",
+        "type": "object"
+      },
       "TypedTaggedEventStreamEnvelopeSessionCrashed": {
         "additionalProperties": false,
         "properties": {
@@ -12801,6 +13446,190 @@
           "city"
         ],
         "title": "TypedTaggedEventStreamEnvelope session.work_query_failed",
+        "type": "object"
+      },
+      "TypedTaggedEventStreamEnvelopeSlingFormulaAttached": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RouteWorkEventPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "sling.formula_attached",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload",
+          "city"
+        ],
+        "title": "TypedTaggedEventStreamEnvelope sling.formula_attached",
+        "type": "object"
+      },
+      "TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentRejected": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RouteWorkEventPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "sling.formula_attachment_rejected",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload",
+          "city"
+        ],
+        "title": "TypedTaggedEventStreamEnvelope sling.formula_attachment_rejected",
+        "type": "object"
+      },
+      "TypedTaggedEventStreamEnvelopeSlingFormulaAttachmentSkipped": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RouteWorkEventPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "sling.formula_attachment_skipped",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload",
+          "city"
+        ],
+        "title": "TypedTaggedEventStreamEnvelope sling.formula_attachment_skipped",
+        "type": "object"
+      },
+      "TypedTaggedEventStreamEnvelopeSlingRouted": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RouteWorkEventPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "sling.routed",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload",
+          "city"
+        ],
+        "title": "TypedTaggedEventStreamEnvelope sling.routed",
         "type": "object"
       },
       "TypedTaggedEventStreamEnvelopeSupervisorFsPressureSkippedTick": {

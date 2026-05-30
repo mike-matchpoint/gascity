@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/routedwork"
 	"github.com/gastownhall/gascity/internal/runtime"
 )
@@ -94,6 +96,75 @@ func TestRouteCreateOnFormulaCreatesWarrantAndAttachesShutdownDance(t *testing.T
 		if got := children[0].Metadata[key]; got != want {
 			t.Fatalf("attached child metadata %s = %q, want %q; metadata=%v", key, got, want, children[0].Metadata)
 		}
+	}
+}
+
+func TestRouteCreateEmitsFormulaBackedEvents(t *testing.T) {
+	dir := testFormulaDir(t)
+	writeShutdownDanceRequiredVarsFormula(t, dir)
+	cfg := &config.City{
+		Workspace:     config.Workspace{Name: "test-city"},
+		FormulaLayers: config.FormulaLayers{City: []string{dir}},
+		Agents: []config.Agent{
+			{Name: "dog", BindingName: "gastown", MaxActiveSessions: intPtr(3)},
+		},
+	}
+	store := beads.NewMemStore()
+	rec := events.NewFake()
+	deps := routeCreateDeps{
+		Rec: rec,
+		Sling: slingDeps{
+			CityName:   "test-city",
+			CityPath:   sharedTestCityDir,
+			Cfg:        cfg,
+			SP:         runtime.NewFake(),
+			Runner:     newFakeRunner().run,
+			Store:      store,
+			StoreRef:   "city:test-city",
+			Recorder:   rec,
+			EventActor: "test",
+		},
+	}
+	var stdout, stderr bytes.Buffer
+
+	code := doRouteCreate(routeCreateOptions{
+		Target: "gastown.dog",
+		On:     "mol-shutdown-dance",
+		Type:   "task",
+		Labels: []string{"warrant"},
+		Title:  "Stuck: gastown.deacon",
+		Metadata: []string{
+			"target=gastown.deacon",
+			"reason=stale patrol",
+			"requester=deacon",
+		},
+	}, deps, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("doRouteCreate returned %d, want 0; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+
+	wantTypes := []string{
+		events.RouteCreateSourceCreated,
+		events.SlingRouted,
+		events.SlingFormulaAttached,
+		events.RouteCreateFormulaAttached,
+		events.RouteCreateRouted,
+	}
+	for _, want := range wantTypes {
+		if !fakeEventsContainType(rec, want) {
+			t.Fatalf("missing event type %q; events=%v", want, fakeEventTypes(rec))
+		}
+	}
+	ev, ok := firstFakeEventOfType(rec, events.RouteCreateRouted)
+	if !ok {
+		t.Fatal("missing route create routed event")
+	}
+	var payload events.RouteWorkEventPayload
+	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+		t.Fatalf("decode payload: %v; raw=%s", err, ev.Payload)
+	}
+	if payload.BeadID == "" || payload.Target != "gastown.dog" || payload.Formula != "mol-shutdown-dance" || payload.Method != "on-formula" {
+		t.Fatalf("payload = %#v, want bead/target/formula/method evidence", payload)
 	}
 }
 
@@ -187,6 +258,59 @@ func TestRouteCreatePrevalidatesRequiredFormulaVarsBeforeCreate(t *testing.T) {
 	}
 }
 
+func TestRouteCreateValidationFailureEmitsEventBeforeCreate(t *testing.T) {
+	dir := testFormulaDir(t)
+	writeShutdownDanceRequiredVarsFormula(t, dir)
+	cfg := &config.City{
+		Workspace:     config.Workspace{Name: "test-city"},
+		FormulaLayers: config.FormulaLayers{City: []string{dir}},
+		Agents:        []config.Agent{{Name: "dog", BindingName: "gastown", MaxActiveSessions: intPtr(3)}},
+	}
+	store := beads.NewMemStore()
+	rec := events.NewFake()
+	deps := routeCreateDeps{Rec: rec, Sling: slingDeps{
+		CityName:   "test-city",
+		CityPath:   sharedTestCityDir,
+		Cfg:        cfg,
+		SP:         runtime.NewFake(),
+		Runner:     newFakeRunner().run,
+		Store:      store,
+		StoreRef:   "city:test-city",
+		Recorder:   rec,
+		EventActor: "test",
+	}}
+	var stdout, stderr bytes.Buffer
+
+	code := doRouteCreate(routeCreateOptions{
+		Target: "gastown.dog",
+		On:     "mol-shutdown-dance",
+		Type:   "task",
+		Labels: []string{"warrant"},
+		Title:  "Stuck: gastown.deacon",
+		Metadata: []string{
+			"target=gastown.deacon",
+			"requester=deacon",
+		},
+	}, deps, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("doRouteCreate returned 0, want failure; stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
+	if fakeEventsContainType(rec, events.RouteCreateSourceCreated) {
+		t.Fatalf("source-created event emitted despite validation failure: %v", fakeEventTypes(rec))
+	}
+	ev, ok := firstFakeEventOfType(rec, events.RouteCreateValidationFailed)
+	if !ok {
+		t.Fatalf("missing validation failed event; events=%v", fakeEventTypes(rec))
+	}
+	var payload events.RouteWorkEventPayload
+	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+		t.Fatalf("decode payload: %v; raw=%s", err, ev.Payload)
+	}
+	if payload.ErrorCode != "formula_validation_failed" || !strings.Contains(payload.ErrorMessage, `variable "reason" is required`) {
+		t.Fatalf("payload = %#v, want missing reason validation evidence", payload)
+	}
+}
+
 func TestRouteCreateStoreRootUsesTargetClaimStore(t *testing.T) {
 	cityDir := t.TempDir()
 	cfg := &config.City{
@@ -218,4 +342,26 @@ func TestRouteCreateStoreRootUsesTargetClaimStore(t *testing.T) {
 	if got := routeCreateStoreRoot(cfg, cityDir, rigPlan); got != filepath.Clean(wantRig) {
 		t.Fatalf("rig target store root = %q, want %q", got, filepath.Clean(wantRig))
 	}
+}
+
+func fakeEventTypes(rec *events.Fake) []string {
+	types := make([]string, 0, len(rec.Events))
+	for _, event := range rec.Events {
+		types = append(types, event.Type)
+	}
+	return types
+}
+
+func fakeEventsContainType(rec *events.Fake, eventType string) bool {
+	_, ok := firstFakeEventOfType(rec, eventType)
+	return ok
+}
+
+func firstFakeEventOfType(rec *events.Fake, eventType string) (events.Event, bool) {
+	for _, event := range rec.Events {
+		if event.Type == eventType {
+			return event, true
+		}
+	}
+	return events.Event{}, false
 }

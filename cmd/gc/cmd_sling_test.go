@@ -19,6 +19,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/pgauth"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/shellquote"
@@ -5011,6 +5012,47 @@ func TestOnFormulaMetadataAttachmentSkipsIdempotentRetry(t *testing.T) {
 	}
 	if updatedSource.Metadata["molecule_id"] != firstRootID {
 		t.Fatalf("source molecule_id = %q, want %q", updatedSource.Metadata["molecule_id"], firstRootID)
+	}
+}
+
+func TestSlingOnFormulaEmitsAttachmentAndDuplicateEvents(t *testing.T) {
+	runner := newFakeRunner()
+	sp := runtime.NewFake()
+	cfg := &config.City{Workspace: config.Workspace{Name: "test-city"}}
+	a := config.Agent{Name: "mayor", MaxActiveSessions: intPtr(1)}
+
+	deps, stdout, stderr := testDeps(cfg, sp, runner.run)
+	rec := events.NewFake()
+	deps.Recorder = rec
+	deps.EventActor = "test"
+	deps.Store = beads.NewMemStoreFrom(1, []beads.Bead{{ID: "BL-42", Title: "Work", Type: "task", Status: "open"}}, nil)
+	opts := testOpts(a, "BL-42")
+	opts.OnFormula = "code-review"
+
+	if code := doSling(opts, deps, deps.Store, stdout, stderr); code != 0 {
+		t.Fatalf("first doSling returned %d, want 0; stderr: %s", code, stderr.String())
+	}
+	for _, want := range []string{events.SlingRouted, events.SlingFormulaAttached} {
+		if !fakeEventsContainType(rec, want) {
+			t.Fatalf("missing event type %q after first sling; events=%v", want, fakeEventTypes(rec))
+		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := doSling(opts, deps, deps.Store, stdout, stderr); code != 0 {
+		t.Fatalf("second doSling returned %d, want 0; stderr: %s", code, stderr.String())
+	}
+	ev, ok := firstFakeEventOfType(rec, events.SlingFormulaAttachmentSkipped)
+	if !ok {
+		t.Fatalf("missing duplicate attachment skipped event; events=%v", fakeEventTypes(rec))
+	}
+	var payload events.RouteWorkEventPayload
+	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+		t.Fatalf("decode payload: %v; raw=%s", err, ev.Payload)
+	}
+	if !payload.Idempotent || payload.BeadID != "BL-42" || payload.Formula != "code-review" || payload.Target != "mayor" {
+		t.Fatalf("payload = %#v, want idempotent duplicate attachment evidence", payload)
 	}
 }
 

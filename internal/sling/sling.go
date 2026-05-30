@@ -15,6 +15,7 @@ import (
 	"github.com/gastownhall/gascity/internal/agentutil"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/formula"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/molecule"
@@ -114,6 +115,10 @@ type SlingDeps struct {
 	Runner   SlingRunner
 	Store    beads.Store
 	StoreRef string
+	// Recorder receives structured best-effort route/attachment evidence.
+	Recorder events.Recorder
+	// EventActor overrides the event Actor envelope when Recorder is set.
+	EventActor string
 	// ValidationQuerier overrides Store for existence checks when a caller has
 	// already resolved the bead through a narrower view.
 	ValidationQuerier BeadQuerier
