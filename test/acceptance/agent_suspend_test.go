@@ -157,11 +157,8 @@ func TestAgentSuspendResume(t *testing.T) {
 		// Write config with a known agent.
 		c.WriteConfig(`[workspace]
 name = "suspagent"
-
-[[agent]]
-name = "toggleagent"
-start_command = "echo hello"
 `)
+		c.WriteV2AgentDir("toggleagent", `start_command = "echo hello"`)
 
 		// Suspend.
 		out, err := c.GC("agent", "suspend", "toggleagent")
@@ -173,9 +170,9 @@ start_command = "echo hello"
 		}
 
 		// Verify config has suspended=true.
-		toml := c.ReadFile("city.toml")
+		toml := c.ReadFile("agents/toggleagent/agent.toml")
 		if !strings.Contains(toml, "suspended") {
-			t.Errorf("city.toml should contain 'suspended' after suspend:\n%s", toml)
+			t.Errorf("agents/toggleagent/agent.toml should contain 'suspended' after suspend:\n%s", toml)
 		}
 
 		// Resume.
@@ -201,11 +198,8 @@ func TestCitySuspendResume(t *testing.T) {
 		// Write a config with an agent so hook has something to look for.
 		c.WriteConfig(`[workspace]
 name = "susptest"
-
-[[agent]]
-name = "worker"
-work_query = "echo no-work"
 `)
+		c.WriteV2AgentDir("worker", `work_query = "echo no-work"`)
 
 		// Suspend the city.
 		out, err := c.GC("suspend")

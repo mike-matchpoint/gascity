@@ -116,7 +116,7 @@ func TestConvoyErrors(t *testing.T) {
 // TestConvoyLifecycle exercises CRUD and lifecycle operations using a single
 // city. Subtests run sequentially so state accumulates across them.
 func TestConvoyLifecycle(t *testing.T) {
-	c := helpers.NewCity(t, testEnv)
+	c := helpers.NewCity(t, testEnvNoAPI())
 	c.Init("claude")
 
 	// IDs captured by earlier subtests for use by later ones.

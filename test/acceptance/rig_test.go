@@ -78,7 +78,7 @@ func TestRigListGastownCity(t *testing.T) {
 }
 
 func TestRigLifecycle(t *testing.T) {
-	c := helpers.NewCity(t, testEnv)
+	c := helpers.NewCity(t, testEnvNoAPI())
 	c.InitFrom(filepath.Join(helpers.ExamplesDir(), "gastown"))
 
 	rigDir := createGitRig(t)

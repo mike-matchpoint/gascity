@@ -49,6 +49,10 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+func testEnvNoAPI() *helpers.Env {
+	return testEnv.Clone().With("GC_NO_API", "1")
+}
+
 // TestInitMinimal verifies that gc init with the default minimal
 // template creates a working city with city.toml, prompts, and formulas.
 func TestInitMinimal(t *testing.T) {

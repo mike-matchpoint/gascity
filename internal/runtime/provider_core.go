@@ -60,7 +60,7 @@ type DeadRuntimeSessionChecker interface {
 // RuntimeArtifact describes a provider-owned runtime artifact. Unlike
 // ListRunning, artifact listing may include non-running resources such as
 // Kubernetes pods that are still initializing or terminating.
-type RuntimeArtifact struct {
+type RuntimeArtifact struct { //nolint:revive // exported as runtime.RuntimeArtifact across provider packages.
 	Name      string
 	SessionID string
 }
@@ -69,7 +69,7 @@ type RuntimeArtifact struct {
 // that need to inspect non-running runtime artifacts. Providers should populate
 // SessionID from durable artifact configuration when possible, not only from a
 // live process environment.
-type RuntimeArtifactLister interface {
+type RuntimeArtifactLister interface { //nolint:revive // exported as runtime.RuntimeArtifactLister across provider packages.
 	ListRuntimeArtifacts(prefix string) ([]RuntimeArtifact, error)
 }
 
