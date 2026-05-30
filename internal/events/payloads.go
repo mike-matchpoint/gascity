@@ -53,6 +53,27 @@ type OrderDispatchTickPayload struct {
 // IsEventPayload marks OrderDispatchTickPayload as an events.Payload variant.
 func (OrderDispatchTickPayload) IsEventPayload() {}
 
+// RuntimeWritePayload describes a bounded runtime Beads write attempt.
+type RuntimeWritePayload struct {
+	Caller          string  `json:"caller,omitempty"`
+	Class           string  `json:"class,omitempty"`
+	Operation       string  `json:"operation,omitempty"`
+	Command         string  `json:"command,omitempty"`
+	DurationSeconds float64 `json:"duration_s,omitempty"`
+	TimeoutSeconds  float64 `json:"timeout_s,omitempty"`
+	Outcome         string  `json:"outcome,omitempty"`
+	StoreKey        string  `json:"store_key,omitempty"`
+	Error           string  `json:"error,omitempty"`
+}
+
+// IsEventPayload marks RuntimeWritePayload as an events.Payload variant.
+func (RuntimeWritePayload) IsEventPayload() {}
+
 func init() {
 	RegisterPayload(OrderDispatchTick, OrderDispatchTickPayload{})
+	RegisterPayload(RuntimeWriteStarted, RuntimeWritePayload{})
+	RegisterPayload(RuntimeWriteCompleted, RuntimeWritePayload{})
+	RegisterPayload(RuntimeWriteDegraded, RuntimeWritePayload{})
+	RegisterPayload(RuntimeWriteTimeout, RuntimeWritePayload{})
+	RegisterPayload(BeadsSubprocessOrphaned, RuntimeWritePayload{})
 }

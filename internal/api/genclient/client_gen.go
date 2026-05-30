@@ -2351,6 +2351,19 @@ type RouteWorkEventPayload struct {
 	WorkflowId      *string `json:"workflow_id,omitempty"`
 }
 
+// RuntimeWritePayload defines model for RuntimeWritePayload.
+type RuntimeWritePayload struct {
+	Caller    *string  `json:"caller,omitempty"`
+	Class     *string  `json:"class,omitempty"`
+	Command   *string  `json:"command,omitempty"`
+	DurationS *float64 `json:"duration_s,omitempty"`
+	Error     *string  `json:"error,omitempty"`
+	Operation *string  `json:"operation,omitempty"`
+	Outcome   *string  `json:"outcome,omitempty"`
+	StoreKey  *string  `json:"store_key,omitempty"`
+	TimeoutS  *float64 `json:"timeout_s,omitempty"`
+}
+
 // ScopeGroup defines model for ScopeGroup.
 type ScopeGroup = map[string]interface{}
 
@@ -2793,6 +2806,7 @@ type StatusBody struct {
 
 	// Running Number of running agent processes.
 	Running             int64                      `json:"running"`
+	RuntimeWrite        *StatusRuntimeWrite        `json:"runtime_write,omitempty"`
 	SessionCountsDetail *StatusSessionCountsDetail `json:"session_counts_detail,omitempty"`
 	StoreHealth         *StatusStoreHealth         `json:"store_health,omitempty"`
 
@@ -2847,6 +2861,36 @@ type StatusRigDetail struct {
 
 	// Suspended Whether the rig is suspended (either explicitly or because all its agents are suspended).
 	Suspended bool `json:"suspended"`
+}
+
+// StatusRuntimeWrite defines model for StatusRuntimeWrite.
+type StatusRuntimeWrite struct {
+	// FirstIssueAt RFC3339 timestamp of the first issue in the scanned window.
+	FirstIssueAt *string `json:"first_issue_at,omitempty"`
+
+	// HotRemoteCommands Forbidden hot-path remote or backup command signatures in the trace.
+	HotRemoteCommands int64 `json:"hot_remote_commands"`
+
+	// LastIssueAt RFC3339 timestamp of the latest issue in the scanned window.
+	LastIssueAt *string `json:"last_issue_at,omitempty"`
+
+	// Outcomes Counts by runtime write outcome.
+	Outcomes *map[string]int64 `json:"outcomes,omitempty"`
+
+	// RecentDegraded Recent non-success runtime write outcomes.
+	RecentDegraded int64 `json:"recent_degraded"`
+
+	// RecentTimeouts Recent ambiguous-timeout runtime write outcomes.
+	RecentTimeouts int64 `json:"recent_timeouts"`
+
+	// ScannedLines Runtime write trace lines scanned.
+	ScannedLines int64 `json:"scanned_lines"`
+
+	// StoreKeys Runtime store keys associated with issues.
+	StoreKeys *[]string `json:"store_keys,omitempty"`
+
+	// TracePath Trace path inspected for runtime write health.
+	TracePath *string `json:"trace_path,omitempty"`
 }
 
 // StatusSessionCountsDetail defines model for StatusSessionCountsDetail.
@@ -3068,6 +3112,18 @@ type TypedEventStreamEnvelopeBeadUpdated struct {
 	Actor    string                   `json:"actor"`
 	Message  *string                  `json:"message,omitempty"`
 	Payload  BeadEventPayload         `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedEventStreamEnvelopeBeadsSubprocessOrphaned defines model for TypedEventStreamEnvelopeBeadsSubprocessOrphaned.
+type TypedEventStreamEnvelopeBeadsSubprocessOrphaned struct {
+	Actor    string                   `json:"actor"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RuntimeWritePayload      `json:"payload"`
 	Seq      int64                    `json:"seq"`
 	Subject  *string                  `json:"subject,omitempty"`
 	Ts       time.Time                `json:"ts"`
@@ -3591,6 +3647,54 @@ type TypedEventStreamEnvelopeRouteCreateValidationFailed struct {
 	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
 }
 
+// TypedEventStreamEnvelopeRuntimeWriteCompleted defines model for TypedEventStreamEnvelopeRuntimeWriteCompleted.
+type TypedEventStreamEnvelopeRuntimeWriteCompleted struct {
+	Actor    string                   `json:"actor"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RuntimeWritePayload      `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedEventStreamEnvelopeRuntimeWriteDegraded defines model for TypedEventStreamEnvelopeRuntimeWriteDegraded.
+type TypedEventStreamEnvelopeRuntimeWriteDegraded struct {
+	Actor    string                   `json:"actor"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RuntimeWritePayload      `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedEventStreamEnvelopeRuntimeWriteStarted defines model for TypedEventStreamEnvelopeRuntimeWriteStarted.
+type TypedEventStreamEnvelopeRuntimeWriteStarted struct {
+	Actor    string                   `json:"actor"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RuntimeWritePayload      `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedEventStreamEnvelopeRuntimeWriteTimeout defines model for TypedEventStreamEnvelopeRuntimeWriteTimeout.
+type TypedEventStreamEnvelopeRuntimeWriteTimeout struct {
+	Actor    string                   `json:"actor"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RuntimeWritePayload      `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
 // TypedEventStreamEnvelopeSessionCrashed defines model for TypedEventStreamEnvelopeSessionCrashed.
 type TypedEventStreamEnvelopeSessionCrashed struct {
 	Actor    string                   `json:"actor"`
@@ -3868,6 +3972,19 @@ type TypedTaggedEventStreamEnvelopeBeadUpdated struct {
 	City     string                   `json:"city"`
 	Message  *string                  `json:"message,omitempty"`
 	Payload  BeadEventPayload         `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedTaggedEventStreamEnvelopeBeadsSubprocessOrphaned defines model for TypedTaggedEventStreamEnvelopeBeadsSubprocessOrphaned.
+type TypedTaggedEventStreamEnvelopeBeadsSubprocessOrphaned struct {
+	Actor    string                   `json:"actor"`
+	City     string                   `json:"city"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RuntimeWritePayload      `json:"payload"`
 	Seq      int64                    `json:"seq"`
 	Subject  *string                  `json:"subject,omitempty"`
 	Ts       time.Time                `json:"ts"`
@@ -4427,6 +4544,58 @@ type TypedTaggedEventStreamEnvelopeRouteCreateValidationFailed struct {
 	City     string                   `json:"city"`
 	Message  *string                  `json:"message,omitempty"`
 	Payload  RouteWorkEventPayload    `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedTaggedEventStreamEnvelopeRuntimeWriteCompleted defines model for TypedTaggedEventStreamEnvelopeRuntimeWriteCompleted.
+type TypedTaggedEventStreamEnvelopeRuntimeWriteCompleted struct {
+	Actor    string                   `json:"actor"`
+	City     string                   `json:"city"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RuntimeWritePayload      `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedTaggedEventStreamEnvelopeRuntimeWriteDegraded defines model for TypedTaggedEventStreamEnvelopeRuntimeWriteDegraded.
+type TypedTaggedEventStreamEnvelopeRuntimeWriteDegraded struct {
+	Actor    string                   `json:"actor"`
+	City     string                   `json:"city"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RuntimeWritePayload      `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedTaggedEventStreamEnvelopeRuntimeWriteStarted defines model for TypedTaggedEventStreamEnvelopeRuntimeWriteStarted.
+type TypedTaggedEventStreamEnvelopeRuntimeWriteStarted struct {
+	Actor    string                   `json:"actor"`
+	City     string                   `json:"city"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RuntimeWritePayload      `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedTaggedEventStreamEnvelopeRuntimeWriteTimeout defines model for TypedTaggedEventStreamEnvelopeRuntimeWriteTimeout.
+type TypedTaggedEventStreamEnvelopeRuntimeWriteTimeout struct {
+	Actor    string                   `json:"actor"`
+	City     string                   `json:"city"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  RuntimeWritePayload      `json:"payload"`
 	Seq      int64                    `json:"seq"`
 	Subject  *string                  `json:"subject,omitempty"`
 	Ts       time.Time                `json:"ts"`
@@ -6346,6 +6515,32 @@ func (t *EventPayload) MergeRouteWorkEventPayload(v RouteWorkEventPayload) error
 	return err
 }
 
+// AsRuntimeWritePayload returns the union data inside the EventPayload as a RuntimeWritePayload
+func (t EventPayload) AsRuntimeWritePayload() (RuntimeWritePayload, error) {
+	var body RuntimeWritePayload
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromRuntimeWritePayload overwrites any union data inside the EventPayload as the provided RuntimeWritePayload
+func (t *EventPayload) FromRuntimeWritePayload(v RuntimeWritePayload) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeRuntimeWritePayload performs a merge with any union data inside the EventPayload, using the provided RuntimeWritePayload
+func (t *EventPayload) MergeRuntimeWritePayload(v RuntimeWritePayload) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
 // AsSessionCreateSucceededPayload returns the union data inside the EventPayload as a SessionCreateSucceededPayload
 func (t EventPayload) AsSessionCreateSucceededPayload() (SessionCreateSucceededPayload, error) {
 	var body SessionCreateSucceededPayload
@@ -6804,6 +6999,34 @@ func (t *TypedEventStreamEnvelope) FromTypedEventStreamEnvelopeBeadUpdated(v Typ
 // MergeTypedEventStreamEnvelopeBeadUpdated performs a merge with any union data inside the TypedEventStreamEnvelope, using the provided TypedEventStreamEnvelopeBeadUpdated
 func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeBeadUpdated(v TypedEventStreamEnvelopeBeadUpdated) error {
 	v.Type = "bead.updated"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedEventStreamEnvelopeBeadsSubprocessOrphaned returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeBeadsSubprocessOrphaned
+func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeBeadsSubprocessOrphaned() (TypedEventStreamEnvelopeBeadsSubprocessOrphaned, error) {
+	var body TypedEventStreamEnvelopeBeadsSubprocessOrphaned
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedEventStreamEnvelopeBeadsSubprocessOrphaned overwrites any union data inside the TypedEventStreamEnvelope as the provided TypedEventStreamEnvelopeBeadsSubprocessOrphaned
+func (t *TypedEventStreamEnvelope) FromTypedEventStreamEnvelopeBeadsSubprocessOrphaned(v TypedEventStreamEnvelopeBeadsSubprocessOrphaned) error {
+	v.Type = "beads.subprocess.orphaned"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedEventStreamEnvelopeBeadsSubprocessOrphaned performs a merge with any union data inside the TypedEventStreamEnvelope, using the provided TypedEventStreamEnvelopeBeadsSubprocessOrphaned
+func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeBeadsSubprocessOrphaned(v TypedEventStreamEnvelopeBeadsSubprocessOrphaned) error {
+	v.Type = "beads.subprocess.orphaned"
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -7990,6 +8213,118 @@ func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeRouteCreateValid
 	return err
 }
 
+// AsTypedEventStreamEnvelopeRuntimeWriteCompleted returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeRuntimeWriteCompleted
+func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeRuntimeWriteCompleted() (TypedEventStreamEnvelopeRuntimeWriteCompleted, error) {
+	var body TypedEventStreamEnvelopeRuntimeWriteCompleted
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedEventStreamEnvelopeRuntimeWriteCompleted overwrites any union data inside the TypedEventStreamEnvelope as the provided TypedEventStreamEnvelopeRuntimeWriteCompleted
+func (t *TypedEventStreamEnvelope) FromTypedEventStreamEnvelopeRuntimeWriteCompleted(v TypedEventStreamEnvelopeRuntimeWriteCompleted) error {
+	v.Type = "runtime.write.completed"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedEventStreamEnvelopeRuntimeWriteCompleted performs a merge with any union data inside the TypedEventStreamEnvelope, using the provided TypedEventStreamEnvelopeRuntimeWriteCompleted
+func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeRuntimeWriteCompleted(v TypedEventStreamEnvelopeRuntimeWriteCompleted) error {
+	v.Type = "runtime.write.completed"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedEventStreamEnvelopeRuntimeWriteDegraded returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeRuntimeWriteDegraded
+func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeRuntimeWriteDegraded() (TypedEventStreamEnvelopeRuntimeWriteDegraded, error) {
+	var body TypedEventStreamEnvelopeRuntimeWriteDegraded
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedEventStreamEnvelopeRuntimeWriteDegraded overwrites any union data inside the TypedEventStreamEnvelope as the provided TypedEventStreamEnvelopeRuntimeWriteDegraded
+func (t *TypedEventStreamEnvelope) FromTypedEventStreamEnvelopeRuntimeWriteDegraded(v TypedEventStreamEnvelopeRuntimeWriteDegraded) error {
+	v.Type = "runtime.write.degraded"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedEventStreamEnvelopeRuntimeWriteDegraded performs a merge with any union data inside the TypedEventStreamEnvelope, using the provided TypedEventStreamEnvelopeRuntimeWriteDegraded
+func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeRuntimeWriteDegraded(v TypedEventStreamEnvelopeRuntimeWriteDegraded) error {
+	v.Type = "runtime.write.degraded"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedEventStreamEnvelopeRuntimeWriteStarted returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeRuntimeWriteStarted
+func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeRuntimeWriteStarted() (TypedEventStreamEnvelopeRuntimeWriteStarted, error) {
+	var body TypedEventStreamEnvelopeRuntimeWriteStarted
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedEventStreamEnvelopeRuntimeWriteStarted overwrites any union data inside the TypedEventStreamEnvelope as the provided TypedEventStreamEnvelopeRuntimeWriteStarted
+func (t *TypedEventStreamEnvelope) FromTypedEventStreamEnvelopeRuntimeWriteStarted(v TypedEventStreamEnvelopeRuntimeWriteStarted) error {
+	v.Type = "runtime.write.started"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedEventStreamEnvelopeRuntimeWriteStarted performs a merge with any union data inside the TypedEventStreamEnvelope, using the provided TypedEventStreamEnvelopeRuntimeWriteStarted
+func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeRuntimeWriteStarted(v TypedEventStreamEnvelopeRuntimeWriteStarted) error {
+	v.Type = "runtime.write.started"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedEventStreamEnvelopeRuntimeWriteTimeout returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeRuntimeWriteTimeout
+func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeRuntimeWriteTimeout() (TypedEventStreamEnvelopeRuntimeWriteTimeout, error) {
+	var body TypedEventStreamEnvelopeRuntimeWriteTimeout
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedEventStreamEnvelopeRuntimeWriteTimeout overwrites any union data inside the TypedEventStreamEnvelope as the provided TypedEventStreamEnvelopeRuntimeWriteTimeout
+func (t *TypedEventStreamEnvelope) FromTypedEventStreamEnvelopeRuntimeWriteTimeout(v TypedEventStreamEnvelopeRuntimeWriteTimeout) error {
+	v.Type = "runtime.write.timeout"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedEventStreamEnvelopeRuntimeWriteTimeout performs a merge with any union data inside the TypedEventStreamEnvelope, using the provided TypedEventStreamEnvelopeRuntimeWriteTimeout
+func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeRuntimeWriteTimeout(v TypedEventStreamEnvelopeRuntimeWriteTimeout) error {
+	v.Type = "runtime.write.timeout"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
 // AsTypedEventStreamEnvelopeSessionCrashed returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeSessionCrashed
 func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeSessionCrashed() (TypedEventStreamEnvelopeSessionCrashed, error) {
 	var body TypedEventStreamEnvelopeSessionCrashed
@@ -8600,6 +8935,8 @@ func (t TypedEventStreamEnvelope) ValueByDiscriminator() (interface{}, error) {
 		return t.AsTypedEventStreamEnvelopeBeadCreated()
 	case "bead.updated":
 		return t.AsTypedEventStreamEnvelopeBeadUpdated()
+	case "beads.subprocess.orphaned":
+		return t.AsTypedEventStreamEnvelopeBeadsSubprocessOrphaned()
 	case "city.created":
 		return t.AsTypedEventStreamEnvelopeCityCreated()
 	case "city.resumed":
@@ -8684,6 +9021,14 @@ func (t TypedEventStreamEnvelope) ValueByDiscriminator() (interface{}, error) {
 		return t.AsTypedEventStreamEnvelopeRouteCreateSourceCreated()
 	case "route.create.validation_failed":
 		return t.AsTypedEventStreamEnvelopeRouteCreateValidationFailed()
+	case "runtime.write.completed":
+		return t.AsTypedEventStreamEnvelopeRuntimeWriteCompleted()
+	case "runtime.write.degraded":
+		return t.AsTypedEventStreamEnvelopeRuntimeWriteDegraded()
+	case "runtime.write.started":
+		return t.AsTypedEventStreamEnvelopeRuntimeWriteStarted()
+	case "runtime.write.timeout":
+		return t.AsTypedEventStreamEnvelopeRuntimeWriteTimeout()
 	case "session.crashed":
 		return t.AsTypedEventStreamEnvelopeSessionCrashed()
 	case "session.drain_acked_with_assigned_work":
@@ -8813,6 +9158,34 @@ func (t *TypedTaggedEventStreamEnvelope) FromTypedTaggedEventStreamEnvelopeBeadU
 // MergeTypedTaggedEventStreamEnvelopeBeadUpdated performs a merge with any union data inside the TypedTaggedEventStreamEnvelope, using the provided TypedTaggedEventStreamEnvelopeBeadUpdated
 func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeBeadUpdated(v TypedTaggedEventStreamEnvelopeBeadUpdated) error {
 	v.Type = "bead.updated"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedTaggedEventStreamEnvelopeBeadsSubprocessOrphaned returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeBeadsSubprocessOrphaned
+func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeBeadsSubprocessOrphaned() (TypedTaggedEventStreamEnvelopeBeadsSubprocessOrphaned, error) {
+	var body TypedTaggedEventStreamEnvelopeBeadsSubprocessOrphaned
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedTaggedEventStreamEnvelopeBeadsSubprocessOrphaned overwrites any union data inside the TypedTaggedEventStreamEnvelope as the provided TypedTaggedEventStreamEnvelopeBeadsSubprocessOrphaned
+func (t *TypedTaggedEventStreamEnvelope) FromTypedTaggedEventStreamEnvelopeBeadsSubprocessOrphaned(v TypedTaggedEventStreamEnvelopeBeadsSubprocessOrphaned) error {
+	v.Type = "beads.subprocess.orphaned"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedTaggedEventStreamEnvelopeBeadsSubprocessOrphaned performs a merge with any union data inside the TypedTaggedEventStreamEnvelope, using the provided TypedTaggedEventStreamEnvelopeBeadsSubprocessOrphaned
+func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeBeadsSubprocessOrphaned(v TypedTaggedEventStreamEnvelopeBeadsSubprocessOrphaned) error {
+	v.Type = "beads.subprocess.orphaned"
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -9999,6 +10372,118 @@ func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeRout
 	return err
 }
 
+// AsTypedTaggedEventStreamEnvelopeRuntimeWriteCompleted returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeRuntimeWriteCompleted
+func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeRuntimeWriteCompleted() (TypedTaggedEventStreamEnvelopeRuntimeWriteCompleted, error) {
+	var body TypedTaggedEventStreamEnvelopeRuntimeWriteCompleted
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedTaggedEventStreamEnvelopeRuntimeWriteCompleted overwrites any union data inside the TypedTaggedEventStreamEnvelope as the provided TypedTaggedEventStreamEnvelopeRuntimeWriteCompleted
+func (t *TypedTaggedEventStreamEnvelope) FromTypedTaggedEventStreamEnvelopeRuntimeWriteCompleted(v TypedTaggedEventStreamEnvelopeRuntimeWriteCompleted) error {
+	v.Type = "runtime.write.completed"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedTaggedEventStreamEnvelopeRuntimeWriteCompleted performs a merge with any union data inside the TypedTaggedEventStreamEnvelope, using the provided TypedTaggedEventStreamEnvelopeRuntimeWriteCompleted
+func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeRuntimeWriteCompleted(v TypedTaggedEventStreamEnvelopeRuntimeWriteCompleted) error {
+	v.Type = "runtime.write.completed"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedTaggedEventStreamEnvelopeRuntimeWriteDegraded returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeRuntimeWriteDegraded
+func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeRuntimeWriteDegraded() (TypedTaggedEventStreamEnvelopeRuntimeWriteDegraded, error) {
+	var body TypedTaggedEventStreamEnvelopeRuntimeWriteDegraded
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedTaggedEventStreamEnvelopeRuntimeWriteDegraded overwrites any union data inside the TypedTaggedEventStreamEnvelope as the provided TypedTaggedEventStreamEnvelopeRuntimeWriteDegraded
+func (t *TypedTaggedEventStreamEnvelope) FromTypedTaggedEventStreamEnvelopeRuntimeWriteDegraded(v TypedTaggedEventStreamEnvelopeRuntimeWriteDegraded) error {
+	v.Type = "runtime.write.degraded"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedTaggedEventStreamEnvelopeRuntimeWriteDegraded performs a merge with any union data inside the TypedTaggedEventStreamEnvelope, using the provided TypedTaggedEventStreamEnvelopeRuntimeWriteDegraded
+func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeRuntimeWriteDegraded(v TypedTaggedEventStreamEnvelopeRuntimeWriteDegraded) error {
+	v.Type = "runtime.write.degraded"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedTaggedEventStreamEnvelopeRuntimeWriteStarted returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeRuntimeWriteStarted
+func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeRuntimeWriteStarted() (TypedTaggedEventStreamEnvelopeRuntimeWriteStarted, error) {
+	var body TypedTaggedEventStreamEnvelopeRuntimeWriteStarted
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedTaggedEventStreamEnvelopeRuntimeWriteStarted overwrites any union data inside the TypedTaggedEventStreamEnvelope as the provided TypedTaggedEventStreamEnvelopeRuntimeWriteStarted
+func (t *TypedTaggedEventStreamEnvelope) FromTypedTaggedEventStreamEnvelopeRuntimeWriteStarted(v TypedTaggedEventStreamEnvelopeRuntimeWriteStarted) error {
+	v.Type = "runtime.write.started"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedTaggedEventStreamEnvelopeRuntimeWriteStarted performs a merge with any union data inside the TypedTaggedEventStreamEnvelope, using the provided TypedTaggedEventStreamEnvelopeRuntimeWriteStarted
+func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeRuntimeWriteStarted(v TypedTaggedEventStreamEnvelopeRuntimeWriteStarted) error {
+	v.Type = "runtime.write.started"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedTaggedEventStreamEnvelopeRuntimeWriteTimeout returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeRuntimeWriteTimeout
+func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeRuntimeWriteTimeout() (TypedTaggedEventStreamEnvelopeRuntimeWriteTimeout, error) {
+	var body TypedTaggedEventStreamEnvelopeRuntimeWriteTimeout
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedTaggedEventStreamEnvelopeRuntimeWriteTimeout overwrites any union data inside the TypedTaggedEventStreamEnvelope as the provided TypedTaggedEventStreamEnvelopeRuntimeWriteTimeout
+func (t *TypedTaggedEventStreamEnvelope) FromTypedTaggedEventStreamEnvelopeRuntimeWriteTimeout(v TypedTaggedEventStreamEnvelopeRuntimeWriteTimeout) error {
+	v.Type = "runtime.write.timeout"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedTaggedEventStreamEnvelopeRuntimeWriteTimeout performs a merge with any union data inside the TypedTaggedEventStreamEnvelope, using the provided TypedTaggedEventStreamEnvelopeRuntimeWriteTimeout
+func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeRuntimeWriteTimeout(v TypedTaggedEventStreamEnvelopeRuntimeWriteTimeout) error {
+	v.Type = "runtime.write.timeout"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
 // AsTypedTaggedEventStreamEnvelopeSessionCrashed returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeSessionCrashed
 func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeSessionCrashed() (TypedTaggedEventStreamEnvelopeSessionCrashed, error) {
 	var body TypedTaggedEventStreamEnvelopeSessionCrashed
@@ -10609,6 +11094,8 @@ func (t TypedTaggedEventStreamEnvelope) ValueByDiscriminator() (interface{}, err
 		return t.AsTypedTaggedEventStreamEnvelopeBeadCreated()
 	case "bead.updated":
 		return t.AsTypedTaggedEventStreamEnvelopeBeadUpdated()
+	case "beads.subprocess.orphaned":
+		return t.AsTypedTaggedEventStreamEnvelopeBeadsSubprocessOrphaned()
 	case "city.created":
 		return t.AsTypedTaggedEventStreamEnvelopeCityCreated()
 	case "city.resumed":
@@ -10693,6 +11180,14 @@ func (t TypedTaggedEventStreamEnvelope) ValueByDiscriminator() (interface{}, err
 		return t.AsTypedTaggedEventStreamEnvelopeRouteCreateSourceCreated()
 	case "route.create.validation_failed":
 		return t.AsTypedTaggedEventStreamEnvelopeRouteCreateValidationFailed()
+	case "runtime.write.completed":
+		return t.AsTypedTaggedEventStreamEnvelopeRuntimeWriteCompleted()
+	case "runtime.write.degraded":
+		return t.AsTypedTaggedEventStreamEnvelopeRuntimeWriteDegraded()
+	case "runtime.write.started":
+		return t.AsTypedTaggedEventStreamEnvelopeRuntimeWriteStarted()
+	case "runtime.write.timeout":
+		return t.AsTypedTaggedEventStreamEnvelopeRuntimeWriteTimeout()
 	case "session.crashed":
 		return t.AsTypedTaggedEventStreamEnvelopeSessionCrashed()
 	case "session.drain_acked_with_assigned_work":

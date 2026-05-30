@@ -86,6 +86,7 @@ type StatusSummaryJSON struct {
 	SuspendedSessions int                           `json:"suspended_sessions,omitempty"`
 	StoreHealth       *StoreHealth                  `json:"store_health,omitempty"`
 	DoltContention    *doctor.DoltContentionSummary `json:"dolt_contention,omitempty"`
+	RuntimeWrite      *doctor.RuntimeWriteSummary   `json:"runtime_write,omitempty"`
 }
 
 // StoreHealth is the JSON shape of the Dolt bead store health block
@@ -266,6 +267,7 @@ func snapshotFromStatusView(cityPath string, v api.StatusView) cityStatusSnapsho
 			RunningAgents:     v.Summary.RunningAgents,
 			ActiveSessions:    v.SessionCounts.Active,
 			SuspendedSessions: v.SessionCounts.Suspended,
+			RuntimeWrite:      runtimeWriteSummaryFromStatusView(v.RuntimeWrite),
 		},
 	}
 	for _, a := range v.Agents {
@@ -313,6 +315,30 @@ func snapshotFromStatusView(cityPath string, v api.StatusView) cityStatusSnapsho
 	}
 	snapshot.Summary.DoltContention = buildCityDoltContentionSummary(cityPath)
 	return snapshot
+}
+
+func runtimeWriteSummaryFromStatusView(v *api.StatusRuntimeWriteView) *doctor.RuntimeWriteSummary {
+	if v == nil {
+		return nil
+	}
+	outcomes := map[string]int(nil)
+	if len(v.Outcomes) > 0 {
+		outcomes = make(map[string]int, len(v.Outcomes))
+		for key, value := range v.Outcomes {
+			outcomes[key] = value
+		}
+	}
+	return &doctor.RuntimeWriteSummary{
+		TracePath:         v.TracePath,
+		ScannedLines:      v.ScannedLines,
+		RecentDegraded:    v.RecentDegraded,
+		RecentTimeouts:    v.RecentTimeouts,
+		HotRemoteCommands: v.HotRemoteCommands,
+		FirstIssueAt:      v.FirstIssueAt,
+		LastIssueAt:       v.LastIssueAt,
+		StoreKeys:         append([]string(nil), v.StoreKeys...),
+		Outcomes:          outcomes,
+	}
 }
 
 // writeCityStatusJSONWithCache writes the snapshot's JSON form with a

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/telemetry"
 )
 
@@ -1556,6 +1558,7 @@ func (s *BdStore) runRuntimeBD(ctx context.Context, policy WritePolicy, operatio
 		ctx = context.Background()
 	}
 	start := time.Now()
+	s.recordRuntimeWriteEvent(events.RuntimeWriteStarted, policy, operation, args, 0, nil)
 	run := s.ctxRunner
 	if run != nil {
 		out, err := run(ctx, s.dir, "bd", args...)
@@ -1614,6 +1617,12 @@ func (s *BdStore) runtimeCommandError(ctx context.Context, policy WritePolicy, o
 func (s *BdStore) traceRuntimeWrite(policy WritePolicy, operation string, args []string, duration time.Duration, err error) {
 	path := strings.TrimSpace(os.Getenv("GC_BD_TRACE"))
 	if path == "" {
+		if s == nil || strings.TrimSpace(s.dir) == "" {
+			return
+		}
+		path = RuntimeWriteTracePath(s.dir)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return
 	}
 	f, openErr := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
@@ -1629,17 +1638,27 @@ func (s *BdStore) traceRuntimeWrite(policy WritePolicy, operation string, args [
 	if err != nil {
 		errMsg = err.Error()
 	}
-	fmt.Fprintf(f, "%s runtime_write caller=%s class=%s op=%s command=bd:%s duration=%s timeout=%s outcome=%s store_key=%s err=%q\n", //nolint:errcheck // best-effort diagnostic trace
+	outcome := runtimeWriteOutcomeForTrace(err)
+	fmt.Fprintf(f, "%s runtime_write caller=%s class=%s op=%s command=bd:%s args=%q duration=%s timeout=%s outcome=%s store_key=%s err=%q\n", //nolint:errcheck // best-effort diagnostic trace
 		time.Now().UTC().Format(time.RFC3339Nano),
 		strings.TrimSpace(policy.Caller),
 		policy.Class,
 		strings.TrimSpace(operation),
 		strings.TrimSpace(subcommand),
+		strings.Join(args, " "),
 		duration,
 		policy.Timeout,
-		runtimeWriteOutcomeForTrace(err),
+		outcome,
 		s.RuntimeWriteStoreKey(),
 		errMsg)
+	switch {
+	case err == nil:
+		s.recordRuntimeWriteEvent(events.RuntimeWriteCompleted, policy, operation, args, duration, nil)
+	case outcome == WriteOutcomeAmbiguousTimeout:
+		s.recordRuntimeWriteEvent(events.RuntimeWriteTimeout, policy, operation, args, duration, err)
+	default:
+		s.recordRuntimeWriteEvent(events.RuntimeWriteDegraded, policy, operation, args, duration, err)
+	}
 }
 
 func runtimeWriteOutcomeForTrace(err error) WriteOutcome {
@@ -1651,6 +1670,46 @@ func runtimeWriteOutcomeForTrace(err error) WriteOutcome {
 		return degraded.Outcome
 	}
 	return WriteOutcomeFailed
+}
+
+func (s *BdStore) recordRuntimeWriteEvent(eventType string, policy WritePolicy, operation string, args []string, duration time.Duration, err error) {
+	if s == nil || strings.TrimSpace(s.dir) == "" {
+		return
+	}
+	path := filepath.Join(s.dir, ".gc", "events.jsonl")
+	rec, openErr := events.NewFileRecorder(path, io.Discard)
+	if openErr != nil {
+		return
+	}
+	defer rec.Close() //nolint:errcheck // best-effort observability
+	subcommand := ""
+	if len(args) > 0 {
+		subcommand = args[0]
+	}
+	errMsg := ""
+	if err != nil {
+		errMsg = err.Error()
+	}
+	payload, marshalErr := json.Marshal(events.RuntimeWritePayload{
+		Caller:          strings.TrimSpace(policy.Caller),
+		Class:           string(policy.Class),
+		Operation:       strings.TrimSpace(operation),
+		Command:         "bd:" + strings.TrimSpace(subcommand),
+		DurationSeconds: duration.Seconds(),
+		TimeoutSeconds:  policy.Timeout.Seconds(),
+		Outcome:         string(runtimeWriteOutcomeForTrace(err)),
+		StoreKey:        s.RuntimeWriteStoreKey(),
+		Error:           errMsg,
+	})
+	if marshalErr != nil {
+		return
+	}
+	rec.Record(events.Event{
+		Type:    eventType,
+		Actor:   "gc",
+		Subject: s.RuntimeWriteStoreKey(),
+		Payload: payload,
+	})
 }
 
 func (s *BdStore) runtimeGet(ctx context.Context, id string, policy WritePolicy) (Bead, error) {

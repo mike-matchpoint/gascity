@@ -35,6 +35,10 @@ const (
 	// RuntimeWriteQueueLimit bounds queued writes per canonical store key.
 	RuntimeWriteQueueLimit = 128
 
+	// RuntimeWriteTraceRelativePath is the default per-scope trace inspected by
+	// doctor/status when GC_BD_TRACE is not explicitly set.
+	RuntimeWriteTraceRelativePath = ".gc/runtime/beads/runtime-write.trace"
+
 	RuntimeWriteReservationBudget       = time.Second
 	RuntimeWriteCursorReservationBudget = time.Second
 	RuntimeWritePostActionBudget        = 2 * time.Second
@@ -42,6 +46,17 @@ const (
 	RuntimeWriteHotStateBudget          = 2 * time.Second
 	RuntimeWritePingBudget              = time.Second
 )
+
+// RuntimeWriteTracePath returns the default runtime-write trace path under
+// root. The relative fallback is useful for callers that have not resolved a
+// city/rig root yet but still need a stable path.
+func RuntimeWriteTracePath(root string) string {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return RuntimeWriteTraceRelativePath
+	}
+	return filepath.Join(root, RuntimeWriteTraceRelativePath)
+}
 
 // WriteOutcome names the caller-visible result class for degraded runtime
 // writes.

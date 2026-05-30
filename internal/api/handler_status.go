@@ -248,6 +248,7 @@ func (s *Server) buildStatusBody() StatusBody {
 		Partial:             len(partialErrors) > 0,
 		PartialErrors:       partialErrors,
 		StoreHealth:         s.cachedStoreHealth(time.Now()),
+		RuntimeWrite:        s.statusRuntimeWrite(),
 		AgentDetails:        agentDetails,
 		RigDetails:          rigDetails,
 		NamedSessionDetails: namedSessionDetails,

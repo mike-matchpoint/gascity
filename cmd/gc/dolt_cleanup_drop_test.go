@@ -407,8 +407,8 @@ func TestProbeLiveSessions_TimesOut(t *testing.T) {
 	start := time.Now()
 	runDoltCleanup(opts, &stdout, &stderr)
 	elapsed := time.Since(start)
-	if elapsed >= 250*time.Millisecond {
-		t.Errorf("wall time = %v, want < 250ms", elapsed)
+	if elapsed >= oldTimeout/2 {
+		t.Errorf("wall time = %v, want less than half the production timeout %v", elapsed, oldTimeout)
 	}
 
 	var r CleanupReport

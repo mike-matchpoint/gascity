@@ -94,6 +94,11 @@ const (
 	OrderFailed                     = "order.failed"
 	OrderDispatchTick               = "order.dispatch.tick"
 	OrderTrackingDegraded           = "order.tracking.degraded"
+	RuntimeWriteStarted             = "runtime.write.started"
+	RuntimeWriteCompleted           = "runtime.write.completed"
+	RuntimeWriteDegraded            = "runtime.write.degraded"
+	RuntimeWriteTimeout             = "runtime.write.timeout"
+	BeadsSubprocessOrphaned         = "beads.subprocess.orphaned"
 	ProviderSwapped                 = "provider.swapped"
 	WorkerOperation                 = "worker.operation"
 	ProjectIdentityStamped          = "project.identity.stamped"
@@ -153,6 +158,7 @@ var KnownEventTypes = []string{
 	RequestResultSessionSubmit, RequestFailed,
 	CityCreated, CityUnregisterRequested,
 	OrderFired, OrderCompleted, OrderFailed, OrderDispatchTick, OrderTrackingDegraded,
+	RuntimeWriteStarted, RuntimeWriteCompleted, RuntimeWriteDegraded, RuntimeWriteTimeout, BeadsSubprocessOrphaned,
 	ProviderSwapped, WorkerOperation, ProjectIdentityStamped, SupervisorFSPressureSkippedTick,
 	SupervisorShutdownRequested,
 	ExtMsgBound, ExtMsgUnbound, ExtMsgGroupCreated,

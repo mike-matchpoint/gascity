@@ -165,6 +165,7 @@ type StatusBody struct {
 	Work                StatusWorkCounts           `json:"work" doc:"Work item counts."`
 	Mail                StatusMailCounts           `json:"mail" doc:"Mail counts."`
 	StoreHealth         *StatusStoreHealth         `json:"store_health,omitempty" doc:"Dolt bead store health summary. Omitted when unavailable."`
+	RuntimeWrite        *StatusRuntimeWrite        `json:"runtime_write,omitempty" doc:"Bounded runtime Beads write degradation summary. Omitted when unavailable."`
 	Partial             bool                       `json:"partial,omitempty" doc:"True when one or more status backing reads returned incomplete data."`
 	PartialErrors       []string                   `json:"partial_errors,omitempty" doc:"Human-readable errors from incomplete status backing reads."`
 	AgentDetails        []StatusAgentDetail        `json:"agent_details,omitempty" doc:"Per-agent state (for CLI status views). Empty when none."`
@@ -224,6 +225,19 @@ type StatusStoreHealth struct {
 	ThresholdMB  float64 `json:"threshold_mb_per_row" doc:"Ratio threshold; a ratio above this trips warning."`
 	LastGCAt     string  `json:"last_gc_at,omitempty" doc:"RFC3339 timestamp of last maintenance run."`
 	LastGCStatus string  `json:"last_gc_status,omitempty" doc:"Status of last maintenance run ('success' or 'failed')."`
+}
+
+// StatusRuntimeWrite summarizes bounded runtime Beads write degradation.
+type StatusRuntimeWrite struct {
+	TracePath         string         `json:"trace_path,omitempty" doc:"Trace path inspected for runtime write health."`
+	ScannedLines      int            `json:"scanned_lines" doc:"Runtime write trace lines scanned."`
+	RecentDegraded    int            `json:"recent_degraded" doc:"Recent non-success runtime write outcomes."`
+	RecentTimeouts    int            `json:"recent_timeouts" doc:"Recent ambiguous-timeout runtime write outcomes."`
+	HotRemoteCommands int            `json:"hot_remote_commands" doc:"Forbidden hot-path remote or backup command signatures in the trace."`
+	FirstIssueAt      string         `json:"first_issue_at,omitempty" doc:"RFC3339 timestamp of the first issue in the scanned window."`
+	LastIssueAt       string         `json:"last_issue_at,omitempty" doc:"RFC3339 timestamp of the latest issue in the scanned window."`
+	StoreKeys         []string       `json:"store_keys,omitempty" doc:"Runtime store keys associated with issues."`
+	Outcomes          map[string]int `json:"outcomes,omitempty" doc:"Counts by runtime write outcome."`
 }
 
 // Session types moved to huma_types_sessions.go.

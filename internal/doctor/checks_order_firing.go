@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/events"
@@ -94,6 +95,7 @@ func (c *OrderFiringCurrentCheck) Run(ctx *CheckContext) *CheckResult {
 	if now.IsZero() {
 		now = time.Now()
 	}
+	runtimeBackpressure := orderFiringRuntimeBackpressure(cityPath, now)
 	cronIntervals := map[string]time.Duration{}
 	worst := StatusOK
 	monitored := 0
@@ -114,6 +116,10 @@ func (c *OrderFiringCurrentCheck) Run(ctx *CheckContext) *CheckResult {
 			continue
 		}
 		status, detail := classifyOrderFiring(order, now, expected, latestOrderFiredAt(firedEvents, order.ScopedName()), startedAt)
+		if status == StatusError && runtimeBackpressure.RecentDegraded > 0 {
+			status = StatusWarning
+			detail += " (" + orderRuntimeBackpressureDetail(runtimeBackpressure) + ")"
+		}
 		worst = worseStatus(worst, status)
 		result.Details = append(result.Details, detail)
 		if status != StatusOK && firstNonOK == "" {
@@ -140,6 +146,30 @@ func (c *OrderFiringCurrentCheck) Run(ctx *CheckContext) *CheckResult {
 		result.FixHint = fmt.Sprintf(orderFiringInspectHintFmt, firstNonOK)
 	}
 	return result
+}
+
+func orderFiringRuntimeBackpressure(cityPath string, now time.Time) RuntimeWriteSummary {
+	if strings.TrimSpace(cityPath) == "" {
+		return RuntimeWriteSummary{}
+	}
+	summary, err := AnalyzeRuntimeWriteTrace(beads.RuntimeWriteTracePath(cityPath), RuntimeWriteOptions{
+		Now: func() time.Time { return now },
+	})
+	if err != nil || summary.RecentDegraded == 0 {
+		return RuntimeWriteSummary{}
+	}
+	return summary
+}
+
+func orderRuntimeBackpressureDetail(summary RuntimeWriteSummary) string {
+	parts := []string{fmt.Sprintf("runtime write backpressure: %d degraded writes", summary.RecentDegraded)}
+	if summary.RecentTimeouts > 0 {
+		parts = append(parts, fmt.Sprintf("%d timeout", summary.RecentTimeouts))
+	}
+	if len(summary.StoreKeys) > 0 {
+		parts = append(parts, "store_keys="+strings.Join(summary.StoreKeys, ","))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func scanOrderFiringCurrentOrders(cityPath string, cfg *config.City) ([]orders.Order, error) {

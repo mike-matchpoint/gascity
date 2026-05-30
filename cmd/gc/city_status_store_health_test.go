@@ -203,6 +203,44 @@ func TestCityStatusIncludesDoltContentionSummaryWhenSupervisorAlive(t *testing.T
 	}
 }
 
+func TestCityStatusIncludesRuntimeWriteSummaryWhenSupervisorAlive(t *testing.T) {
+	cityPath := registerCityForSnapshot(t)
+	stubSupervisorAlive(t)
+	stubStoreHealthEvents(t, events.NewFake())
+	tracePath := beads.RuntimeWriteTracePath(cityPath)
+	if err := os.MkdirAll(filepath.Dir(tracePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	traceLine := time.Now().UTC().Format(time.RFC3339Nano) +
+		` runtime_write caller=test class=hot-state op=update command=bd:update args="update recent" duration=2s timeout=1s outcome=ambiguous-timeout store_key=city err="deadline exceeded"` + "\n"
+	if err := os.WriteFile(tracePath, []byte(traceLine), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := beads.NewMemStore()
+	oldOpen := openCityStoreAtForStatus
+	openCityStoreAtForStatus = func(string) (beads.Store, error) { return store, nil }
+	t.Cleanup(func() { openCityStoreAtForStatus = oldOpen })
+
+	cfg := &config.City{Workspace: config.Workspace{Name: "bright-lights"}}
+	var stdout, stderr bytes.Buffer
+	code := doCityStatusJSON(runtime.NewFake(), cfg, cityPath, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr: %s", code, stderr.String())
+	}
+
+	var got StatusJSON
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("Unmarshal: %v; stdout: %s", err, stdout.String())
+	}
+	if got.Summary.RuntimeWrite == nil || got.Summary.RuntimeWrite.RecentTimeouts != 1 {
+		t.Fatalf("RuntimeWrite = %+v; stdout: %s", got.Summary.RuntimeWrite, stdout.String())
+	}
+	if !containsString(got.Health.Signals, "runtime_write_degraded") {
+		t.Fatalf("health signals = %#v, want runtime_write_degraded", got.Health.Signals)
+	}
+}
+
 func TestCityStatusSnapshotWarnsOnHighRatio(t *testing.T) {
 	cityPath := registerCityForSnapshot(t)
 	stubSupervisorAlive(t)

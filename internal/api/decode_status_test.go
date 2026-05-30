@@ -20,6 +20,10 @@ func TestStatusViewFromGen_ValidResponse(t *testing.T) {
 	scaleLabel := "scaled (min=0, max=3)"
 	expanded := true
 	draining := true
+	tracePath := "/home/u/bright-lights/.gc/runtime/beads/runtime-write.trace"
+	lastIssueAt := "2026-05-30T18:00:00Z"
+	storeKeys := []string{"city"}
+	outcomes := map[string]int64{"ambiguous-timeout": 1}
 	body := &genclient.StatusBody{
 		Name:      "bright-lights",
 		Path:      "/home/u/bright-lights",
@@ -51,6 +55,16 @@ func TestStatusViewFromGen_ValidResponse(t *testing.T) {
 			{Identity: "myrig/worker", Status: "materialized", Mode: "always"},
 		},
 		SessionCountsDetail: &genclient.StatusSessionCountsDetail{Active: 3, Suspended: 1},
+		RuntimeWrite: &genclient.StatusRuntimeWrite{
+			TracePath:         &tracePath,
+			ScannedLines:      2,
+			RecentDegraded:    1,
+			RecentTimeouts:    1,
+			HotRemoteCommands: 0,
+			LastIssueAt:       &lastIssueAt,
+			StoreKeys:         &storeKeys,
+			Outcomes:          &outcomes,
+		},
 	}
 
 	got := statusViewFromGen(body)
@@ -93,6 +107,12 @@ func TestStatusViewFromGen_ValidResponse(t *testing.T) {
 	}
 	if got.SessionCounts.Active != 3 || got.SessionCounts.Suspended != 1 {
 		t.Errorf("SessionCounts = %+v", got.SessionCounts)
+	}
+	if got.RuntimeWrite == nil || got.RuntimeWrite.RecentTimeouts != 1 || got.RuntimeWrite.TracePath != tracePath {
+		t.Errorf("RuntimeWrite = %+v", got.RuntimeWrite)
+	}
+	if got.RuntimeWrite.Outcomes["ambiguous-timeout"] != 1 || len(got.RuntimeWrite.StoreKeys) != 1 {
+		t.Errorf("RuntimeWrite details = %+v", got.RuntimeWrite)
 	}
 }
 

@@ -52,6 +52,7 @@ dolt-noms-size
 dolt-config
 dolt-version
 dolt-contention
+runtime-write
 events-log
 events-log-size
 bd-backup-size

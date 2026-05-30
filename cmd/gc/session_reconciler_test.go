@@ -192,6 +192,16 @@ func (s *failRateLimitHoldStore) SetMetadataBatch(id string, kvs map[string]stri
 	return s.MemStore.SetMetadataBatch(id, kvs)
 }
 
+func (s *failRateLimitHoldStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	if opts.Metadata["sleep_reason"] == "rate_limit" {
+		s.rateLimitHoldCalls++
+		if s.failRateLimitHold {
+			return errors.New("rate-limit hold batch failed")
+		}
+	}
+	return s.MemStore.RuntimeUpdate(ctx, id, opts, policy)
+}
+
 func newDelayedSessionExistsProvider() *delayedSessionExistsProvider {
 	return &delayedSessionExistsProvider{
 		Fake:            runtime.NewFake(),

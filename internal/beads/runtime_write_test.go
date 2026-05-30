@@ -643,6 +643,17 @@ func TestBdStoreRuntimePingUsesRuntimeBudget(t *testing.T) {
 	if !sawDeadline.Load() {
 		t.Fatal("runtime ping runner did not receive a short context deadline")
 	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		stats := store.RuntimeWriteManagerStats()
+		if stats.Active == 0 && stats.QueueDepth == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("runtime writer remained active after timeout: %+v", stats)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func TestBdStoreRuntimeWriteTraceIncludesPolicy(t *testing.T) {

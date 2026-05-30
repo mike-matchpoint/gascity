@@ -236,6 +236,7 @@ func buildDoctorChecks(cityPath string, cfg *config.City, cfgErr error, opts bui
 	register(doctor.NewDoltConfigCheckForConfig(cityPath, opts.SkipManagedDoltCheck, cfg, cfgErr))
 	register(doctor.NewScopedDoltVersionCheckForConfig(cityPath, opts.SkipManagedDoltCheck, cfg, cfgErr))
 	register(doctor.NewDoltContentionCheck(cityPath))
+	register(doctor.NewRuntimeWriteCheck(cityPath))
 	register(&doctor.EventsLogCheck{})
 	register(doctor.NewEventLogSizeCheck())
 	// bd auto-backup growth canary. bd's auto-backup pipeline (upstream of

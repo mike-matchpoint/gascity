@@ -61,6 +61,7 @@ type StatusView struct {
 	NamedSessions []StatusNamedSessionView
 	SessionCounts StatusSessionCountsView
 	StoreHealth   *StatusStoreHealthView
+	RuntimeWrite  *StatusRuntimeWriteView
 	Summary       StatusSummaryView
 }
 
@@ -111,6 +112,19 @@ type StatusStoreHealthView struct {
 	ThresholdMB  float64
 	LastGCAt     string
 	LastGCStatus string
+}
+
+// StatusRuntimeWriteView mirrors StatusRuntimeWrite for CLI status rendering.
+type StatusRuntimeWriteView struct {
+	TracePath         string
+	ScannedLines      int
+	RecentDegraded    int
+	RecentTimeouts    int
+	HotRemoteCommands int
+	FirstIssueAt      string
+	LastIssueAt       string
+	StoreKeys         []string
+	Outcomes          map[string]int
 }
 
 // StatusSummaryView captures the aggregate counts the renderer uses for the

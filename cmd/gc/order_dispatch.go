@@ -602,11 +602,6 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 			if err := m.runtimeTrackingUpdate(ctx, candidate.store, run.TrackingID, beads.UpdateOpts{Labels: []string{labelTriggerEnvFailed}}, beads.WriteClassAuditRepair, "order.dispatch.trigger-env-failed", run.TrackingID); err != nil {
 				m.recordOrderTrackingDegraded(scoped, run.TrackingID, "trigger-env-failed", err, stats)
 			}
-			if run.TrackingReserved {
-				if err := m.closeOrderTrackingRuntime(ctx, candidate.store, run); err != nil {
-					m.recordOrderTrackingDegraded(scoped, run.TrackingID, "trigger-env-close", err, stats)
-				}
-			}
 			m.leaseStore.markReservationDegraded(run.LeaseID, errors.New("trigger env failed"))
 			stats.recordDeferred("trigger_env")
 			m.rec.Record(events.Event{
@@ -912,7 +907,7 @@ func (s *orderDispatchStoreSnapshot) captureOpenTracking(ctx context.Context, st
 		if b.Status == "closed" {
 			continue
 		}
-		if b.Metadata["gc.order.runtime_write_isolation"] == orderRuntimeLeaseVersion {
+		if b.Metadata["gc.order.runtime_write_isolation"] == orderRuntimeLeaseVersion && !beadLabelsContain(b.Labels, labelTriggerEnvFailed) {
 			continue
 		}
 		name, ok := orderNameFromTrackingBead(b)
@@ -947,7 +942,7 @@ func (s *orderDispatchStoreSnapshot) captureOrder(ctx context.Context, store bea
 		if needsLastRun && b.CreatedAt.After(s.lastRunByOrder[scopedName]) {
 			s.lastRunByOrder[scopedName] = b.CreatedAt
 		}
-		if b.Metadata["gc.order.runtime_write_isolation"] == orderRuntimeLeaseVersion {
+		if b.Metadata["gc.order.runtime_write_isolation"] == orderRuntimeLeaseVersion && !beadLabelsContain(b.Labels, labelTriggerEnvFailed) {
 			continue
 		}
 		if b.Status == "closed" {

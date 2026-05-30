@@ -1016,6 +1016,31 @@ func TestBeadsStoreCheck_UsesPing(t *testing.T) {
 	}
 }
 
+func TestBeadsStoreCheck_RuntimePingIsBounded(t *testing.T) {
+	oldTimeout := beadsStoreRuntimePingTimeout
+	beadsStoreRuntimePingTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { beadsStoreRuntimePingTimeout = oldTimeout })
+
+	store := beads.NewBdStore("", nil).WithContextRunner(func(ctx context.Context, _ string, _ string, _ ...string) ([]byte, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	c := NewBeadsStoreCheck(t.TempDir(), func(_ string) (beads.Store, error) {
+		return store, nil
+	})
+	start := time.Now()
+	r := c.Run(&CheckContext{})
+	if r.Status != StatusError {
+		t.Fatalf("status = %d, want Error; msg = %s", r.Status, r.Message)
+	}
+	if !strings.Contains(r.Message, "deadline exceeded") && !strings.Contains(r.Message, "timed out") {
+		t.Fatalf("message = %q, want timeout/deadline detail", r.Message)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("runtime ping was not bounded; elapsed=%s", elapsed)
+	}
+}
+
 func TestBeadsStoreCheck_FileProviderSkipsDoltPreflight(t *testing.T) {
 	dir := setupCity(t, "[workspace]\nname = \"test\"\n\n[beads]\nprovider = \"file\"\n")
 	pinged := false

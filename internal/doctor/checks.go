@@ -679,7 +679,7 @@ func (c *BeadsStoreCheck) Run(_ *CheckContext) *CheckResult {
 		r.Message = fmt.Sprintf("store open failed: %v", err)
 		return r
 	}
-	if err := store.Ping(); err != nil {
+	if err := runBeadsStorePing(store); err != nil {
 		r.Status = StatusError
 		r.Message = fmt.Sprintf("store ping failed: %v", err)
 		return r
@@ -694,6 +694,40 @@ func (c *BeadsStoreCheck) CanFix() bool { return false }
 
 // Fix is a no-op.
 func (c *BeadsStoreCheck) Fix(_ *CheckContext) error { return nil }
+
+var beadsStoreRuntimePingTimeout = 3 * time.Second
+
+func runBeadsStorePing(store beads.Store) error {
+	if store == nil {
+		return errors.New("nil bead store")
+	}
+	pingCtx, cancel := context.WithTimeout(context.Background(), beadsStoreRuntimePingTimeout)
+	defer cancel()
+	if beadsStoreUsesRuntimePing(store) {
+		policy := beads.RuntimeWritePolicy(beads.WriteClassMaintenance, "doctor.beads-store", "doctor:beads-store")
+		policy.Timeout = beadsStoreRuntimePingTimeout
+		return beads.RuntimePing(pingCtx, store, policy)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- store.Ping()
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-pingCtx.Done():
+		return fmt.Errorf("timed out after %s", beadsStoreRuntimePingTimeout)
+	}
+}
+
+func beadsStoreUsesRuntimePing(store beads.Store) bool {
+	switch store.(type) {
+	case *beads.BdStore, *beads.CachingStore, *beads.HQStore:
+		return true
+	default:
+		return false
+	}
+}
 
 // BDSplitStoreCheck warns when legacy bd embedded/server store directories
 // coexist and the inactive store still contains Dolt data.

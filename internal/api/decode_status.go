@@ -79,6 +79,34 @@ func statusViewFromGen(body *genclient.StatusBody) StatusView {
 		}
 		out.StoreHealth = &view
 	}
+	if body.RuntimeWrite != nil {
+		rw := body.RuntimeWrite
+		view := StatusRuntimeWriteView{
+			ScannedLines:      int(rw.ScannedLines),
+			RecentDegraded:    int(rw.RecentDegraded),
+			RecentTimeouts:    int(rw.RecentTimeouts),
+			HotRemoteCommands: int(rw.HotRemoteCommands),
+		}
+		if rw.TracePath != nil {
+			view.TracePath = *rw.TracePath
+		}
+		if rw.FirstIssueAt != nil {
+			view.FirstIssueAt = *rw.FirstIssueAt
+		}
+		if rw.LastIssueAt != nil {
+			view.LastIssueAt = *rw.LastIssueAt
+		}
+		if rw.StoreKeys != nil {
+			view.StoreKeys = append([]string(nil), (*rw.StoreKeys)...)
+		}
+		if rw.Outcomes != nil {
+			view.Outcomes = make(map[string]int, len(*rw.Outcomes))
+			for key, value := range *rw.Outcomes {
+				view.Outcomes[key] = int(value)
+			}
+		}
+		out.RuntimeWrite = &view
+	}
 	return out
 }
 

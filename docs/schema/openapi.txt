@@ -2090,6 +2090,9 @@
             "$ref": "#/components/schemas/RouteWorkEventPayload"
           },
           {
+            "$ref": "#/components/schemas/RuntimeWritePayload"
+          },
+          {
             "$ref": "#/components/schemas/SessionCreateSucceededPayload"
           },
           {
@@ -5905,6 +5908,41 @@
         },
         "type": "object"
       },
+      "RuntimeWritePayload": {
+        "additionalProperties": false,
+        "properties": {
+          "caller": {
+            "type": "string"
+          },
+          "class": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          },
+          "duration_s": {
+            "format": "double",
+            "type": "number"
+          },
+          "error": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "store_key": {
+            "type": "string"
+          },
+          "timeout_s": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
       "ScopeGroup": {
         "additionalProperties": false,
         "type": "object"
@@ -6951,6 +6989,10 @@
             "format": "int64",
             "type": "integer"
           },
+          "runtime_write": {
+            "$ref": "#/components/schemas/StatusRuntimeWrite",
+            "description": "Bounded runtime Beads write degradation summary. Omitted when unavailable."
+          },
           "session_counts_detail": {
             "$ref": "#/components/schemas/StatusSessionCountsDetail",
             "description": "Active/suspended session counts. Omitted when unavailable."
@@ -7075,6 +7117,68 @@
           "name",
           "path",
           "suspended"
+        ],
+        "type": "object"
+      },
+      "StatusRuntimeWrite": {
+        "additionalProperties": false,
+        "properties": {
+          "first_issue_at": {
+            "description": "RFC3339 timestamp of the first issue in the scanned window.",
+            "type": "string"
+          },
+          "hot_remote_commands": {
+            "description": "Forbidden hot-path remote or backup command signatures in the trace.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "last_issue_at": {
+            "description": "RFC3339 timestamp of the latest issue in the scanned window.",
+            "type": "string"
+          },
+          "outcomes": {
+            "additionalProperties": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "description": "Counts by runtime write outcome.",
+            "type": "object"
+          },
+          "recent_degraded": {
+            "description": "Recent non-success runtime write outcomes.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "recent_timeouts": {
+            "description": "Recent ambiguous-timeout runtime write outcomes.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "scanned_lines": {
+            "description": "Runtime write trace lines scanned.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "store_keys": {
+            "description": "Runtime store keys associated with issues.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "trace_path": {
+            "description": "Trace path inspected for runtime write health.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scanned_lines",
+          "recent_degraded",
+          "recent_timeouts",
+          "hot_remote_commands"
         ],
         "type": "object"
       },
@@ -7516,6 +7620,7 @@
             "bead.closed": "#/components/schemas/TypedEventStreamEnvelopeBeadClosed",
             "bead.created": "#/components/schemas/TypedEventStreamEnvelopeBeadCreated",
             "bead.updated": "#/components/schemas/TypedEventStreamEnvelopeBeadUpdated",
+            "beads.subprocess.orphaned": "#/components/schemas/TypedEventStreamEnvelopeBeadsSubprocessOrphaned",
             "city.created": "#/components/schemas/TypedEventStreamEnvelopeCityCreated",
             "city.resumed": "#/components/schemas/TypedEventStreamEnvelopeCityResumed",
             "city.suspended": "#/components/schemas/TypedEventStreamEnvelopeCitySuspended",
@@ -7558,6 +7663,10 @@
             "route.create.routed": "#/components/schemas/TypedEventStreamEnvelopeRouteCreateRouted",
             "route.create.source_created": "#/components/schemas/TypedEventStreamEnvelopeRouteCreateSourceCreated",
             "route.create.validation_failed": "#/components/schemas/TypedEventStreamEnvelopeRouteCreateValidationFailed",
+            "runtime.write.completed": "#/components/schemas/TypedEventStreamEnvelopeRuntimeWriteCompleted",
+            "runtime.write.degraded": "#/components/schemas/TypedEventStreamEnvelopeRuntimeWriteDegraded",
+            "runtime.write.started": "#/components/schemas/TypedEventStreamEnvelopeRuntimeWriteStarted",
+            "runtime.write.timeout": "#/components/schemas/TypedEventStreamEnvelopeRuntimeWriteTimeout",
             "session.crashed": "#/components/schemas/TypedEventStreamEnvelopeSessionCrashed",
             "session.drain_acked_with_assigned_work": "#/components/schemas/TypedEventStreamEnvelopeSessionDrainAckedWithAssignedWork",
             "session.draining": "#/components/schemas/TypedEventStreamEnvelopeSessionDraining",
@@ -7590,6 +7699,9 @@
           },
           {
             "$ref": "#/components/schemas/TypedEventStreamEnvelopeBeadUpdated"
+          },
+          {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelopeBeadsSubprocessOrphaned"
           },
           {
             "$ref": "#/components/schemas/TypedEventStreamEnvelopeCityCreated"
@@ -7716,6 +7828,18 @@
           },
           {
             "$ref": "#/components/schemas/TypedEventStreamEnvelopeRouteCreateValidationFailed"
+          },
+          {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelopeRuntimeWriteCompleted"
+          },
+          {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelopeRuntimeWriteDegraded"
+          },
+          {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelopeRuntimeWriteStarted"
+          },
+          {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelopeRuntimeWriteTimeout"
           },
           {
             "$ref": "#/components/schemas/TypedEventStreamEnvelopeSessionCrashed"
@@ -7907,6 +8031,48 @@
           "payload"
         ],
         "title": "TypedEventStreamEnvelope bead.updated",
+        "type": "object"
+      },
+      "TypedEventStreamEnvelopeBeadsSubprocessOrphaned": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RuntimeWritePayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "beads.subprocess.orphaned",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload"
+        ],
+        "title": "TypedEventStreamEnvelope beads.subprocess.orphaned",
         "type": "object"
       },
       "TypedEventStreamEnvelopeCityCreated": {
@@ -8312,6 +8478,11 @@
                 "order.failed",
                 "order.dispatch.tick",
                 "order.tracking.degraded",
+                "runtime.write.started",
+                "runtime.write.completed",
+                "runtime.write.degraded",
+                "runtime.write.timeout",
+                "beads.subprocess.orphaned",
                 "provider.swapped",
                 "worker.operation",
                 "project.identity.stamped",
@@ -9781,6 +9952,174 @@
         "title": "TypedEventStreamEnvelope route.create.validation_failed",
         "type": "object"
       },
+      "TypedEventStreamEnvelopeRuntimeWriteCompleted": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RuntimeWritePayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "runtime.write.completed",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload"
+        ],
+        "title": "TypedEventStreamEnvelope runtime.write.completed",
+        "type": "object"
+      },
+      "TypedEventStreamEnvelopeRuntimeWriteDegraded": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RuntimeWritePayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "runtime.write.degraded",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload"
+        ],
+        "title": "TypedEventStreamEnvelope runtime.write.degraded",
+        "type": "object"
+      },
+      "TypedEventStreamEnvelopeRuntimeWriteStarted": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RuntimeWritePayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "runtime.write.started",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload"
+        ],
+        "title": "TypedEventStreamEnvelope runtime.write.started",
+        "type": "object"
+      },
+      "TypedEventStreamEnvelopeRuntimeWriteTimeout": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RuntimeWritePayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "runtime.write.timeout",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload"
+        ],
+        "title": "TypedEventStreamEnvelope runtime.write.timeout",
+        "type": "object"
+      },
       "TypedEventStreamEnvelopeSessionCrashed": {
         "additionalProperties": false,
         "properties": {
@@ -10628,6 +10967,7 @@
             "bead.closed": "#/components/schemas/TypedTaggedEventStreamEnvelopeBeadClosed",
             "bead.created": "#/components/schemas/TypedTaggedEventStreamEnvelopeBeadCreated",
             "bead.updated": "#/components/schemas/TypedTaggedEventStreamEnvelopeBeadUpdated",
+            "beads.subprocess.orphaned": "#/components/schemas/TypedTaggedEventStreamEnvelopeBeadsSubprocessOrphaned",
             "city.created": "#/components/schemas/TypedTaggedEventStreamEnvelopeCityCreated",
             "city.resumed": "#/components/schemas/TypedTaggedEventStreamEnvelopeCityResumed",
             "city.suspended": "#/components/schemas/TypedTaggedEventStreamEnvelopeCitySuspended",
@@ -10670,6 +11010,10 @@
             "route.create.routed": "#/components/schemas/TypedTaggedEventStreamEnvelopeRouteCreateRouted",
             "route.create.source_created": "#/components/schemas/TypedTaggedEventStreamEnvelopeRouteCreateSourceCreated",
             "route.create.validation_failed": "#/components/schemas/TypedTaggedEventStreamEnvelopeRouteCreateValidationFailed",
+            "runtime.write.completed": "#/components/schemas/TypedTaggedEventStreamEnvelopeRuntimeWriteCompleted",
+            "runtime.write.degraded": "#/components/schemas/TypedTaggedEventStreamEnvelopeRuntimeWriteDegraded",
+            "runtime.write.started": "#/components/schemas/TypedTaggedEventStreamEnvelopeRuntimeWriteStarted",
+            "runtime.write.timeout": "#/components/schemas/TypedTaggedEventStreamEnvelopeRuntimeWriteTimeout",
             "session.crashed": "#/components/schemas/TypedTaggedEventStreamEnvelopeSessionCrashed",
             "session.drain_acked_with_assigned_work": "#/components/schemas/TypedTaggedEventStreamEnvelopeSessionDrainAckedWithAssignedWork",
             "session.draining": "#/components/schemas/TypedTaggedEventStreamEnvelopeSessionDraining",
@@ -10702,6 +11046,9 @@
           },
           {
             "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeBeadUpdated"
+          },
+          {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeBeadsSubprocessOrphaned"
           },
           {
             "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeCityCreated"
@@ -10828,6 +11175,18 @@
           },
           {
             "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeRouteCreateValidationFailed"
+          },
+          {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeRuntimeWriteCompleted"
+          },
+          {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeRuntimeWriteDegraded"
+          },
+          {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeRuntimeWriteStarted"
+          },
+          {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeRuntimeWriteTimeout"
           },
           {
             "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeSessionCrashed"
@@ -11031,6 +11390,52 @@
           "city"
         ],
         "title": "TypedTaggedEventStreamEnvelope bead.updated",
+        "type": "object"
+      },
+      "TypedTaggedEventStreamEnvelopeBeadsSubprocessOrphaned": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RuntimeWritePayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "beads.subprocess.orphaned",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload",
+          "city"
+        ],
+        "title": "TypedTaggedEventStreamEnvelope beads.subprocess.orphaned",
         "type": "object"
       },
       "TypedTaggedEventStreamEnvelopeCityCreated": {
@@ -11471,6 +11876,11 @@
                 "order.failed",
                 "order.dispatch.tick",
                 "order.tracking.degraded",
+                "runtime.write.started",
+                "runtime.write.completed",
+                "runtime.write.degraded",
+                "runtime.write.timeout",
+                "beads.subprocess.orphaned",
                 "provider.swapped",
                 "worker.operation",
                 "project.identity.stamped",
@@ -13075,6 +13485,190 @@
           "city"
         ],
         "title": "TypedTaggedEventStreamEnvelope route.create.validation_failed",
+        "type": "object"
+      },
+      "TypedTaggedEventStreamEnvelopeRuntimeWriteCompleted": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RuntimeWritePayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "runtime.write.completed",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload",
+          "city"
+        ],
+        "title": "TypedTaggedEventStreamEnvelope runtime.write.completed",
+        "type": "object"
+      },
+      "TypedTaggedEventStreamEnvelopeRuntimeWriteDegraded": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RuntimeWritePayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "runtime.write.degraded",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload",
+          "city"
+        ],
+        "title": "TypedTaggedEventStreamEnvelope runtime.write.degraded",
+        "type": "object"
+      },
+      "TypedTaggedEventStreamEnvelopeRuntimeWriteStarted": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RuntimeWritePayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "runtime.write.started",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload",
+          "city"
+        ],
+        "title": "TypedTaggedEventStreamEnvelope runtime.write.started",
+        "type": "object"
+      },
+      "TypedTaggedEventStreamEnvelopeRuntimeWriteTimeout": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RuntimeWritePayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "runtime.write.timeout",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload",
+          "city"
+        ],
+        "title": "TypedTaggedEventStreamEnvelope runtime.write.timeout",
         "type": "object"
       },
       "TypedTaggedEventStreamEnvelopeSessionCrashed": {

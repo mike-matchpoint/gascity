@@ -134,6 +134,10 @@ func (s *failingCloseStore) Close(_ string) error {
 	return errors.New("close failed")
 }
 
+func (s *failingCloseStore) RuntimeCloseAll(context.Context, []string, map[string]string, beads.WritePolicy) (int, error) {
+	return 0, errors.New("close failed")
+}
+
 func (p *stopHookProvider) Stop(name string) error {
 	if p.beforeStop != nil {
 		p.beforeStop(name)
@@ -160,6 +164,13 @@ func (s *failingPoolSessionNameStore) SetMetadata(id, key, value string) error {
 	return s.MemStore.SetMetadata(id, key, value)
 }
 
+func (s *failingPoolSessionNameStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	if _, ok := opts.Metadata["session_name"]; ok {
+		return errors.New("session_name metadata failed")
+	}
+	return s.MemStore.RuntimeUpdate(ctx, id, opts, policy)
+}
+
 func (s *poolSessionNameLockProbeStore) SetMetadata(id, key, value string) error {
 	if key == "session_name" {
 		held, err := citySessionIdentifierLockHeld(s.cityPath, s.alias)
@@ -174,8 +185,29 @@ func (s *poolSessionNameLockProbeStore) SetMetadata(id, key, value string) error
 	return s.MemStore.SetMetadata(id, key, value)
 }
 
+func (s *poolSessionNameLockProbeStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	if _, ok := opts.Metadata["session_name"]; ok {
+		held, err := citySessionIdentifierLockHeld(s.cityPath, s.alias)
+		if err != nil {
+			return fmt.Errorf("checking session identifier lock for %q: %w", s.alias, err)
+		}
+		if !held {
+			return fmt.Errorf("session identifier lock for %q was not held while setting session_name", s.alias)
+		}
+		s.checked = true
+	}
+	return s.MemStore.RuntimeUpdate(ctx, id, opts, policy)
+}
+
 func (s *failingPoolSessionNameStore) Close(_ string) error {
 	return errors.New("close failed")
+}
+
+func (s *failingPoolSessionNameStore) RuntimeCloseAll(_ context.Context, ids []string, metadata map[string]string, _ beads.WritePolicy) (int, error) {
+	for _, id := range ids {
+		_ = s.MemStore.SetMetadataBatch(id, metadata)
+	}
+	return 0, errors.New("close failed")
 }
 
 func citySessionIdentifierLockHeld(cityPath, identifier string) (bool, error) {
@@ -2500,6 +2532,19 @@ func (s *eofOnBeadStore) SetMetadataBatch(id string, kvs map[string]string) erro
 		)
 	}
 	return s.MemStore.SetMetadataBatch(id, kvs)
+}
+
+func (s *eofOnBeadStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	if len(opts.Metadata) > 0 && s.failNext {
+		s.failNext = false
+		s.failedID = id
+		s.failCalls++
+		return fmt.Errorf(
+			"setting metadata on %q: exit status 1: [mysql] 2026/04/12 22:39:29 packets.go:58 unexpected EOF",
+			id,
+		)
+	}
+	return s.MemStore.RuntimeUpdate(ctx, id, opts, policy)
 }
 
 // TestSyncSessionBeads_IsolatesSetMetadataBatchEOFToSingleBead is a

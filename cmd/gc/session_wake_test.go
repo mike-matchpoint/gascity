@@ -51,7 +51,18 @@ func (s *countingWakeMetadataStore) SetMetadataBatch(id string, kvs map[string]s
 	return s.MemStore.SetMetadataBatch(id, kvs)
 }
 
+func (s *countingWakeMetadataStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	if len(opts.Metadata) > 0 {
+		s.batchCalls++
+	}
+	return s.MemStore.RuntimeUpdate(ctx, id, opts, policy)
+}
+
 func (s *failingWakeMetadataStore) SetMetadataBatch(_ string, _ map[string]string) error {
+	return s.err
+}
+
+func (s *failingWakeMetadataStore) RuntimeUpdate(context.Context, string, beads.UpdateOpts, beads.WritePolicy) error {
 	return s.err
 }
 

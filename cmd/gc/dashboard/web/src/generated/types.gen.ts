@@ -759,7 +759,7 @@ export type EventEmitRequest = {
     type: string;
 };
 
-export type EventPayload = AdapterEventPayload | BeadEventPayload | BoundEventPayload | CityCreateSucceededPayload | CityLifecyclePayload | CityUnregisterSucceededPayload | GroupCreatedEventPayload | InboundEventPayload | MailEventPayload | NoPayload | OrderDispatchTickPayload | OutboundEventPayload | ProjectIdentityStampedPayload | RequestFailedPayload | RotatedPayload | RouteWorkEventPayload | SessionCreateSucceededPayload | SessionDrainAckedWithAssignedWorkPayload | SessionLifecyclePayload | SessionMessageSucceededPayload | SessionSubmitSucceededPayload | StoreMaintenanceDonePayload | StoreMaintenanceFailedPayload | SupervisorFsPressureSkippedTickPayload | SupervisorShutdownPayload | UnboundEventPayload | WorkerOperationEventPayload;
+export type EventPayload = AdapterEventPayload | BeadEventPayload | BoundEventPayload | CityCreateSucceededPayload | CityLifecyclePayload | CityUnregisterSucceededPayload | GroupCreatedEventPayload | InboundEventPayload | MailEventPayload | NoPayload | OrderDispatchTickPayload | OutboundEventPayload | ProjectIdentityStampedPayload | RequestFailedPayload | RotatedPayload | RouteWorkEventPayload | RuntimeWritePayload | SessionCreateSucceededPayload | SessionDrainAckedWithAssignedWorkPayload | SessionLifecyclePayload | SessionMessageSucceededPayload | SessionSubmitSucceededPayload | StoreMaintenanceDonePayload | StoreMaintenanceFailedPayload | SupervisorFsPressureSkippedTickPayload | SupervisorShutdownPayload | UnboundEventPayload | WorkerOperationEventPayload;
 
 export type EventRotateAnchor = {
     /**
@@ -1726,11 +1726,13 @@ export type OrderDispatchTickPayload = {
     dispatches_created: number;
     duration_s: number;
     in_flight?: number;
+    local_lease_count?: number;
     orders_considered: number;
     orders_deferred: number;
     started_at: string;
     stores_touched: number;
     tracking_write_failures?: number;
+    write_degraded?: number;
 };
 
 export type OrderHistoryDetailResponse = {
@@ -1775,6 +1777,7 @@ export type OrderListBody = {
 export type OrderResponse = {
     capture_output: boolean;
     check?: string;
+    degraded_min_interval?: string;
     description?: string;
     enabled: boolean;
     exec?: string;
@@ -1783,6 +1786,7 @@ export type OrderResponse = {
      * @deprecated
      */
     gate?: string;
+    idempotent: boolean;
     interval?: string;
     name: string;
     on?: string;
@@ -1792,6 +1796,7 @@ export type OrderResponse = {
     scoped_name: string;
     timeout?: string;
     timeout_ms: number;
+    tracking_degraded_allowed: boolean;
     trigger?: string;
     type: string;
 };
@@ -2384,6 +2389,18 @@ export type RouteWorkEventPayload = {
     workflow_id?: string;
 };
 
+export type RuntimeWritePayload = {
+    caller?: string;
+    class?: string;
+    command?: string;
+    duration_s?: number;
+    error?: string;
+    operation?: string;
+    outcome?: string;
+    store_key?: string;
+    timeout_s?: number;
+};
+
 export type ScopeGroup = {
     [key: string]: never;
 };
@@ -2928,6 +2945,10 @@ export type StatusBody = {
      */
     running: number;
     /**
+     * Bounded runtime Beads write degradation summary. Omitted when unavailable.
+     */
+    runtime_write?: StatusRuntimeWrite;
+    /**
      * Active/suspended session counts. Omitted when unavailable.
      */
     session_counts_detail?: StatusSessionCountsDetail;
@@ -3003,6 +3024,47 @@ export type StatusRigDetail = {
      * Whether the rig is suspended (either explicitly or because all its agents are suspended).
      */
     suspended: boolean;
+};
+
+export type StatusRuntimeWrite = {
+    /**
+     * RFC3339 timestamp of the first issue in the scanned window.
+     */
+    first_issue_at?: string;
+    /**
+     * Forbidden hot-path remote or backup command signatures in the trace.
+     */
+    hot_remote_commands: number;
+    /**
+     * RFC3339 timestamp of the latest issue in the scanned window.
+     */
+    last_issue_at?: string;
+    /**
+     * Counts by runtime write outcome.
+     */
+    outcomes?: {
+        [key: string]: number;
+    };
+    /**
+     * Recent non-success runtime write outcomes.
+     */
+    recent_degraded: number;
+    /**
+     * Recent ambiguous-timeout runtime write outcomes.
+     */
+    recent_timeouts: number;
+    /**
+     * Runtime write trace lines scanned.
+     */
+    scanned_lines: number;
+    /**
+     * Runtime store keys associated with issues.
+     */
+    store_keys?: Array<string> | null;
+    /**
+     * Trace path inspected for runtime write health.
+     */
+    trace_path?: string;
 };
 
 export type StatusSessionCountsDetail = {
@@ -3236,6 +3298,8 @@ export type TypedEventStreamEnvelope = ({
 } & TypedEventStreamEnvelopeBeadCreated) | ({
     type: 'bead.updated';
 } & TypedEventStreamEnvelopeBeadUpdated) | ({
+    type: 'beads.subprocess.orphaned';
+} & TypedEventStreamEnvelopeBeadsSubprocessOrphaned) | ({
     type: 'city.created';
 } & TypedEventStreamEnvelopeCityCreated) | ({
     type: 'city.resumed';
@@ -3294,6 +3358,8 @@ export type TypedEventStreamEnvelope = ({
 } & TypedEventStreamEnvelopeOrderFailed) | ({
     type: 'order.fired';
 } & TypedEventStreamEnvelopeOrderFired) | ({
+    type: 'order.tracking.degraded';
+} & TypedEventStreamEnvelopeOrderTrackingDegraded) | ({
     type: 'project.identity.stamped';
 } & TypedEventStreamEnvelopeProjectIdentityStamped) | ({
     type: 'provider.swapped';
@@ -3318,6 +3384,14 @@ export type TypedEventStreamEnvelope = ({
 } & TypedEventStreamEnvelopeRouteCreateSourceCreated) | ({
     type: 'route.create.validation_failed';
 } & TypedEventStreamEnvelopeRouteCreateValidationFailed) | ({
+    type: 'runtime.write.completed';
+} & TypedEventStreamEnvelopeRuntimeWriteCompleted) | ({
+    type: 'runtime.write.degraded';
+} & TypedEventStreamEnvelopeRuntimeWriteDegraded) | ({
+    type: 'runtime.write.started';
+} & TypedEventStreamEnvelopeRuntimeWriteStarted) | ({
+    type: 'runtime.write.timeout';
+} & TypedEventStreamEnvelopeRuntimeWriteTimeout) | ({
     type: 'session.crashed';
 } & TypedEventStreamEnvelopeSessionCrashed) | ({
     type: 'session.drain_acked_with_assigned_work';
@@ -3400,6 +3474,20 @@ export type TypedEventStreamEnvelopeBeadUpdated = {
     subject?: string;
     ts: string;
     type: 'bead.updated';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedEventStreamEnvelope beads.subprocess.orphaned
+ */
+export type TypedEventStreamEnvelopeBeadsSubprocessOrphaned = {
+    actor: string;
+    message?: string;
+    payload: RuntimeWritePayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'beads.subprocess.orphaned';
     workflow?: WorkflowEventProjection;
 };
 
@@ -3824,6 +3912,20 @@ export type TypedEventStreamEnvelopeOrderFired = {
 };
 
 /**
+ * TypedEventStreamEnvelope order.tracking.degraded
+ */
+export type TypedEventStreamEnvelopeOrderTrackingDegraded = {
+    actor: string;
+    message?: string;
+    payload: NoPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'order.tracking.degraded';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
  * TypedEventStreamEnvelope project.identity.stamped
  */
 export type TypedEventStreamEnvelopeProjectIdentityStamped = {
@@ -3988,6 +4090,62 @@ export type TypedEventStreamEnvelopeRouteCreateValidationFailed = {
     subject?: string;
     ts: string;
     type: 'route.create.validation_failed';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedEventStreamEnvelope runtime.write.completed
+ */
+export type TypedEventStreamEnvelopeRuntimeWriteCompleted = {
+    actor: string;
+    message?: string;
+    payload: RuntimeWritePayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'runtime.write.completed';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedEventStreamEnvelope runtime.write.degraded
+ */
+export type TypedEventStreamEnvelopeRuntimeWriteDegraded = {
+    actor: string;
+    message?: string;
+    payload: RuntimeWritePayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'runtime.write.degraded';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedEventStreamEnvelope runtime.write.started
+ */
+export type TypedEventStreamEnvelopeRuntimeWriteStarted = {
+    actor: string;
+    message?: string;
+    payload: RuntimeWritePayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'runtime.write.started';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedEventStreamEnvelope runtime.write.timeout
+ */
+export type TypedEventStreamEnvelopeRuntimeWriteTimeout = {
+    actor: string;
+    message?: string;
+    payload: RuntimeWritePayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'runtime.write.timeout';
     workflow?: WorkflowEventProjection;
 };
 
@@ -4283,6 +4441,8 @@ export type TypedTaggedEventStreamEnvelope = ({
 } & TypedTaggedEventStreamEnvelopeBeadCreated) | ({
     type: 'bead.updated';
 } & TypedTaggedEventStreamEnvelopeBeadUpdated) | ({
+    type: 'beads.subprocess.orphaned';
+} & TypedTaggedEventStreamEnvelopeBeadsSubprocessOrphaned) | ({
     type: 'city.created';
 } & TypedTaggedEventStreamEnvelopeCityCreated) | ({
     type: 'city.resumed';
@@ -4341,6 +4501,8 @@ export type TypedTaggedEventStreamEnvelope = ({
 } & TypedTaggedEventStreamEnvelopeOrderFailed) | ({
     type: 'order.fired';
 } & TypedTaggedEventStreamEnvelopeOrderFired) | ({
+    type: 'order.tracking.degraded';
+} & TypedTaggedEventStreamEnvelopeOrderTrackingDegraded) | ({
     type: 'project.identity.stamped';
 } & TypedTaggedEventStreamEnvelopeProjectIdentityStamped) | ({
     type: 'provider.swapped';
@@ -4365,6 +4527,14 @@ export type TypedTaggedEventStreamEnvelope = ({
 } & TypedTaggedEventStreamEnvelopeRouteCreateSourceCreated) | ({
     type: 'route.create.validation_failed';
 } & TypedTaggedEventStreamEnvelopeRouteCreateValidationFailed) | ({
+    type: 'runtime.write.completed';
+} & TypedTaggedEventStreamEnvelopeRuntimeWriteCompleted) | ({
+    type: 'runtime.write.degraded';
+} & TypedTaggedEventStreamEnvelopeRuntimeWriteDegraded) | ({
+    type: 'runtime.write.started';
+} & TypedTaggedEventStreamEnvelopeRuntimeWriteStarted) | ({
+    type: 'runtime.write.timeout';
+} & TypedTaggedEventStreamEnvelopeRuntimeWriteTimeout) | ({
     type: 'session.crashed';
 } & TypedTaggedEventStreamEnvelopeSessionCrashed) | ({
     type: 'session.drain_acked_with_assigned_work';
@@ -4450,6 +4620,21 @@ export type TypedTaggedEventStreamEnvelopeBeadUpdated = {
     subject?: string;
     ts: string;
     type: 'bead.updated';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedTaggedEventStreamEnvelope beads.subprocess.orphaned
+ */
+export type TypedTaggedEventStreamEnvelopeBeadsSubprocessOrphaned = {
+    actor: string;
+    city: string;
+    message?: string;
+    payload: RuntimeWritePayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'beads.subprocess.orphaned';
     workflow?: WorkflowEventProjection;
 };
 
@@ -4904,6 +5089,21 @@ export type TypedTaggedEventStreamEnvelopeOrderFired = {
 };
 
 /**
+ * TypedTaggedEventStreamEnvelope order.tracking.degraded
+ */
+export type TypedTaggedEventStreamEnvelopeOrderTrackingDegraded = {
+    actor: string;
+    city: string;
+    message?: string;
+    payload: NoPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'order.tracking.degraded';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
  * TypedTaggedEventStreamEnvelope project.identity.stamped
  */
 export type TypedTaggedEventStreamEnvelopeProjectIdentityStamped = {
@@ -5080,6 +5280,66 @@ export type TypedTaggedEventStreamEnvelopeRouteCreateValidationFailed = {
     subject?: string;
     ts: string;
     type: 'route.create.validation_failed';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedTaggedEventStreamEnvelope runtime.write.completed
+ */
+export type TypedTaggedEventStreamEnvelopeRuntimeWriteCompleted = {
+    actor: string;
+    city: string;
+    message?: string;
+    payload: RuntimeWritePayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'runtime.write.completed';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedTaggedEventStreamEnvelope runtime.write.degraded
+ */
+export type TypedTaggedEventStreamEnvelopeRuntimeWriteDegraded = {
+    actor: string;
+    city: string;
+    message?: string;
+    payload: RuntimeWritePayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'runtime.write.degraded';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedTaggedEventStreamEnvelope runtime.write.started
+ */
+export type TypedTaggedEventStreamEnvelopeRuntimeWriteStarted = {
+    actor: string;
+    city: string;
+    message?: string;
+    payload: RuntimeWritePayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'runtime.write.started';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedTaggedEventStreamEnvelope runtime.write.timeout
+ */
+export type TypedTaggedEventStreamEnvelopeRuntimeWriteTimeout = {
+    actor: string;
+    city: string;
+    message?: string;
+    payload: RuntimeWritePayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'runtime.write.timeout';
     workflow?: WorkflowEventProjection;
 };
 

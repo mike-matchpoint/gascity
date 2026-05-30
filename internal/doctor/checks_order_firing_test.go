@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/events"
 )
@@ -104,6 +105,28 @@ func TestOrderFiringCurrent_Stale(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(result.Details, "\n"), "(CRITICAL: stale)") {
 		t.Fatalf("details = %v, want stale detail", result.Details)
+	}
+}
+
+func TestOrderFiringCurrent_StaleRuntimeWriteBackpressureWarns(t *testing.T) {
+	now := time.Date(2026, 5, 17, 12, 0, 0, 0, time.UTC)
+	cityPath, cfg := orderFiringTestCity(t)
+	writeOrderFiringTestOrder(t, cityPath, "beads-health", "cooldown", "30s")
+	writeOrderFiringTestEvents(t, cityPath,
+		events.Event{Type: events.ControllerStarted, Ts: now.Add(-10 * time.Minute)},
+		events.Event{Type: events.OrderFired, Subject: "beads-health", Ts: now.Add(-6 * time.Minute)},
+	)
+	writeOrderFiringRuntimeTrace(t, cityPath,
+		runtimeWriteTraceLine(now.Add(-time.Minute), "update", "bd:update", "update recent", "ambiguous-timeout", "city", "deadline exceeded"),
+	)
+
+	result := runOrderFiringCurrentTest(t, cfg, cityPath, now)
+	if result.Status != StatusWarning {
+		t.Fatalf("status = %v, want warning; msg = %s; details = %v", result.Status, result.Message, result.Details)
+	}
+	details := strings.Join(result.Details, "\n")
+	if !strings.Contains(details, "runtime write backpressure") || !strings.Contains(details, "store_keys=city") {
+		t.Fatalf("details = %v, want runtime write backpressure detail", result.Details)
 	}
 }
 
@@ -336,4 +359,15 @@ func runOrderFiringCurrentTest(t *testing.T, cfg *config.City, cityPath string, 
 	check := NewOrderFiringCurrentCheck(cfg, cityPath)
 	check.clock = func() time.Time { return now }
 	return check.Run(&CheckContext{CityPath: cityPath})
+}
+
+func writeOrderFiringRuntimeTrace(t *testing.T, cityPath string, lines ...string) {
+	t.Helper()
+	tracePath := beads.RuntimeWriteTracePath(cityPath)
+	if err := os.MkdirAll(filepath.Dir(tracePath), 0o755); err != nil {
+		t.Fatalf("creating runtime trace dir: %v", err)
+	}
+	if err := os.WriteFile(tracePath, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("writing runtime trace: %v", err)
+	}
 }

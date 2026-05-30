@@ -38,6 +38,13 @@ func (s *failingMetadataBatchStore) SetMetadataBatch(id string, kvs map[string]s
 	return s.MemStore.SetMetadataBatch(id, kvs)
 }
 
+func (s *failingMetadataBatchStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	if len(opts.Metadata) > 0 && s.failBatch {
+		return errors.New("batch failed")
+	}
+	return s.MemStore.RuntimeUpdate(ctx, id, opts, policy)
+}
+
 type incompatibleRuntimeObserverProvider struct {
 	*runtime.Fake
 	compat runtime.CompatibilityObservation
@@ -62,6 +69,16 @@ func (s *failNthMetadataBatchStore) SetMetadataBatch(id string, kvs map[string]s
 	return s.MemStore.SetMetadataBatch(id, kvs)
 }
 
+func (s *failNthMetadataBatchStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	if len(opts.Metadata) > 0 {
+		s.calls++
+		if s.calls == s.failOn {
+			return errors.New("batch failed")
+		}
+	}
+	return s.MemStore.RuntimeUpdate(ctx, id, opts, policy)
+}
+
 type failSetMetadataStore struct {
 	*beads.MemStore
 	failKey string
@@ -72,6 +89,13 @@ func (s *failSetMetadataStore) SetMetadata(id, key, value string) error {
 		return fmt.Errorf("set metadata %s failed", key)
 	}
 	return s.MemStore.SetMetadata(id, key, value)
+}
+
+func (s *failSetMetadataStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	if _, ok := opts.Metadata[s.failKey]; ok {
+		return fmt.Errorf("set metadata %s failed", s.failKey)
+	}
+	return s.MemStore.RuntimeUpdate(ctx, id, opts, policy)
 }
 
 type taskWorkDirLiveListCountingStore struct {
@@ -115,6 +139,10 @@ type panicMetadataBatchStore struct {
 }
 
 func (s *panicMetadataBatchStore) SetMetadataBatch(string, map[string]string) error {
+	panic("metadata batch panic")
+}
+
+func (s *panicMetadataBatchStore) RuntimeUpdate(context.Context, string, beads.UpdateOpts, beads.WritePolicy) error {
 	panic("metadata batch panic")
 }
 

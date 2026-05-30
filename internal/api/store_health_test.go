@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -276,5 +278,27 @@ func TestBuildStatusBodyIncludesStoreHealth(t *testing.T) {
 	}
 	if !strings.HasSuffix(body.StoreHealth.Path, "/.beads/dolt") {
 		t.Errorf("Path = %q, want .beads/dolt suffix", body.StoreHealth.Path)
+	}
+}
+
+func TestBuildStatusBodyIncludesRuntimeWrite(t *testing.T) {
+	state := newFakeState(t)
+	tracePath := beads.RuntimeWriteTracePath(state.cityPath)
+	if err := os.MkdirAll(filepath.Dir(tracePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	traceLine := time.Now().UTC().Format(time.RFC3339Nano) +
+		` runtime_write caller=test class=hot-state op=update command=bd:update args="update recent" duration=2s timeout=1s outcome=ambiguous-timeout store_key=city err="deadline exceeded"` + "\n"
+	if err := os.WriteFile(tracePath, []byte(traceLine), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{state: state}
+
+	body := s.buildStatusBody()
+	if body.RuntimeWrite == nil {
+		t.Fatal("RuntimeWrite = nil, want populated")
+	}
+	if body.RuntimeWrite.RecentTimeouts != 1 || body.RuntimeWrite.RecentDegraded != 1 {
+		t.Errorf("RuntimeWrite = %+v", body.RuntimeWrite)
 	}
 }
