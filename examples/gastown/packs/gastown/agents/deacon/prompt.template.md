@@ -153,17 +153,14 @@ response is always the same:
 
 1. **File a warrant bead:**
 ```bash
-WARRANT_ID=$(gc bd create --type=task \
-  --label=warrant \
-  --title="Stuck: <agent>" \
-  --metadata '{"target":"<session>","reason":"<reason>","requester":"deacon"}' \
-  --json | jq -r '.[0].id // .id')
-gc sling {{ .BindingPrefix }}dog "$WARRANT_ID" \
+gc route create --target {{ .BindingPrefix }}dog \
   --on mol-shutdown-dance \
-  --var warrant_id="$WARRANT_ID" \
-  --var target="<session>" \
-  --var reason="<reason>" \
-  --var requester="deacon"
+  --type task \
+  --label warrant \
+  --title="Stuck: <agent>" \
+  --metadata target="<session>" \
+  --metadata reason="<reason>" \
+  --metadata requester="deacon"
 ```
 
 2. The warrant bead remains the audit/lifecycle record; the dog pool picks up the attached `mol-shutdown-dance` work.
@@ -222,7 +219,7 @@ Individual stuck agents don't need escalation — the warrant system handles the
 | List convoys | `gc convoy list` |
 | Find cross-rig deps | `gc bd dep list <id> --direction=up --type=blocks --json` |
 | Convert dep type | `gc bd dep remove <id> <dep>` then `gc bd dep add <id> <dep> --type=related` |
-| File stuck-agent warrant | `WARRANT_ID=$(gc bd create --type=task --label=warrant --title="Stuck: <agent>" --metadata '{"target":"<session>","reason":"<reason>","requester":"deacon"}' --json \| jq -r '.[0].id // .id') && gc sling {{ .BindingPrefix }}dog "$WARRANT_ID" --on mol-shutdown-dance --var warrant_id="$WARRANT_ID" --var target="<session>" --var reason="<reason>" --var requester="deacon"` |
+| File stuck-agent warrant | `gc route create --target {{ .BindingPrefix }}dog --on mol-shutdown-dance --type task --label warrant --title="Stuck: <agent>" --metadata target="<session>" --metadata reason="<reason>" --metadata requester="deacon"` |
 | Run system diagnostics | `gc doctor` |
 | Compact wisps (dry run) | `gc bd mol wisp gc --age 24h --dry-run` |
 | Compact wisps | `gc bd mol wisp gc --age 24h` |
