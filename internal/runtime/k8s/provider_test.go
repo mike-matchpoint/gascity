@@ -1976,6 +1976,49 @@ func TestStartDismissesCodexDialogsForProviderWithoutStartupHints(t *testing.T) 
 	}
 }
 
+func TestStartWaitsForDelayedCodexTrustDialog(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	p.postStartSettle = 0
+
+	blankCaptures := 0
+	trustAccepted := false
+	fake.execFunc = func(_ string, cmd []string) (string, error) {
+		if len(cmd) >= 3 && cmd[0] == "tmux" && cmd[1] == "has-session" {
+			return "", nil
+		}
+		if len(cmd) >= 2 && cmd[0] == "tmux" && cmd[1] == "capture-pane" {
+			if trustAccepted {
+				return "codex >\n", nil
+			}
+			if blankCaptures < 5 {
+				blankCaptures++
+				return "\n", nil
+			}
+			return "Do you trust the contents of this directory?\n1. Yes, continue\n2. No, quit\nPress enter to continue\n", nil
+		}
+		if len(cmd) == 5 && cmd[0] == "tmux" && cmd[1] == "send-keys" && cmd[4] == "Enter" {
+			trustAccepted = true
+		}
+		return "", nil
+	}
+
+	cfg := runtime.Config{
+		Command:      "codex --dangerously-bypass-approvals-and-sandbox",
+		ProviderName: "codex",
+		Env:          map[string]string{"GC_AGENT": "gastown.dog", "GC_CITY": "/workspace/cities/demo"},
+	}
+	if err := p.Start(context.Background(), "gc-test-agent", cfg); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if blankCaptures < 5 {
+		t.Fatalf("blank captures = %d, want delayed trust dialog after initial blank pane", blankCaptures)
+	}
+	if !trustAccepted {
+		t.Fatal("Start returned before accepting the delayed Codex workspace trust dialog")
+	}
+}
+
 func TestStartHonorsAcceptStartupDialogsFalse(t *testing.T) {
 	fake := newFakeK8sOps()
 	p := newProviderWithOps(fake)

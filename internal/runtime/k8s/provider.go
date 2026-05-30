@@ -29,7 +29,7 @@ var (
 const (
 	k8sStartupDialogPeekLines    = 120
 	k8sStartupDialogPollInterval = 100 * time.Millisecond
-	k8sStartupDialogInitialQuiet = 300 * time.Millisecond
+	k8sStartupDialogContentQuiet = 300 * time.Millisecond
 )
 
 // Provider is a native Kubernetes session provider using client-go.
@@ -569,8 +569,6 @@ func (p *Provider) streamStartupSnapshots(ctx context.Context, name string, snap
 
 	ticker := time.NewTicker(k8sStartupDialogPollInterval)
 	defer ticker.Stop()
-	initialQuiet := time.NewTimer(k8sStartupDialogInitialQuiet)
-	defer initialQuiet.Stop()
 
 	var last string
 	observedContent := false
@@ -596,13 +594,11 @@ func (p *Provider) streamStartupSnapshots(ctx context.Context, name string, snap
 			select {
 			case <-ctx.Done():
 				return
-			case <-initialQuiet.C:
-				return
 			case <-ticker.C:
 				continue
 			}
 		}
-		if time.Since(lastChange) >= k8sStartupDialogInitialQuiet {
+		if time.Since(lastChange) >= k8sStartupDialogContentQuiet {
 			return
 		}
 		select {
