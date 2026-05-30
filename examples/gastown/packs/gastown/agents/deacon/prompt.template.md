@@ -144,15 +144,25 @@ When you detect a stuck witness, refinery, or utility agent, file a warrant for
 the dog pool:
 
 ```bash
-gc bd create --type=task \
+WARRANT_ID=$(gc bd create --type=task \
+  --label=warrant \
   --title="Stuck: <agent>" \
-  --metadata '{"target":"<session>","reason":"<reason>","requester":"deacon","gc.routed_to":"{{ .BindingPrefix }}dog"}' \
-  --label=warrant
+  --metadata '{"target":"<session>","reason":"<reason>","requester":"deacon"}' \
+  --json | jq -r '.[0].id // .id')
+gc sling {{ .BindingPrefix }}dog "$WARRANT_ID" \
+  --on mol-shutdown-dance \
+  --var warrant_id="$WARRANT_ID" \
+  --var target="<session>" \
+  --var reason="<reason>" \
+  --var requester="deacon"
 ```
 
-The dog pool runs `mol-shutdown-dance`, giving the agent three chances to prove
-it is alive (60s -> 120s -> 240s) before killing the session. Never kill an
-agent directly.
+The warrant bead remains the audit/lifecycle record; the dog pool picks up the
+attached `mol-shutdown-dance` work. The shutdown dance gives the stuck agent
+three chances to prove it is alive (60s -> 120s -> 240s) before killing the
+session.
+
+**Never kill an agent directly.** The shutdown dance is due process.
 
 ---
 
@@ -204,7 +214,7 @@ Individual stuck agents don't need escalation — the warrant system handles the
 | List convoys | `gc convoy list` |
 | Find cross-rig deps | `gc bd dep list <id> --direction=up --type=blocks --json` |
 | Convert dep type | `gc bd dep remove <id> <dep>` then `gc bd dep add <id> <dep> --type=related` |
-| File stuck-agent warrant | `gc bd create --type=task --label=warrant --metadata '{"target":"<session>","reason":"<reason>","requester":"deacon","gc.routed_to":"{{ .BindingPrefix }}dog"}'` |
+| File stuck-agent warrant | `WARRANT_ID=$(gc bd create --type=task --label=warrant --title="Stuck: <agent>" --metadata '{"target":"<session>","reason":"<reason>","requester":"deacon"}' --json \| jq -r '.[0].id // .id') && gc sling {{ .BindingPrefix }}dog "$WARRANT_ID" --on mol-shutdown-dance --var warrant_id="$WARRANT_ID" --var target="<session>" --var reason="<reason>" --var requester="deacon"` |
 | Run system diagnostics | `gc doctor` |
 | Compact wisps (dry run) | `gc bd mol wisp gc --age 24h --dry-run` |
 | Compact wisps | `gc bd mol wisp gc --age 24h` |

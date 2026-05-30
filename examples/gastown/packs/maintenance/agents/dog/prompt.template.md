@@ -50,6 +50,13 @@ Your primary formula is `mol-shutdown-dance` — a 3-attempt interrogation
 protocol that gives stuck agents multiple chances to prove they're alive
 before killing the session.
 
+Only run shutdown work from a formula-backed warrant task. The assigned
+work metadata must include `gc.attached_formula=mol-shutdown-dance`, and
+the attached formula/wisp must be present. A raw warrant (`type=task`,
+`label=warrant`, routed to dog) without that formula attachment is
+mis-routed: close/report it as mis-routed and exit. Do not improvise a
+shutdown from raw metadata.
+
 | Attempt | Timeout | Message |
 |---------|---------|---------|
 | 1 | 60s | Health check via `gc session nudge` |

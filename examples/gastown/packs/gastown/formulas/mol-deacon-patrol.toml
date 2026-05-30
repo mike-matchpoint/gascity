@@ -163,12 +163,20 @@ something is stuck. This is exactly why an LLM does it, not Go code.
 
 **For stuck coordination agents, file a warrant:**
 ```bash
-gc bd create --type=task --label=warrant \
+WARRANT_ID=$(gc bd create --type=task --label=warrant \
   --title="Stuck: <rig>/<role>" \
-  --metadata '{"target":"<session>","reason":"<reason>","requester":"deacon","gc.routed_to":"{{binding_prefix}}dog"}'
+  --metadata '{"target":"<session>","reason":"<reason>","requester":"deacon"}' \
+  --json | jq -r '.[0].id // .id')
+gc sling {{binding_prefix}}dog "$WARRANT_ID" \
+  --on mol-shutdown-dance \
+  --var warrant_id="$WARRANT_ID" \
+  --var target="<session>" \
+  --var reason="<reason>" \
+  --var requester="deacon"
 ```
 
-The dog pool runs `mol-shutdown-dance` for due process.
+The warrant bead remains the audit/lifecycle record. The dog pool runs
+the attached `mol-shutdown-dance` work for due process.
 
 **Escalate to mayor** only for systemic issues (multiple rigs affected,
 patterns of failure).
@@ -231,9 +239,16 @@ If the nudge doesn't unstick within the next patrol cycle, escalate
 by filing a warrant for the dog pool:
 
 ```bash
-gc bd create --type=task --label=warrant \\
+WARRANT_ID=$(gc bd create --type=task --label=warrant \\
     --title="Stuck queue: <session> — $ASSIGNED beads, no activity $duration" \\
-    --metadata '{"target":"<session>","reason":"queue starvation: N beads, no bead.updated_at progress","requester":"deacon","gc.routed_to":"{{binding_prefix}}dog"}'
+    --metadata '{"target":"<session>","reason":"queue starvation: N beads, no bead.updated_at progress","requester":"deacon"}' \\
+    --json | jq -r '.[0].id // .id')
+gc sling {{binding_prefix}}dog "$WARRANT_ID" \\
+    --on mol-shutdown-dance \\
+    --var warrant_id="$WARRANT_ID" \\
+    --var target="<session>" \\
+    --var reason="queue starvation: N beads, no bead.updated_at progress" \\
+    --var requester="deacon"
 ```
 
 The dog runs `mol-shutdown-dance` and the controller respawns a fresh
@@ -272,14 +287,20 @@ No hardcoded thresholds. Use judgment.
 
 **Step 3: For stuck utility agents, file a warrant:**
 ```bash
-gc bd create --type=task --label=warrant \
+WARRANT_ID=$(gc bd create --type=task --label=warrant \
   --title="Stuck dog: <agent>" \
-  --metadata '{"target":"<session>","reason":"<reason>","requester":"deacon","gc.routed_to":"{{binding_prefix}}dog"}'
+  --metadata '{"target":"<session>","reason":"<reason>","requester":"deacon"}' \
+  --json | jq -r '.[0].id // .id')
+gc sling {{binding_prefix}}dog "$WARRANT_ID" \
+  --on mol-shutdown-dance \
+  --var warrant_id="$WARRANT_ID" \
+  --var target="<session>" \
+  --var reason="<reason>" \
+  --var requester="deacon"
 ```
 
-A different dog from the pool picks up the warrant and runs the
-shutdown dance. If the pool is at capacity with all dogs stuck,
-escalate to mayor.
+A different dog from the pool picks up the attached shutdown dance work.
+If the pool is at capacity with all dogs stuck, escalate to mayor.
 
 Close this step after assessment."""
 
