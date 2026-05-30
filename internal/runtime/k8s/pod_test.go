@@ -631,6 +631,29 @@ func TestBuildPodEnv_ClaudeOAuthTokenEnvUsesOptionalSecret(t *testing.T) {
 	}
 }
 
+func TestBuildPod_LegacyCredentialsKeepClaudeOAuthSecretEnv(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+	pod, err := buildPod("test-session", runtime.Config{Command: "/bin/bash"}, p)
+	if err != nil {
+		t.Fatalf("buildPod: %v", err)
+	}
+
+	v, ok := envByName(pod.Spec.Containers[0].Env, "CLAUDE_CODE_OAUTH_TOKEN")
+	if !ok {
+		t.Fatal("missing CLAUDE_CODE_OAUTH_TOKEN env")
+	}
+	if v.Value != "" || v.ValueFrom == nil || v.ValueFrom.SecretKeyRef == nil {
+		t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN should come from optional legacy secret: %#v", v)
+	}
+	ref := v.ValueFrom.SecretKeyRef
+	if ref.Name != "claude-credentials" || ref.Key != "CLAUDE_CODE_OAUTH_TOKEN" {
+		t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN secret ref = %s/%s, want claude-credentials/CLAUDE_CODE_OAUTH_TOKEN", ref.Name, ref.Key)
+	}
+	if ref.Optional == nil || !*ref.Optional {
+		t.Fatal("CLAUDE_CODE_OAUTH_TOKEN secret ref should be optional")
+	}
+}
+
 func TestBuildPodEnv_ClaudeOAuthTokenExplicitEnvTakesPrecedence(t *testing.T) {
 	env, err := buildPodEnv(
 		map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "explicit-token"},
@@ -662,8 +685,114 @@ func TestBuildPod_CredentialBootstrapCopiesClaudeRootConfig(t *testing.T) {
 		t.Fatalf("buildPod: %v", err)
 	}
 	entrypoint := buildPodLaunchMaterial(cfg, p).Entrypoint
-	if !strings.Contains(entrypoint, `cp -f /tmp/claude-secret/.claude.json "$HOME/.claude.json"`) {
+	if !strings.Contains(entrypoint, `cp -f '/tmp/claude-secret/.claude.json' '/home/gcagent/.claude.json'`) {
 		t.Fatalf("credential bootstrap does not copy Claude root config: %s", entrypoint)
+	}
+}
+
+func TestBuildPod_UsesConfiguredProviderCredentialProfile(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+	cfg := runtime.Config{
+		Command: "codex",
+		ProviderCredentials: []runtime.ProviderCredentialProfile{{
+			Name:       "codex-polecat",
+			SecretName: "codex-polecat-credentials",
+			TargetDir:  ".codex-polecat",
+			Optional:   false,
+			Env: map[string]string{
+				"CODEX_HOME":               "{{.TargetDir}}",
+				"GASCITY_PROVIDER_PROFILE": "codex-polecat",
+			},
+			EnvFromSecret: []runtime.ProviderSecretEnv{{
+				Name:     "CODEX_SESSION_TOKEN",
+				Key:      "session-token",
+				Optional: false,
+			}},
+		}},
+	}
+
+	pod, err := buildPod("test-session", cfg, p)
+	if err != nil {
+		t.Fatalf("buildPod: %v", err)
+	}
+	if _, ok := volumeMountByName(pod.Spec.Containers[0].VolumeMounts, "claude-config"); ok {
+		t.Fatal("configured provider profile should not mount legacy claude-config")
+	}
+	if _, ok := volumeMountByName(pod.Spec.Containers[0].VolumeMounts, "codex-config"); ok {
+		t.Fatal("configured provider profile should not mount legacy codex-config")
+	}
+	mount, ok := volumeMountByName(pod.Spec.Containers[0].VolumeMounts, "codex-polecat")
+	if !ok {
+		t.Fatalf("missing configured provider credential mount: %#v", pod.Spec.Containers[0].VolumeMounts)
+	}
+	if mount.MountPath != "/tmp/gc-provider-secrets/codex-polecat" || !mount.ReadOnly {
+		t.Fatalf("configured credential mount = %#v", mount)
+	}
+	volume, ok := volumeByName(pod.Spec.Volumes, "codex-polecat")
+	if !ok || volume.Secret == nil {
+		t.Fatalf("missing configured provider credential volume: %#v", pod.Spec.Volumes)
+	}
+	if volume.Secret.SecretName != "codex-polecat-credentials" {
+		t.Fatalf("configured secret name = %q", volume.Secret.SecretName)
+	}
+	if volume.Secret.Optional == nil || *volume.Secret.Optional {
+		t.Fatal("configured provider secret should be required")
+	}
+
+	env := pod.Spec.Containers[0].Env
+	if got := envValue(env, "CODEX_HOME"); got != "/home/gcagent/.codex-polecat" {
+		t.Fatalf("CODEX_HOME = %q, want configured target dir", got)
+	}
+	if got := envValue(env, "GASCITY_PROVIDER_PROFILE"); got != "codex-polecat" {
+		t.Fatalf("GASCITY_PROVIDER_PROFILE = %q", got)
+	}
+	tokenEnv, ok := envByName(env, "CODEX_SESSION_TOKEN")
+	if !ok || tokenEnv.ValueFrom == nil || tokenEnv.ValueFrom.SecretKeyRef == nil {
+		t.Fatalf("missing CODEX_SESSION_TOKEN secret env: %#v", tokenEnv)
+	}
+	if ref := tokenEnv.ValueFrom.SecretKeyRef; ref.Name != "codex-polecat-credentials" || ref.Key != "session-token" || ref.Optional == nil || *ref.Optional {
+		t.Fatalf("CODEX_SESSION_TOKEN secret ref = %#v", ref)
+	}
+
+	entrypoint := buildPodLaunchMaterial(cfg, p).Entrypoint
+	if !strings.Contains(entrypoint, `cp -rL '/tmp/gc-provider-secrets/codex-polecat'/. '/home/gcagent/.codex-polecat'/`) {
+		t.Fatalf("entrypoint did not copy configured provider profile: %s", entrypoint)
+	}
+}
+
+func TestBuildPodEnv_SanitizesInheritedProviderHomes(t *testing.T) {
+	profiles := []runtime.ProviderCredentialProfile{{
+		Name:      "codex-cartographer",
+		TargetDir: ".codex-cartographer",
+		Env: map[string]string{
+			"CODEX_HOME": "{{.TargetDir}}",
+		},
+	}}
+	env, err := buildPodEnvForRoot(
+		map[string]string{
+			"HOME":              "/Users/operator",
+			"CODEX_HOME":        "/Users/operator/.codex",
+			"CLAUDE_CONFIG_DIR": "/Users/operator/.claude",
+			"XDG_CONFIG_HOME":   "/Users/operator/.config",
+			"XDG_STATE_HOME":    "/Users/operator/.local/state",
+		},
+		defaultPodWorkspaceRoot,
+		"/workspace",
+		podManagedDoltHost,
+		podManagedDoltPort,
+		profiles,
+	)
+	if err != nil {
+		t.Fatalf("buildPodEnvForRoot: %v", err)
+	}
+	envMap := envVarsByName(env)
+	for _, key := range []string{"HOME", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_STATE_HOME"} {
+		if _, ok := envMap[key]; ok {
+			t.Fatalf("inherited %s should be sanitized from pod env: %#v", key, envMap)
+		}
+	}
+	if got := envMap["CODEX_HOME"]; got != "/home/gcagent/.codex-cartographer" {
+		t.Fatalf("CODEX_HOME = %q, want configured pod-local value", got)
 	}
 }
 
@@ -700,4 +829,12 @@ func envValue(env []corev1.EnvVar, name string) string {
 		return ""
 	}
 	return item.Value
+}
+
+func envVarsByName(env []corev1.EnvVar) map[string]string {
+	out := make(map[string]string, len(env))
+	for _, item := range env {
+		out[item.Name] = item.Value
+	}
+	return out
 }

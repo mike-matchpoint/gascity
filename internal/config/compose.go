@@ -1160,6 +1160,13 @@ func deepMergeProvider(base, frag ProviderSpec, name string, fragMeta toml.MetaD
 		}
 		result.Env = cloned
 	}
+	if fragMeta.IsDefined("providers", name, "k8s_credentials") {
+		if base.K8sCredentials != nil {
+			prov.Warnings = append(prov.Warnings,
+				fmt.Sprintf("provider %q.k8s_credentials redefined by %q", name, fragPath))
+		}
+		result.K8sCredentials = cloneProviderK8sCredentials(frag.K8sCredentials)
+	}
 
 	return result
 }

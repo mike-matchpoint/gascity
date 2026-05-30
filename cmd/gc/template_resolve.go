@@ -713,12 +713,61 @@ func templateParamsToConfig(tp TemplateParams) runtime.Config {
 		SessionLive:            tp.Hints.SessionLive,
 		ProviderName:           tp.Hints.ProviderName,
 		ProviderOverlayName:    tp.Hints.ProviderOverlayName,
+		ProviderCredentials:    providerCredentialProfilesForResolved(tp.ResolvedProvider),
 		InstallAgentHooks:      tp.Hints.InstallAgentHooks,
 		PackOverlayDirs:        tp.Hints.PackOverlayDirs,
 		OverlayDir:             tp.Hints.OverlayDir,
 		CopyFiles:              tp.Hints.CopyFiles,
 		FingerprintExtra:       tp.FPExtra,
 	}
+}
+
+func providerCredentialProfilesForResolved(resolved *config.ResolvedProvider) []runtime.ProviderCredentialProfile {
+	if resolved == nil || resolved.K8sCredentials == nil {
+		return nil
+	}
+	src := resolved.K8sCredentials
+	optional := true
+	if src.Optional != nil {
+		optional = *src.Optional
+	}
+	name := strings.TrimSpace(src.Name)
+	if name == "" {
+		name = resolved.Name
+	}
+	profile := runtime.ProviderCredentialProfile{
+		Name:       name,
+		SecretName: strings.TrimSpace(src.SecretName),
+		MountPath:  strings.TrimSpace(src.MountPath),
+		TargetDir:  strings.TrimSpace(src.TargetDir),
+		Optional:   optional,
+		Env:        maps.Clone(src.Env),
+	}
+	if len(src.EnvFromSecret) > 0 {
+		profile.EnvFromSecret = make([]runtime.ProviderSecretEnv, 0, len(src.EnvFromSecret))
+		for _, env := range src.EnvFromSecret {
+			envOptional := true
+			if env.Optional != nil {
+				envOptional = *env.Optional
+			}
+			profile.EnvFromSecret = append(profile.EnvFromSecret, runtime.ProviderSecretEnv{
+				Name:       strings.TrimSpace(env.Name),
+				SecretName: strings.TrimSpace(env.SecretName),
+				Key:        strings.TrimSpace(env.Key),
+				Optional:   envOptional,
+			})
+		}
+	}
+	if len(src.Copy) > 0 {
+		profile.Copy = make([]runtime.ProviderCredentialCopy, 0, len(src.Copy))
+		for _, cp := range src.Copy {
+			profile.Copy = append(profile.Copy, runtime.ProviderCredentialCopy{
+				Source: strings.TrimSpace(cp.Source),
+				Target: strings.TrimSpace(cp.Target),
+			})
+		}
+	}
+	return []runtime.ProviderCredentialProfile{profile}
 }
 
 func prependStartupPromptToNudge(prompt, nudge string) string {

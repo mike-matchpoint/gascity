@@ -218,9 +218,16 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 	// as root (see securityContext below), creates the user, sets up workspace
 	// ownership, then drops privileges via su for the tmux session.
 	linuxUsername := cfg.Env["LINUX_USERNAME"]
+	credentialProfiles := podCredentialProfiles(cfg)
 
 	// Build environment, remapping K8s-specific vars.
-	env, err := buildPodEnvForRoot(cfg.Env, podCityRoot, podWorkDir, p.managedServiceHost, p.managedServicePort)
+	var env []corev1.EnvVar
+	var err error
+	if len(cfg.ProviderCredentials) > 0 {
+		env, err = buildPodEnvForRoot(cfg.Env, podCityRoot, podWorkDir, p.managedServiceHost, p.managedServicePort, credentialProfiles)
+	} else {
+		env, err = buildPodEnvForRoot(cfg.Env, podCityRoot, podWorkDir, p.managedServiceHost, p.managedServicePort)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -255,35 +262,32 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 		})
 	}
 
-	mainVolMounts = append(mainVolMounts, corev1.VolumeMount{
-		Name: "claude-config", MountPath: "/tmp/claude-secret", ReadOnly: true,
-	})
-	volumes = append(volumes, corev1.Volume{
-		Name: "claude-config", VolumeSource: corev1.VolumeSource{
-			Secret: &corev1.SecretVolumeSource{
-				SecretName: claudeSecretName,
-				Optional:   boolPtr(true),
+	for i, profile := range credentialProfiles {
+		if strings.TrimSpace(profile.SecretName) == "" {
+			continue
+		}
+		volumeName := credentialVolumeName(i, profile)
+		mountPath := credentialMountPath(i, profile)
+		mainVolMounts = append(mainVolMounts, corev1.VolumeMount{
+			Name: volumeName, MountPath: mountPath, ReadOnly: true,
+		})
+		optional := profile.Optional
+		volumes = append(volumes, corev1.Volume{
+			Name: volumeName, VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: profile.SecretName,
+					Optional:   boolPtr(optional),
+				},
 			},
-		},
-	})
-	mainVolMounts = append(mainVolMounts, corev1.VolumeMount{
-		Name: "codex-config", MountPath: "/tmp/codex-secret", ReadOnly: true,
-	})
-	volumes = append(volumes, corev1.Volume{
-		Name: "codex-config", VolumeSource: corev1.VolumeSource{
-			Secret: &corev1.SecretVolumeSource{
-				SecretName: codexSecretName,
-				Optional:   boolPtr(true),
-			},
-		},
-	})
+		})
+	}
 	mainVolMounts = append(mainVolMounts, corev1.VolumeMount{
 		Name: "git-credentials", MountPath: "/tmp/git-secret", ReadOnly: true,
 	})
 	volumes = append(volumes, corev1.Volume{
 		Name: "git-credentials", VolumeSource: corev1.VolumeSource{
 			Secret: &corev1.SecretVolumeSource{
-				SecretName: gitSecretName,
+				SecretName: gitSecretNameForEnv(cfg.Env),
 				Optional:   boolPtr(true),
 			},
 		},
@@ -328,7 +332,7 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 			},
 		},
 		Spec: corev1.PodSpec{
-			ServiceAccountName:    p.serviceAccount,
+			ServiceAccountName:    podServiceAccount(cfg.Env, p),
 			RestartPolicy:         corev1.RestartPolicyNever,
 			ShareProcessNamespace: boolPtr(true),
 			Containers: []corev1.Container{{
@@ -428,7 +432,11 @@ func buildPodEnv(cfgEnv map[string]string, podWorkDir, managedServiceHost, manag
 	return buildPodEnvForRoot(cfgEnv, defaultPodWorkspaceRoot, podWorkDir, managedServiceHost, managedServicePort)
 }
 
-func buildPodEnvForRoot(cfgEnv map[string]string, podCityRoot, podWorkDir, managedServiceHost, managedServicePort string) ([]corev1.EnvVar, error) {
+func buildPodEnvForRoot(cfgEnv map[string]string, podCityRoot, podWorkDir, managedServiceHost, managedServicePort string, profileSets ...[]runtime.ProviderCredentialProfile) ([]corev1.EnvVar, error) {
+	var profiles []runtime.ProviderCredentialProfile
+	if len(profileSets) > 0 {
+		profiles = profileSets[0]
+	}
 	// Start with cfg.Env, removing controller-only vars.
 	// Auth creds (GC_DOLT_USER, GC_DOLT_PASSWORD, BEADS_DOLT_*_USER/PASSWORD) intentionally pass through.
 	skip := map[string]bool{
@@ -441,6 +449,11 @@ func buildPodEnvForRoot(cfgEnv map[string]string, podCityRoot, podWorkDir, manag
 		"GC_DOLT_PORT":           true,
 		"BEADS_DOLT_SERVER_HOST": true,
 		"BEADS_DOLT_SERVER_PORT": true,
+		"HOME":                   true,
+		"CODEX_HOME":             true,
+		"CLAUDE_CONFIG_DIR":      true,
+		"XDG_CONFIG_HOME":        true,
+		"XDG_STATE_HOME":         true,
 	}
 
 	ctrlCity := controllerCityPath(cfgEnv)
@@ -490,14 +503,38 @@ func buildPodEnvForRoot(cfgEnv map[string]string, podCityRoot, podWorkDir, manag
 	env = append(env, corev1.EnvVar{Name: "GC_TMUX_SESSION", Value: tmuxSession})
 
 	providerHome := podProviderHome(cfgEnv)
-	env = append(env, corev1.EnvVar{Name: "CLAUDE_CONFIG_DIR", Value: providerHome + "/.claude"})
-	env = append(env, corev1.EnvVar{Name: "CODEX_HOME", Value: providerHome + "/.codex"})
+	configuredProfiles := len(profileSets) > 0
+	profiles = normalizeCredentialProfiles(profiles, providerHome)
+	for _, profile := range profiles {
+		keys := make([]string, 0, len(profile.Env))
+		for key := range profile.Env {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			env = append(env, corev1.EnvVar{Name: key, Value: expandProviderCredentialValue(profile.Env[key], profile, providerHome)})
+		}
+		for _, secretEnv := range profile.EnvFromSecret {
+			if secretEnv.Name == "" || secretEnv.Key == "" {
+				continue
+			}
+			secretName := strings.TrimSpace(secretEnv.SecretName)
+			if secretName == "" {
+				secretName = profile.SecretName
+			}
+			if secretName == "" {
+				continue
+			}
+			env = append(env, credentialSecretEnv(secretEnv.Name, secretName, secretEnv.Key, secretEnv.Optional))
+		}
+	}
 
 	// Inject GITHUB_TOKEN from optional K8s secret for git push in pods.
-	env = append(env, gitTokenEnv("GITHUB_TOKEN"))
-	env = append(env, gitTokenEnv("GH_TOKEN"))
-	if strings.TrimSpace(cfgEnv["CLAUDE_CODE_OAUTH_TOKEN"]) == "" {
-		env = append(env, claudeOAuthTokenEnv())
+	gitSecretName := gitSecretNameForEnv(cfgEnv)
+	env = append(env, gitTokenEnv("GITHUB_TOKEN", gitSecretName))
+	env = append(env, gitTokenEnv("GH_TOKEN", gitSecretName))
+	if !configuredProfiles && strings.TrimSpace(cfgEnv["CLAUDE_CODE_OAUTH_TOKEN"]) == "" {
+		env = append(env, claudeOAuthTokenEnv(claudeSecretName))
 	}
 
 	return env, nil
@@ -513,27 +550,142 @@ func podProviderHome(cfgEnv map[string]string) string {
 	return defaultContainerHome
 }
 
-func gitTokenEnv(name string) corev1.EnvVar {
+func podServiceAccount(cfgEnv map[string]string, p *Provider) string {
+	if serviceAccount := strings.TrimSpace(cfgEnv["GC_K8S_SERVICE_ACCOUNT"]); serviceAccount != "" {
+		return serviceAccount
+	}
+	return p.serviceAccount
+}
+
+func gitSecretNameForEnv(cfgEnv map[string]string) string {
+	if secretName := strings.TrimSpace(cfgEnv["GC_K8S_GIT_SECRET_NAME"]); secretName != "" {
+		return secretName
+	}
+	return gitSecretName
+}
+
+func podCredentialProfiles(cfg runtime.Config) []runtime.ProviderCredentialProfile {
+	return normalizeCredentialProfiles(cfg.ProviderCredentials, podProviderHome(cfg.Env))
+}
+
+func normalizeCredentialProfiles(profiles []runtime.ProviderCredentialProfile, providerHome string) []runtime.ProviderCredentialProfile {
+	if len(profiles) == 0 {
+		return legacyCredentialProfiles(providerHome)
+	}
+	out := make([]runtime.ProviderCredentialProfile, 0, len(profiles))
+	for i, profile := range profiles {
+		normalized := profile
+		if strings.TrimSpace(normalized.Name) == "" {
+			normalized.Name = strings.TrimSpace(normalized.SecretName)
+		}
+		if strings.TrimSpace(normalized.Name) == "" {
+			normalized.Name = fmt.Sprintf("provider-credentials-%d", i)
+		}
+		if strings.TrimSpace(normalized.MountPath) == "" {
+			normalized.MountPath = "/tmp/gc-provider-secrets/" + credentialVolumeName(i, normalized)
+		}
+		normalized.Env = maps.Clone(normalized.Env)
+		if normalized.EnvFromSecret != nil {
+			normalized.EnvFromSecret = append([]runtime.ProviderSecretEnv(nil), normalized.EnvFromSecret...)
+		}
+		if normalized.Copy != nil {
+			normalized.Copy = append([]runtime.ProviderCredentialCopy(nil), normalized.Copy...)
+		}
+		out = append(out, normalized)
+	}
+	return out
+}
+
+func legacyCredentialProfiles(providerHome string) []runtime.ProviderCredentialProfile {
+	return []runtime.ProviderCredentialProfile{
+		{
+			Name:       "claude-config",
+			SecretName: claudeSecretName,
+			MountPath:  "/tmp/claude-secret",
+			TargetDir:  ".claude",
+			Optional:   true,
+			Env:        map[string]string{"CLAUDE_CONFIG_DIR": filepath.Join(providerHome, ".claude")},
+			Copy: []runtime.ProviderCredentialCopy{{
+				Source: ".claude.json",
+				Target: ".claude.json",
+			}},
+		},
+		{
+			Name:       "codex-config",
+			SecretName: codexSecretName,
+			MountPath:  "/tmp/codex-secret",
+			TargetDir:  ".codex",
+			Optional:   true,
+			Env:        map[string]string{"CODEX_HOME": filepath.Join(providerHome, ".codex")},
+		},
+	}
+}
+
+func credentialVolumeName(index int, profile runtime.ProviderCredentialProfile) string {
+	name := strings.TrimSpace(profile.Name)
+	if name == "" {
+		name = strings.TrimSpace(profile.SecretName)
+	}
+	if name == "" {
+		name = fmt.Sprintf("provider-credentials-%d", index)
+	}
+	return SanitizeName(name)
+}
+
+func credentialMountPath(index int, profile runtime.ProviderCredentialProfile) string {
+	if mountPath := strings.TrimSpace(profile.MountPath); mountPath != "" {
+		return mountPath
+	}
+	return "/tmp/gc-provider-secrets/" + credentialVolumeName(index, profile)
+}
+
+func providerCredentialPath(providerHome, path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if strings.HasPrefix(path, "/") {
+		return filepath.Clean(path)
+	}
+	return filepath.Join(providerHome, path)
+}
+
+func expandProviderCredentialValue(value string, profile runtime.ProviderCredentialProfile, providerHome string) string {
+	targetDir := providerCredentialPath(providerHome, profile.TargetDir)
+	replacer := strings.NewReplacer(
+		"{{.Home}}", providerHome,
+		"{{ .Home }}", providerHome,
+		"{{.TargetDir}}", targetDir,
+		"{{ .TargetDir }}", targetDir,
+	)
+	return replacer.Replace(value)
+}
+
+func gitTokenEnv(name, secretName string) corev1.EnvVar {
+	return credentialSecretEnv(name, secretName, "token", true)
+}
+
+func claudeOAuthTokenEnv(secretName string) corev1.EnvVar {
 	return corev1.EnvVar{
-		Name: name,
+		Name: "CLAUDE_CODE_OAUTH_TOKEN",
 		ValueFrom: &corev1.EnvVarSource{
 			SecretKeyRef: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{Name: gitSecretName},
-				Key:                  "token",
+				LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
+				Key:                  "CLAUDE_CODE_OAUTH_TOKEN",
 				Optional:             boolPtr(true),
 			},
 		},
 	}
 }
 
-func claudeOAuthTokenEnv() corev1.EnvVar {
+func credentialSecretEnv(name, secretName, key string, optional bool) corev1.EnvVar {
 	return corev1.EnvVar{
-		Name: "CLAUDE_CODE_OAUTH_TOKEN",
+		Name: name,
 		ValueFrom: &corev1.EnvVarSource{
 			SecretKeyRef: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{Name: claudeSecretName},
-				Key:                  "CLAUDE_CODE_OAUTH_TOKEN",
-				Optional:             boolPtr(true),
+				LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
+				Key:                  key,
+				Optional:             boolPtr(optional),
 			},
 		},
 	}
@@ -656,10 +808,30 @@ func podEntrypointScript(cfg runtime.Config, p *Provider, podWorkDir string) str
 			shellSingleQuote("/home/"+linuxUsername), shellSingleQuote(linuxUsername), shellSingleQuote(linuxUsername),
 		))
 	}
-	b.WriteString(`mkdir -p "$HOME/.claude" "$HOME/.codex" && ` + "\n")
-	b.WriteString(`cp -rL /tmp/claude-secret/. "$HOME/.claude/" 2>/dev/null || true; ` + "\n")
-	b.WriteString(`cp -f /tmp/claude-secret/.claude.json "$HOME/.claude.json" 2>/dev/null || true; ` + "\n")
-	b.WriteString(`cp -rL /tmp/codex-secret/. "$HOME/.codex/" 2>/dev/null || true; ` + "\n")
+	for i, profile := range podCredentialProfiles(cfg) {
+		mountPath := credentialMountPath(i, profile)
+		if targetDir := providerCredentialPath(podProviderHome(cfg.Env), profile.TargetDir); targetDir != "" {
+			b.WriteString(fmt.Sprintf(
+				`mkdir -p %s && cp -rL %s/. %s/ 2>/dev/null || true; `+"\n",
+				shellSingleQuote(targetDir),
+				shellSingleQuote(mountPath),
+				shellSingleQuote(targetDir),
+			))
+		}
+		for _, cp := range profile.Copy {
+			source := strings.TrimSpace(cp.Source)
+			target := providerCredentialPath(podProviderHome(cfg.Env), cp.Target)
+			if source == "" || target == "" {
+				continue
+			}
+			b.WriteString(fmt.Sprintf(
+				`mkdir -p %s && cp -f %s %s 2>/dev/null || true; `+"\n",
+				shellSingleQuote(filepath.Dir(target)),
+				shellSingleQuote(filepath.Join(mountPath, source)),
+				shellSingleQuote(target),
+			))
+		}
+	}
 	b.WriteString(`git config --global --add safe.directory '*' 2>/dev/null || true; ` + "\n")
 	b.WriteString(`if [ -n "${GITHUB_TOKEN:-}" ]; then export GH_TOKEN="${GH_TOKEN:-$GITHUB_TOKEN}"; gh auth setup-git >/dev/null 2>&1 || true; fi; ` + "\n")
 	if !p.prebaked && !p.usesPersistentWorkspace() {

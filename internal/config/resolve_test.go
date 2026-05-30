@@ -2001,24 +2001,30 @@ func TestMergeProviderOverBuiltinFieldSync(t *testing.T) {
 		EmitsPermissionWarning: boolPtr(true),
 		AcceptStartupDialogs:   boolPtr(true),
 		Env:                    map[string]string{"K": "V"},
-		PathCheck:              "custom-bin",
-		SupportsACP:            boolPtr(true),
-		SupportsHooks:          boolPtr(true),
-		InstructionsFile:       "CUSTOM.md",
-		ResumeFlag:             "--resume",
-		ResumeStyle:            "flag",
-		ResumeCommand:          "custom-cmd --resume {{.SessionKey}}",
-		SessionIDFlag:          "--session-id",
-		ContinuationIntegrity:  ContinuationIntegrityBoundaryOrFresh,
-		PrivateHistoryPolicy:   ProviderPrivateHistoryPreserveExact,
-		FatalResumeErrors:      []ProviderFatalResumeError{ProviderFatalResumeClaudeThinkingBlockMutation},
-		PermissionModes:        map[string]string{"yolo": "--yolo"},
-		OptionDefaults:         map[string]string{"permission_mode": "yolo"},
-		OptionsSchema:          []ProviderOption{{Key: "model"}},
-		PrintArgs:              []string{"-p"},
-		TitleModel:             "haiku",
-		ACPCommand:             "custom-acp",
-		ACPArgs:                []string{"acp-mode"},
+		K8sCredentials: &ProviderK8sCredentials{
+			Name:       "custom-profile",
+			SecretName: "custom-credentials",
+			TargetDir:  ".custom",
+			Env:        map[string]string{"CUSTOM_HOME": "{{.Home}}/.custom"},
+		},
+		PathCheck:             "custom-bin",
+		SupportsACP:           boolPtr(true),
+		SupportsHooks:         boolPtr(true),
+		InstructionsFile:      "CUSTOM.md",
+		ResumeFlag:            "--resume",
+		ResumeStyle:           "flag",
+		ResumeCommand:         "custom-cmd --resume {{.SessionKey}}",
+		SessionIDFlag:         "--session-id",
+		ContinuationIntegrity: ContinuationIntegrityBoundaryOrFresh,
+		PrivateHistoryPolicy:  ProviderPrivateHistoryPreserveExact,
+		FatalResumeErrors:     []ProviderFatalResumeError{ProviderFatalResumeClaudeThinkingBlockMutation},
+		PermissionModes:       map[string]string{"yolo": "--yolo"},
+		OptionDefaults:        map[string]string{"permission_mode": "yolo"},
+		OptionsSchema:         []ProviderOption{{Key: "model"}},
+		PrintArgs:             []string{"-p"},
+		TitleModel:            "haiku",
+		ACPCommand:            "custom-acp",
+		ACPArgs:               []string{"acp-mode"},
 	}
 
 	// Verify every field on city is non-zero (catches new fields not added to test data).
@@ -2042,6 +2048,47 @@ func TestMergeProviderOverBuiltinFieldSync(t *testing.T) {
 		if rv.Field(i).IsZero() {
 			t.Errorf("MergeProviderOverBuiltin did not propagate field %q from city to result", f.Name)
 		}
+	}
+}
+
+func TestResolveProviderCarriesK8sCredentialProfile(t *testing.T) {
+	base := "builtin:codex"
+	providers := map[string]ProviderSpec{
+		"codex-polecat": {
+			Base: &base,
+			K8sCredentials: &ProviderK8sCredentials{
+				Name:       "codex-polecat",
+				SecretName: "codex-polecat-credentials",
+				TargetDir:  ".codex-polecat",
+				Optional:   boolPtr(false),
+				Env:        map[string]string{"CODEX_HOME": "{{.TargetDir}}"},
+				EnvFromSecret: []ProviderK8sSecretEnv{{
+					Name:     "CODEX_SESSION_TOKEN",
+					Key:      "session-token",
+					Optional: boolPtr(false),
+				}},
+			},
+		},
+	}
+
+	resolved, err := ResolveProvider(&Agent{Provider: "codex-polecat"}, &Workspace{}, providers, lookPathAll)
+	if err != nil {
+		t.Fatalf("ResolveProvider: %v", err)
+	}
+	if resolved.K8sCredentials == nil {
+		t.Fatal("resolved provider missing K8sCredentials")
+	}
+	if got := resolved.K8sCredentials.SecretName; got != "codex-polecat-credentials" {
+		t.Fatalf("SecretName = %q", got)
+	}
+	if resolved.K8sCredentials.Optional == nil || *resolved.K8sCredentials.Optional {
+		t.Fatal("Optional should carry explicit false")
+	}
+	if got := resolved.K8sCredentials.Env["CODEX_HOME"]; got != "{{.TargetDir}}" {
+		t.Fatalf("CODEX_HOME env = %q", got)
+	}
+	if len(resolved.K8sCredentials.EnvFromSecret) != 1 || resolved.K8sCredentials.EnvFromSecret[0].Key != "session-token" {
+		t.Fatalf("EnvFromSecret = %#v", resolved.K8sCredentials.EnvFromSecret)
 	}
 }
 
