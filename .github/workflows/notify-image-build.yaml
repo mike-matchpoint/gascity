@@ -31,6 +31,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GASCITY_HOSTED_TOKEN }}
         run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "GASCITY_HOSTED_TOKEN is unavailable; skipping runtime image rebuild dispatch."
+            exit 0
+          fi
           gh api \
             --method POST \
             repos/gascity/gasworks-internal/dispatches \
