@@ -14,6 +14,7 @@ import (
 	convoycore "github.com/gastownhall/gascity/internal/convoy"
 	"github.com/gastownhall/gascity/internal/formula"
 	"github.com/gastownhall/gascity/internal/molecule"
+	"github.com/gastownhall/gascity/internal/routedwork"
 	"github.com/gastownhall/gascity/internal/sourceworkflow"
 	"github.com/gastownhall/gascity/internal/telemetry"
 )
@@ -104,7 +105,20 @@ func preflight(opts SlingOpts, deps SlingDeps, querier BeadQuerier) (SlingResult
 	}
 
 	// Pre-flight idempotency check.
-	if shouldCheckBeadState(opts) {
+	if opts.OnFormula != "" && !opts.Force {
+		check := CheckAttachedFormulaState(querier, opts.BeadOrFormula, a, deps, opts.OnFormula, BeadCheckOptions{
+			NoConvoy: opts.NoConvoy,
+		})
+		if check.Idempotent {
+			result.Idempotent = true
+			result.DryRun = opts.DryRun
+			result.BeadID = opts.BeadOrFormula
+			result.Method = "on-formula"
+			result.FormulaName = opts.OnFormula
+			return result, nil
+		}
+		result.BeadWarnings = append(result.BeadWarnings, check.Warnings...)
+	} else if shouldCheckBeadState(opts) {
 		check := CheckBeadStateWithOptions(querier, opts.BeadOrFormula, a, deps, BeadCheckOptions{
 			NoConvoy: opts.NoConvoy,
 		})
@@ -164,7 +178,7 @@ func shouldGuardCrossRig(opts SlingOpts) bool {
 }
 
 func shouldCheckBeadState(opts SlingOpts) bool {
-	return !opts.IsFormula && !opts.Force && (!opts.DryRun || !opts.InlineText)
+	return !opts.IsFormula && opts.OnFormula == "" && !opts.Force && (!opts.DryRun || !opts.InlineText)
 }
 
 func validateExistingBead(beadID string, deps SlingDeps) error {
@@ -230,6 +244,31 @@ func slingOnFormula(opts SlingOpts, deps SlingDeps, querier BeadQuerier, beadID 
 	}); err != nil {
 		return result, fmt.Errorf("instantiating formula %q on %s: %w", opts.OnFormula, beadID, err)
 	}
+	if source, ok := BeadFromGetters(beadID, querier, deps.Store); ok && (!isGraph || !opts.Force) {
+		if attached, attachedOK := activeFormulaAttachment(source, deps.Store, querier, opts.OnFormula); attachedOK {
+			result.WispRootID = attached.ID
+			result.FormulaName = opts.OnFormula
+			routeCheck := CheckBeadStateWithOptions(querier, beadID, a, deps, BeadCheckOptions{NoConvoy: opts.NoConvoy})
+			if len(routeCheck.Warnings) > 0 {
+				result.BeadWarnings = append(result.BeadWarnings, routeCheck.Warnings...)
+				return result, fmt.Errorf("cannot use --on: bead %s already has attached %s %s for formula %q",
+					beadID, AttachmentLabel(attached), attached.ID, opts.OnFormula)
+			}
+			finalized := result
+			if !routeCheck.Idempotent {
+				var err error
+				finalized, err = finalize(opts, deps, beadID, method, result)
+				if err != nil {
+					return finalized, err
+				}
+			} else {
+				finalized.BeadID = beadID
+				finalized.Method = method
+				finalized.Idempotent = true
+			}
+			return stampAttachedFormula(finalized, deps, beadID, opts.OnFormula)
+		}
+	}
 	checkAttachments := CheckNoMoleculeChildren
 	if isGraph && opts.Force {
 		checkAttachments = CheckNoMoleculeChildrenAllowLiveWorkflow
@@ -253,12 +292,15 @@ func slingOnFormula(opts SlingOpts, deps SlingDeps, querier BeadQuerier, beadID 
 			return wfResult, wfErr
 		}
 		if err := deps.Store.SetMetadata(beadID, "molecule_id", wispRootID); err != nil {
-			result.MetadataErrors = append(result.MetadataErrors,
-				fmt.Sprintf("setting molecule_id on %s: %v", beadID, err))
+			return result, fmt.Errorf("setting molecule_id on %s: %w", beadID, err)
 		}
 		result.WispRootID = wispRootID
 		result.FormulaName = opts.OnFormula
-		return finalize(opts, deps, beadID, method, result)
+		finalized, err := finalize(opts, deps, beadID, method, result)
+		if err != nil {
+			return finalized, err
+		}
+		return stampAttachedFormula(finalized, deps, beadID, opts.OnFormula)
 	}
 	runGraph := func() (pendingSourceWorkflowLaunch, error) {
 		mResult, err := InstantiateSlingFormula(context.Background(), opts.OnFormula, SlingFormulaSearchPaths(deps, a), molecule.Options{
@@ -274,7 +316,18 @@ func slingOnFormula(opts SlingOpts, deps SlingDeps, querier BeadQuerier, beadID 
 	if !isGraph {
 		return run()
 	}
-	return withSourceWorkflowLaunchLock(context.Background(), deps, beadID, opts.Force, runGraph)
+	graphResult, err := withSourceWorkflowLaunchLock(context.Background(), deps, beadID, opts.Force, runGraph)
+	if err != nil {
+		return graphResult, err
+	}
+	return stampAttachedFormula(graphResult, deps, beadID, opts.OnFormula)
+}
+
+func stampAttachedFormula(result SlingResult, deps SlingDeps, beadID, formulaName string) (SlingResult, error) {
+	if err := deps.Store.SetMetadata(beadID, routedwork.AttachedFormulaMetadataKey, formulaName); err != nil {
+		return result, fmt.Errorf("setting %s on %s: %w", routedwork.AttachedFormulaMetadataKey, beadID, err)
+	}
+	return result, nil
 }
 
 // slingDefaultFormula handles the default formula attachment path.

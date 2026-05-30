@@ -10,6 +10,7 @@ import (
 	"github.com/gastownhall/gascity/internal/config"
 	convoycore "github.com/gastownhall/gascity/internal/convoy"
 	"github.com/gastownhall/gascity/internal/molecule"
+	"github.com/gastownhall/gascity/internal/routedwork"
 	"github.com/gastownhall/gascity/internal/sourceworkflow"
 )
 
@@ -374,6 +375,50 @@ func hasLiveTrackingConvoy(store beads.Store, itemID string) bool {
 // structured result. Best-effort: nil querier or query failure → empty result.
 func CheckBeadState(q BeadQuerier, beadID string, a config.Agent, deps SlingDeps) BeadCheckResult {
 	return CheckBeadStateWithOptions(q, beadID, a, deps, BeadCheckOptions{})
+}
+
+// CheckAttachedFormulaState reports idempotency only when both the route and
+// same-formula attachment are already present. A raw route alone is not enough
+// for --on because the target's claim selector depends on the formula stamp.
+func CheckAttachedFormulaState(q BeadQuerier, beadID string, a config.Agent, deps SlingDeps, formulaName string, opts BeadCheckOptions) BeadCheckResult {
+	if q == nil {
+		return BeadCheckResult{}
+	}
+	b, err := q.Get(beadID)
+	if err != nil {
+		return BeadCheckResult{}
+	}
+	if strings.TrimSpace(b.Metadata[routedwork.AttachedFormulaMetadataKey]) != strings.TrimSpace(formulaName) {
+		return BeadCheckResult{}
+	}
+	routeCheck := CheckBeadStateWithOptions(q, beadID, a, deps, opts)
+	if !routeCheck.Idempotent {
+		return routeCheck
+	}
+	if _, ok := activeFormulaAttachment(b, deps.Store, q, formulaName); !ok {
+		return BeadCheckResult{}
+	}
+	return BeadCheckResult{Idempotent: true}
+}
+
+func activeFormulaAttachment(parent beads.Bead, store beads.Store, q BeadQuerier, formulaName string) (beads.Bead, bool) {
+	var childQuerier BeadChildQuerier
+	if cq, ok := q.(BeadChildQuerier); ok {
+		childQuerier = cq
+	}
+	attachments, err := CollectAttachedBeads(parent, store, childQuerier)
+	if err != nil && len(attachments) == 0 {
+		return beads.Bead{}, false
+	}
+	for _, attached := range attachments {
+		if attached.Status == "closed" {
+			continue
+		}
+		if strings.TrimSpace(attached.Ref) == strings.TrimSpace(formulaName) {
+			return attached, true
+		}
+	}
+	return beads.Bead{}, false
 }
 
 // CheckBeadStateWithOptions checks whether a bead is already routed for the
