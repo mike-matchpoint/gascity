@@ -470,6 +470,7 @@ func init() {
 	events.RegisterPayload(events.OrderCompleted, events.NoPayload{})
 	events.RegisterPayload(events.OrderFailed, events.NoPayload{})
 	events.RegisterPayload(events.OrderDispatchTick, events.OrderDispatchTickPayload{})
+	events.RegisterPayload(events.OrderTrackingDegraded, events.NoPayload{})
 	events.RegisterPayload(events.ProviderSwapped, events.NoPayload{})
 	events.RegisterPayload(events.WorkerOperation, WorkerOperationEventPayload{})
 	events.RegisterPayload(events.ProjectIdentityStamped, ProjectIdentityStampedPayload{})

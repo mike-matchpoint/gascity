@@ -6,11 +6,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/gastownhall/gascity/internal/fsys"
 )
 
 func TestRuntimeWritePolicyDefaults(t *testing.T) {
@@ -109,6 +112,171 @@ func TestRuntimeWriteBypassesCachingStoreRefresh(t *testing.T) {
 	}
 	if backing.getCalls != 0 {
 		t.Fatalf("backing Get calls = %d, want 0 runtime writes must bypass CachingStore readbacks", backing.getCalls)
+	}
+}
+
+func TestFileStoreRuntimeWritesPreservePersistence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "beads.json")
+	store, err := OpenFileStore(fsys.OSFS{}, path)
+	if err != nil {
+		t.Fatalf("OpenFileStore: %v", err)
+	}
+	policy := RuntimeWritePolicy(WriteClassReservation, "test.file-runtime", "file-runtime")
+
+	created, err := RuntimeCreate(context.Background(), store, Bead{ID: "gc-file-runtime", Title: "file runtime"}, policy)
+	if err != nil {
+		t.Fatalf("RuntimeCreate: %v", err)
+	}
+	if created.ID != "gc-file-runtime" {
+		t.Fatalf("created ID = %q, want caller-provided ID", created.ID)
+	}
+	if err := RuntimeUpdate(context.Background(), store, created.ID, UpdateOpts{Labels: []string{"runtime-file"}}, policy); err != nil {
+		t.Fatalf("RuntimeUpdate: %v", err)
+	}
+	if _, err := RuntimeCloseAll(context.Background(), store, []string{created.ID}, map[string]string{"close_reason": "done"}, policy); err != nil {
+		t.Fatalf("RuntimeCloseAll: %v", err)
+	}
+
+	reopened, err := OpenFileStore(fsys.OSFS{}, path)
+	if err != nil {
+		t.Fatalf("reopen FileStore: %v", err)
+	}
+	got, err := reopened.Get(created.ID)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", created.ID, err)
+	}
+	if got.Status != "closed" {
+		t.Fatalf("status = %q, want closed", got.Status)
+	}
+	if !slices.Contains(got.Labels, "runtime-file") {
+		t.Fatalf("labels = %v, want runtime-file", got.Labels)
+	}
+	if got.Metadata["close_reason"] != "done" {
+		t.Fatalf("close_reason = %q, want done", got.Metadata["close_reason"])
+	}
+}
+
+func TestFileStoreRuntimeCreateTimeoutReturnsDegradedWithinBudget(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "beads.json")
+	store, err := OpenFileStore(fsys.OSFS{}, path)
+	if err != nil {
+		t.Fatalf("OpenFileStore: %v", err)
+	}
+	locker := &blockingRuntimeLocker{
+		locked:   make(chan struct{}),
+		release:  make(chan struct{}),
+		unlocked: make(chan struct{}),
+	}
+	store.SetLocker(locker)
+
+	policy := RuntimeWritePolicy(WriteClassReservation, "test.file-runtime-timeout", "file-timeout")
+	policy.Timeout = 20 * time.Millisecond
+	start := time.Now()
+	_, err = RuntimeCreate(context.Background(), store, Bead{ID: "gc-file-runtime-timeout", Title: "timeout"}, policy)
+	elapsed := time.Since(start)
+	if !IsDegradedWrite(err) {
+		t.Fatalf("RuntimeCreate error = %v, want degraded write", err)
+	}
+	var degraded *DegradedWriteError
+	if !errors.As(err, &degraded) || degraded.Outcome != WriteOutcomeAmbiguousTimeout {
+		t.Fatalf("degraded = %#v, want ambiguous timeout", degraded)
+	}
+	if elapsed > 250*time.Millisecond {
+		t.Fatalf("elapsed = %s, want bounded file-store runtime write", elapsed)
+	}
+	select {
+	case <-locker.locked:
+	case <-time.After(time.Second):
+		t.Fatal("file-store runtime write did not reach locker")
+	}
+	close(locker.release)
+	select {
+	case <-locker.unlocked:
+	case <-time.After(time.Second):
+		t.Fatal("file-store runtime write did not release locker")
+	}
+}
+
+type blockingRuntimeLocker struct {
+	locked     chan struct{}
+	release    chan struct{}
+	unlocked   chan struct{}
+	once       sync.Once
+	unlockOnce sync.Once
+}
+
+func (l *blockingRuntimeLocker) Lock() error {
+	l.once.Do(func() { close(l.locked) })
+	<-l.release
+	return nil
+}
+
+func (l *blockingRuntimeLocker) Unlock() error {
+	l.unlockOnce.Do(func() { close(l.unlocked) })
+	return nil
+}
+
+func TestInProcessRuntimeCreateDuplicateMatchingReservationSucceeds(t *testing.T) {
+	fileStore, err := OpenFileStore(fsys.OSFS{}, filepath.Join(t.TempDir(), "beads.json"))
+	if err != nil {
+		t.Fatalf("OpenFileStore: %v", err)
+	}
+	tests := []struct {
+		name  string
+		store Store
+	}{
+		{name: "memory", store: NewMemStore()},
+		{name: "file", store: fileStore},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			policy := RuntimeWritePolicy(WriteClassReservation, "test.duplicate", "reservation-key")
+			seed := Bead{
+				ID:    "gc-order-fixed-" + tt.name,
+				Title: "fixed",
+				Metadata: map[string]string{
+					"gc.order.reservation_hash": "hash-1",
+				},
+			}
+			first, err := RuntimeCreate(context.Background(), tt.store, seed, policy)
+			if err != nil {
+				t.Fatalf("first RuntimeCreate: %v", err)
+			}
+			duplicate := seed
+			duplicate.Title = "ignored duplicate title"
+			second, err := RuntimeCreate(context.Background(), tt.store, duplicate, policy)
+			if err != nil {
+				t.Fatalf("duplicate RuntimeCreate: %v", err)
+			}
+			if second.ID != first.ID || second.Title != first.Title {
+				t.Fatalf("duplicate returned %#v, want existing %#v", second, first)
+			}
+		})
+	}
+}
+
+func TestInProcessRuntimeCreateDuplicateMismatchedReservationFails(t *testing.T) {
+	store := NewMemStore()
+	policy := RuntimeWritePolicy(WriteClassReservation, "test.duplicate", "reservation-key")
+	if _, err := RuntimeCreate(context.Background(), store, Bead{
+		ID:    "gc-order-fixed",
+		Title: "fixed",
+		Metadata: map[string]string{
+			"gc.order.reservation_hash": "hash-1",
+		},
+	}, policy); err != nil {
+		t.Fatalf("first RuntimeCreate: %v", err)
+	}
+	_, err := RuntimeCreate(context.Background(), store, Bead{
+		ID:    "gc-order-fixed",
+		Title: "fixed",
+		Metadata: map[string]string{
+			"gc.order.reservation_hash": "hash-2",
+		},
+	}, policy)
+	if !IsDegradedWrite(err) {
+		t.Fatalf("duplicate RuntimeCreate error = %v, want degraded write", err)
 	}
 }
 

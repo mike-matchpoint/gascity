@@ -173,6 +173,22 @@ func RuntimeCreate(ctx context.Context, store Store, b Bead, policy WritePolicy)
 	return Bead{}, degradedWrite(policy, "", "create", WriteOutcomeUnsupported, ErrRuntimeWriteUnsupported)
 }
 
+func runtimeCreateDuplicateResult(store Store, b Bead, createErr error, policy WritePolicy, storeKey string) (Bead, bool, error) {
+	if createErr == nil || store == nil || strings.TrimSpace(b.ID) == "" || !isBdDuplicateID(createErr) {
+		return Bead{}, false, nil
+	}
+	policy = normalizeWritePolicy(policy)
+	existing, getErr := store.Get(b.ID)
+	if getErr != nil {
+		return Bead{}, true, degradedWrite(policy, storeKey, "create", WriteOutcomeFailed, errors.Join(createErr, getErr))
+	}
+	if runtimeCreateDuplicateMatches(existing, b) {
+		return existing, true, nil
+	}
+	return Bead{}, true, degradedWrite(policy, storeKey, "create", WriteOutcomeFailed,
+		fmt.Errorf("duplicate bead id %q has mismatched reservation metadata", b.ID))
+}
+
 // RuntimeUpdate executes an update under policy, bypassing CachingStore
 // foreground refreshes.
 func RuntimeUpdate(ctx context.Context, store Store, id string, opts UpdateOpts, policy WritePolicy) error {

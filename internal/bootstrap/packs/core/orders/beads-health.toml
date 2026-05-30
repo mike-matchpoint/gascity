@@ -4,3 +4,6 @@ trigger = "cooldown"
 interval = "30s"
 exec = "gc beads health --quiet"
 timeout = "60s"
+idempotent = true
+tracking_degraded_allowed = true
+degraded_min_interval = "60s"

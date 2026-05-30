@@ -93,6 +93,7 @@ const (
 	OrderCompleted                  = "order.completed"
 	OrderFailed                     = "order.failed"
 	OrderDispatchTick               = "order.dispatch.tick"
+	OrderTrackingDegraded           = "order.tracking.degraded"
 	ProviderSwapped                 = "provider.swapped"
 	WorkerOperation                 = "worker.operation"
 	ProjectIdentityStamped          = "project.identity.stamped"
@@ -151,7 +152,7 @@ var KnownEventTypes = []string{
 	RequestResultSessionCreate, RequestResultSessionMessage,
 	RequestResultSessionSubmit, RequestFailed,
 	CityCreated, CityUnregisterRequested,
-	OrderFired, OrderCompleted, OrderFailed, OrderDispatchTick,
+	OrderFired, OrderCompleted, OrderFailed, OrderDispatchTick, OrderTrackingDegraded,
 	ProviderSwapped, WorkerOperation, ProjectIdentityStamped, SupervisorFSPressureSkippedTick,
 	SupervisorShutdownRequested,
 	ExtMsgBound, ExtMsgUnbound, ExtMsgGroupCreated,

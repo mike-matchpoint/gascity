@@ -37,6 +37,10 @@ func trackingBeads(t *testing.T, store beads.Store, label string) []beads.Bead {
 	return all
 }
 
+func trackingRunForTest(id string) orderDispatchRun {
+	return orderDispatchRun{TrackingID: id, LeaseID: id, TrackingReserved: true}
+}
+
 func workBeadByOrderLabel(t *testing.T, store beads.Store, label string) beads.Bead {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -100,6 +104,10 @@ type delayedOrderTrackingCreateStore struct {
 	beads.Store
 
 	delay time.Duration
+}
+
+type orderDispatchTestRuntimeStore struct {
+	beads.Store
 }
 
 type rowCapRuntimeListStore struct {
@@ -265,6 +273,86 @@ func (s delayedOrderTrackingCreateStore) Create(b beads.Bead) (beads.Bead, error
 		time.Sleep(s.delay)
 	}
 	return s.Store.Create(b)
+}
+
+func (s orderDispatchTestRuntimeStore) RuntimeCreate(ctx context.Context, b beads.Bead, policy beads.WritePolicy) (beads.Bead, error) {
+	ctx, cancel := orderDispatchTestRuntimeContext(ctx, policy)
+	defer cancel()
+	type result struct {
+		bead beads.Bead
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		created, err := s.Create(b)
+		done <- result{bead: created, err: err}
+	}()
+	select {
+	case res := <-done:
+		return res.bead, res.err
+	case <-ctx.Done():
+		return beads.Bead{}, ctx.Err()
+	}
+}
+
+func (s orderDispatchTestRuntimeStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	ctx, cancel := orderDispatchTestRuntimeContext(ctx, policy)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- s.Update(id, opts)
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s orderDispatchTestRuntimeStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy beads.WritePolicy) (int, error) {
+	ctx, cancel := orderDispatchTestRuntimeContext(ctx, policy)
+	defer cancel()
+	type result struct {
+		n   int
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		n, err := s.CloseAll(ids, metadata)
+		done <- result{n: n, err: err}
+	}()
+	select {
+	case res := <-done:
+		return res.n, res.err
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+}
+
+func (s orderDispatchTestRuntimeStore) RuntimePing(ctx context.Context, policy beads.WritePolicy) error {
+	ctx, cancel := orderDispatchTestRuntimeContext(ctx, policy)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- s.Ping()
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func orderDispatchTestRuntimeContext(ctx context.Context, policy beads.WritePolicy) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if policy.Timeout <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, policy.Timeout)
 }
 
 func (s rowCapRuntimeListStore) RuntimeList(_ context.Context, query beads.ListQuery, policy beads.ReadPolicy) ([]beads.Bead, error) {
@@ -753,13 +841,8 @@ func TestOrderDispatchEventExecFailureAdvancesCursor(t *testing.T) {
 
 func TestOrderDispatchEventExecLatestSeqErrorDoesNotRunExec(t *testing.T) {
 	store := beads.NewMemStore()
-	tracking, err := store.Create(beads.Bead{
-		Title:  "order:release-exec",
-		Labels: []string{"order-run:release-exec", labelOrderTracking},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	eventLog := events.NewFake()
+	eventLog.Record(events.Event{Type: events.BeadClosed, Actor: "test"})
 
 	var calls int
 	execRun := func(context.Context, string, string, []string) ([]byte, error) {
@@ -767,62 +850,35 @@ func TestOrderDispatchEventExecLatestSeqErrorDoesNotRunExec(t *testing.T) {
 		return []byte("ok"), nil
 	}
 	var rec memRecorder
-	var stderr bytes.Buffer
 	ad := buildOrderDispatcherFromListExec([]orders.Order{{
 		Name:    "release-exec",
 		Trigger: "event",
 		On:      events.BeadClosed,
 		Exec:    "scripts/release.sh",
-	}}, store, events.NewFailFake(), execRun, &rec)
+	}}, store, latestSeqFailProvider{Provider: eventLog}, execRun, &rec)
 	if ad == nil {
 		t.Fatal("expected non-nil dispatcher")
 	}
-	mad := ad.(*memoryOrderDispatcher)
-	mad.stderr = &stderr
 
-	logs := captureCmdOrderLogs(t, func() {
-		mad.dispatchExec(context.Background(), store, execStoreTarget{ScopeRoot: t.TempDir()}, mad.aa[0], t.TempDir(), tracking.ID)
-	})
+	ad.dispatch(context.Background(), t.TempDir(), time.Now())
+	ad.drain(context.Background())
 
 	if calls != 0 {
 		t.Fatalf("exec calls = %d, want 0", calls)
 	}
-	all := trackingBeads(t, store, "order-run:release-exec")
-	if len(all) != 1 {
-		t.Fatalf("tracking beads = %d, want 1", len(all))
-	}
-	if !slicesContain(all[0].Labels, "exec-failed") {
-		t.Fatalf("tracking bead labels = %v, want exec-failed", all[0].Labels)
-	}
 	if !rec.hasType(events.OrderFailed) {
 		t.Fatal("missing order.failed event")
 	}
-	combined := logs + "\n" + stderr.String()
-	if !strings.Contains(combined, "reading event cursor for release-exec") {
-		t.Fatalf("logs = %q, want event cursor read failure", combined)
+	if rec.hasType(events.OrderFired) || rec.hasType(events.OrderCompleted) {
+		t.Fatalf("unexpected action event after cursor head failure: %#v", rec.snapshot())
 	}
-
-	eventLog := events.NewFake()
-	eventLog.Record(events.Event{Type: events.BeadClosed, Actor: "test"})
-	mad.ep = eventLog
-	mad.dispatchExec(context.Background(), store, execStoreTarget{ScopeRoot: t.TempDir()}, mad.aa[0], t.TempDir(), tracking.ID)
-
-	if calls != 1 {
-		t.Fatalf("exec calls after cursor read recovers = %d, want 1", calls)
-	}
-	all = trackingBeads(t, store, "order-run:release-exec")
-	headSeq, err := eventLog.LatestSeq()
-	if err != nil {
-		t.Fatalf("LatestSeq(): %v", err)
-	}
-	for _, want := range []string{"order:release-exec", fmt.Sprintf("seq:%d", headSeq), "exec"} {
-		if !slicesContain(all[0].Labels, want) {
-			t.Fatalf("tracking bead labels after retry = %v, want %s", all[0].Labels, want)
-		}
+	all := trackingBeads(t, store, "order-run:release-exec")
+	if len(all) != 0 {
+		t.Fatalf("tracking beads = %d, want none before cursor reservation succeeds: %#v", len(all), all)
 	}
 }
 
-func TestOrderDispatchEventExecLabelFailureRecordsOrderFailure(t *testing.T) {
+func TestOrderDispatchEventExecOutcomeLabelFailureRecordsTrackingDegraded(t *testing.T) {
 	store := beads.NewMemStore()
 	eventLog := events.NewFake()
 	eventLog.Record(events.Event{Type: events.BeadClosed, Actor: "test"})
@@ -858,11 +914,14 @@ func TestOrderDispatchEventExecLabelFailureRecordsOrderFailure(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("exec calls = %d, want 1", calls)
 	}
-	if !rec.hasType(events.OrderFailed) {
-		t.Fatal("missing order.failed event")
+	if !rec.hasType(events.OrderCompleted) {
+		t.Fatal("missing order.completed event")
 	}
-	if rec.hasType(events.OrderCompleted) {
-		t.Fatal("unexpected order.completed event")
+	if !rec.hasType(events.OrderTrackingDegraded) {
+		t.Fatal("missing order.tracking.degraded event")
+	}
+	if rec.hasType(events.OrderFailed) {
+		t.Fatal("unexpected order.failed event")
 	}
 	all := trackingBeads(t, store, "order-run:release-exec")
 	if len(all) != 1 {
@@ -890,7 +949,7 @@ func TestOrderDispatchEventExecLabelFailureRecordsOrderFailure(t *testing.T) {
 	}
 }
 
-func TestOrderDispatchEventExecCursorLabelFailureMarksExecFailed(t *testing.T) {
+func TestOrderDispatchEventExecCursorLabelFailureDefersBeforeExec(t *testing.T) {
 	store := beads.NewMemStore()
 	eventLog := events.NewFake()
 	eventLog.Record(events.Event{Type: events.BeadClosed, Actor: "test"})
@@ -922,64 +981,54 @@ func TestOrderDispatchEventExecCursorLabelFailureMarksExecFailed(t *testing.T) {
 	if calls != 0 {
 		t.Fatalf("exec calls = %d, want 0", calls)
 	}
-	if !rec.hasType(events.OrderFailed) {
-		t.Fatal("missing order.failed event")
+	if !rec.hasType(events.OrderTrackingDegraded) {
+		t.Fatal("missing order.tracking.degraded event")
 	}
-	if rec.hasType(events.OrderCompleted) {
-		t.Fatal("unexpected order.completed event")
+	if rec.hasType(events.OrderFired) || rec.hasType(events.OrderCompleted) || rec.hasType(events.OrderFailed) {
+		t.Fatalf("unexpected action event after cursor persistence failure: %#v", rec.snapshot())
 	}
 	all := trackingBeads(t, store, "order-run:release-exec")
 	if len(all) != 1 {
 		t.Fatalf("tracking beads with order-run label = %d, want 1", len(all))
 	}
-	if !slicesContain(all[0].Labels, "exec-failed") {
-		t.Fatalf("tracking bead labels = %v, want exec-failed", all[0].Labels)
+	if slicesContain(all[0].Labels, "exec") || slicesContain(all[0].Labels, "exec-failed") {
+		t.Fatalf("tracking bead labels = %v, want no exec outcome labels before action", all[0].Labels)
 	}
 	combined := logs + "\n" + stderr.String()
-	if !strings.Contains(combined, "failed to label exec event cursor") {
+	if !strings.Contains(combined, "failed to persist event cursor") {
 		t.Fatalf("logs = %q, want cursor label failure", combined)
 	}
 }
 
 func TestOrderDispatchEventWispLatestSeqErrorDoesNotInstantiate(t *testing.T) {
 	store := beads.NewMemStore()
-	tracking, err := store.Create(beads.Bead{
-		Title:  "order:release-watch",
-		Labels: []string{"order-run:release-watch", labelOrderTracking},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	eventLog := events.NewFake()
+	eventLog.Record(events.Event{Type: events.BeadClosed, Actor: "test"})
 
 	var rec memRecorder
-	var stderr bytes.Buffer
 	ad := buildOrderDispatcherFromListExec([]orders.Order{{
 		Name:         "release-watch",
 		Trigger:      "event",
 		On:           events.BeadClosed,
 		Formula:      "test-formula",
 		FormulaLayer: sharedTestFormulaDir,
-	}}, store, latestSeqFailProvider{Provider: events.NewFake()}, successfulExec, &rec)
+	}}, store, latestSeqFailProvider{Provider: eventLog}, successfulExec, &rec)
 	if ad == nil {
 		t.Fatal("expected non-nil dispatcher")
 	}
-	mad := ad.(*memoryOrderDispatcher)
-	mad.stderr = &stderr
 
-	mad.dispatchWisp(context.Background(), store, mad.aa[0], t.TempDir(), tracking.ID)
+	ad.dispatch(context.Background(), t.TempDir(), time.Now())
+	ad.drain(context.Background())
 
 	all := trackingBeads(t, store, "order-run:release-watch")
-	if len(all) != 1 {
-		t.Fatalf("tracking beads with order-run label = %d, want only tracking bead", len(all))
-	}
-	if !slicesContain(all[0].Labels, "wisp-failed") {
-		t.Fatalf("tracking bead labels = %v, want wisp-failed", all[0].Labels)
+	if len(all) != 0 {
+		t.Fatalf("tracking/work beads with order-run label = %d, want none: %#v", len(all), all)
 	}
 	if !rec.hasType(events.OrderFailed) {
 		t.Fatal("missing order.failed event")
 	}
-	if !strings.Contains(stderr.String(), "reading event cursor for release-watch") {
-		t.Fatalf("stderr = %q, want event cursor read failure", stderr.String())
+	if rec.hasType(events.OrderFired) || rec.hasType(events.OrderCompleted) {
+		t.Fatalf("unexpected action event after cursor head failure: %#v", rec.snapshot())
 	}
 }
 
@@ -1546,60 +1595,11 @@ func TestOrderDispatchSnapshotManyOrdersDoesNotExhaustSharedStoreBudget(t *testi
 	}
 }
 
-func TestCreateOrderTrackingBeadBoundedClosesLateCreateAfterTimeout(t *testing.T) {
-	oldBudget := orderDispatchTrackingWriteBudget
-	orderDispatchTrackingWriteBudget = 50 * time.Millisecond
-	t.Cleanup(func() {
-		orderDispatchTrackingWriteBudget = oldBudget
-	})
-
+func TestOrderDispatchTrackingReservationTimeoutDefersOnlyAffectedOrder(t *testing.T) {
 	base := beads.NewMemStore()
 	store := delayedOrderTrackingCreateStore{
 		Store: base,
-		delay: orderDispatchTrackingWriteBudget + 100*time.Millisecond,
-	}
-
-	_, err := createOrderTrackingBeadBounded(context.Background(), store, beads.Bead{
-		Title:  "order:late-create",
-		Labels: orderTrackingLabels("late-create"),
-	})
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("createOrderTrackingBeadBounded err = %v, want context deadline exceeded", err)
-	}
-
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		rows, listErr := base.List(beads.ListQuery{
-			Label:         scopedOrderTrackingLabel("late-create"),
-			IncludeClosed: true,
-		})
-		if listErr != nil {
-			t.Fatal(listErr)
-		}
-		if len(rows) == 1 && rows[0].Status == "closed" {
-			if got := rows[0].Metadata["close_reason"]; got != abandonedOrderTrackingCloseReason {
-				t.Fatalf("close_reason = %q, want %q", got, abandonedOrderTrackingCloseReason)
-			}
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("late-created tracking bead was not closed: %#v", rows)
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
-}
-
-func TestOrderDispatchStopsTickAfterTrackingWriteTimeout(t *testing.T) {
-	oldBudget := orderDispatchTrackingWriteBudget
-	orderDispatchTrackingWriteBudget = 50 * time.Millisecond
-	t.Cleanup(func() {
-		orderDispatchTrackingWriteBudget = oldBudget
-	})
-
-	base := beads.NewMemStore()
-	store := delayedOrderTrackingCreateStore{
-		Store: base,
-		delay: orderDispatchTrackingWriteBudget + 100*time.Millisecond,
+		delay: beads.RuntimeWriteReservationBudget + 150*time.Millisecond,
 	}
 	var rec memRecorder
 	ran := make(map[string]bool)
@@ -1607,20 +1607,34 @@ func TestOrderDispatchStopsTickAfterTrackingWriteTimeout(t *testing.T) {
 		ran[command] = true
 		return []byte("ok\n"), nil
 	}
+	fastStore := beads.NewMemStore()
 	aa := []orders.Order{
 		{Name: "aaa-first", Trigger: "cooldown", Interval: "1s", Exec: "aaa-first"},
 		{Name: "zzz-second", Trigger: "cooldown", Interval: "1s", Exec: "zzz-second"},
 	}
-	ad := buildOrderDispatcherFromListExec(aa, store, nil, fakeExec, &rec)
-	if ad == nil {
-		t.Fatal("expected non-nil dispatcher")
+	ad := buildOrderDispatcherFromListExec(aa, fastStore, nil, fakeExec, &rec)
+	mad := ad.(*memoryOrderDispatcher)
+	mad.storeFn = func(target execStoreTarget) (beads.Store, error) {
+		if strings.Contains(target.ScopeRoot, "slow") {
+			return orderDispatchTestRuntimeStore{Store: store}, nil
+		}
+		return orderDispatchTestRuntimeStore{Store: fastStore}, nil
 	}
+	mad.cfg.Rigs = []config.Rig{{Name: "slow", Path: "slow"}}
+	mad.aa[0].Rig = "slow"
 
+	start := time.Now()
 	ad.dispatch(context.Background(), t.TempDir(), time.Now().Add(time.Hour))
+	if elapsed := time.Since(start); elapsed >= 5*time.Second {
+		t.Fatalf("dispatch elapsed = %v, want under 5s", elapsed)
+	}
 	ad.drain(context.Background())
 
-	if ran["aaa-first"] || ran["zzz-second"] {
-		t.Fatalf("exec ran after tracking write timeout: ran=%v", ran)
+	if ran["aaa-first"] {
+		t.Fatalf("affected order ran after reservation timeout: ran=%v", ran)
+	}
+	if !ran["zzz-second"] {
+		t.Fatalf("unrelated order did not run after first reservation timeout: ran=%v", ran)
 	}
 	event, ok := rec.orderDispatchTickEvent()
 	if !ok {
@@ -1630,27 +1644,54 @@ func TestOrderDispatchStopsTickAfterTrackingWriteTimeout(t *testing.T) {
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		t.Fatalf("decode tick payload: %v; raw=%s", err, event.Payload)
 	}
-	if payload.DispatchesCreated != 0 || payload.OrdersDeferred != 1 || payload.TrackingWriteFails != 1 {
-		t.Fatalf("tick payload = %+v, want one tracking write deferral and no dispatches", payload)
+	if payload.DispatchesCreated != 1 || payload.OrdersDeferred != 1 || payload.TrackingWriteFails != 1 {
+		t.Fatalf("tick payload = %+v, want one dispatch and one reservation deferral", payload)
 	}
-	if got := payload.DeferReasons["tracking_write"]; got != 1 {
-		t.Fatalf("tracking_write defer reason = %d, want 1; payload=%+v", got, payload)
+	if got := payload.DeferReasons["tracking_reservation"]; got != 1 {
+		t.Fatalf("tracking_reservation defer reason = %d, want 1; payload=%+v", got, payload)
+	}
+}
+
+func TestOrderDispatchTrackingDegradedAllowedStartsWithLocalLease(t *testing.T) {
+	base := beads.NewMemStore()
+	store := delayedOrderTrackingCreateStore{
+		Store: base,
+		delay: beads.RuntimeWriteReservationBudget + 150*time.Millisecond,
+	}
+	var rec memRecorder
+	ran := false
+	fakeExec := func(_ context.Context, command, _ string, _ []string) ([]byte, error) {
+		if command == "beads-health" {
+			ran = true
+		}
+		return []byte("ok\n"), nil
+	}
+	ad := buildOrderDispatcherFromListExec([]orders.Order{{
+		Name:                    "beads-health",
+		Trigger:                 "cooldown",
+		Interval:                "30s",
+		Exec:                    "beads-health",
+		Idempotent:              true,
+		TrackingDegradedAllowed: true,
+		DegradedMinInterval:     "60s",
+	}}, store, nil, fakeExec, &rec)
+	if ad == nil {
+		t.Fatal("expected non-nil dispatcher")
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		first := trackingBeads(t, base, "order-run:aaa-first")
-		second := trackingBeads(t, base, "order-run:zzz-second")
-		if len(first) == 1 && first[0].Status == "closed" && len(second) == 0 {
-			if got := first[0].Metadata["close_reason"]; got != abandonedOrderTrackingCloseReason {
-				t.Fatalf("close_reason = %q, want %q", got, abandonedOrderTrackingCloseReason)
-			}
-			return
+	ad.dispatch(context.Background(), t.TempDir(), time.Now().Add(time.Hour))
+	ad.drain(context.Background())
+	if !ran {
+		t.Fatal("degraded-safe order did not run with local lease")
+	}
+	foundDegraded := false
+	for _, event := range rec.snapshot() {
+		if event.Type == events.OrderTrackingDegraded && event.Subject == "beads-health" {
+			foundDegraded = true
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("tracking beads after timeout: first=%#v second=%#v", first, second)
-		}
-		time.Sleep(25 * time.Millisecond)
+	}
+	if !foundDegraded {
+		t.Fatalf("missing %s event; events=%#v", events.OrderTrackingDegraded, rec.snapshot())
 	}
 }
 
@@ -2036,7 +2077,7 @@ func TestOrderDispatchExecFailure(t *testing.T) {
 	mad.stderr = &stderr
 
 	logs := captureCmdOrderLogs(t, func() {
-		mad.dispatchExec(context.Background(), store, execStoreTarget{ScopeRoot: t.TempDir()}, aa[0], t.TempDir(), tracking.ID)
+		mad.dispatchExec(context.Background(), store, execStoreTarget{ScopeRoot: t.TempDir()}, aa[0], t.TempDir(), trackingRunForTest(tracking.ID))
 	})
 
 	// Check tracking bead has exec-failed label.
@@ -2093,7 +2134,7 @@ dolt.auto-start: false
 	mad.stderr = &stderr
 
 	logs := captureCmdOrderLogs(t, func() {
-		mad.dispatchExec(context.Background(), store, execStoreTarget{ScopeRoot: cityDir, ScopeKind: "city", Prefix: "ct"}, a, cityDir, tracking.ID)
+		mad.dispatchExec(context.Background(), store, execStoreTarget{ScopeRoot: cityDir, ScopeKind: "city", Prefix: "ct"}, a, cityDir, trackingRunForTest(tracking.ID))
 	})
 
 	all := trackingBeads(t, store, "order-run:pg-env")
@@ -2143,7 +2184,7 @@ func TestOrderDispatchExecFailureRedactsSecrets(t *testing.T) {
 	mad.stderr = &stderr
 
 	logs := captureCmdOrderLogs(t, func() {
-		mad.dispatchExec(context.Background(), store, execStoreTarget{ScopeRoot: t.TempDir()}, aa[0], t.TempDir(), tracking.ID)
+		mad.dispatchExec(context.Background(), store, execStoreTarget{ScopeRoot: t.TempDir()}, aa[0], t.TempDir(), trackingRunForTest(tracking.ID))
 	})
 
 	combined := logs + "\n" + stderr.String()
@@ -4898,17 +4939,19 @@ func buildOrderDispatcherFromListExec(aa []orders.Order, store beads.Store, ep e
 	if execRun == nil {
 		execRun = shellExecRunner
 	}
+	runtimeStore := orderDispatchTestRuntimeStore{Store: store}
 	dispatchCtx, dispatchCancel := context.WithCancel(context.Background())
 	return &memoryOrderDispatcher{
 		aa: auto,
 		storeFn: func(_ execStoreTarget) (beads.Store, error) {
-			return store, nil
+			return runtimeStore, nil
 		},
 		ep:             ep,
 		execRun:        execRun,
 		rec:            rec,
 		stderr:         lockedStderr(&bytes.Buffer{}),
 		cfg:            cfg,
+		leaseStore:     newOrderRuntimeLeaseStore(""),
 		dispatchCtx:    dispatchCtx,
 		dispatchCancel: dispatchCancel,
 	}

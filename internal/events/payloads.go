@@ -45,6 +45,8 @@ type OrderDispatchTickPayload struct {
 	OrdersDeferred     int            `json:"orders_deferred"`
 	DeferReasons       map[string]int `json:"defer_reasons,omitempty"`
 	TrackingWriteFails int            `json:"tracking_write_failures,omitempty"`
+	LocalLeaseCount    int            `json:"local_lease_count,omitempty"`
+	WriteDegraded      int            `json:"write_degraded,omitempty"`
 	InFlight           int            `json:"in_flight,omitempty"`
 }
 

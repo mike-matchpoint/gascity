@@ -120,7 +120,11 @@ func (m *MemStore) RuntimeCreate(ctx context.Context, b Bead, policy WritePolicy
 		return Bead{}, degradedWrite(normalizeWritePolicy(policy), "memory", "create", WriteOutcomeNotStarted, ctx.Err())
 	default:
 	}
-	return m.Create(b)
+	created, err := m.Create(b)
+	if existing, ok, duplicateErr := runtimeCreateDuplicateResult(m, b, err, policy, "memory"); ok {
+		return existing, duplicateErr
+	}
+	return created, err
 }
 
 // RuntimeUpdate updates a bead under a runtime write policy.

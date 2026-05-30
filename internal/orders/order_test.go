@@ -66,6 +66,31 @@ enabled = false
 	}
 }
 
+func TestParseRuntimeTrackingPolicyFields(t *testing.T) {
+	data := []byte(`
+[order]
+exec = "gc beads health --quiet"
+trigger = "cooldown"
+interval = "30s"
+idempotent = true
+tracking_degraded_allowed = true
+degraded_min_interval = "60s"
+`)
+	a, err := Parse(data)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !a.Idempotent {
+		t.Error("Idempotent = false, want true")
+	}
+	if !a.TrackingDegradedAllowed {
+		t.Error("TrackingDegradedAllowed = false, want true")
+	}
+	if a.DegradedMinInterval != "60s" {
+		t.Errorf("DegradedMinInterval = %q, want 60s", a.DegradedMinInterval)
+	}
+}
+
 func TestParseInvalid(t *testing.T) {
 	_, err := Parse([]byte(`not valid toml {{{`))
 	if err == nil {
@@ -170,6 +195,48 @@ func TestValidateTimeoutInvalid(t *testing.T) {
 	a := Order{Name: "t", Formula: "mol-t", Trigger: "manual", Timeout: "not-a-duration"}
 	if err := Validate(a); err == nil {
 		t.Error("Validate should fail: invalid timeout")
+	}
+}
+
+func TestValidateTrackingDegradedAllowedRequiresIdempotent(t *testing.T) {
+	a := Order{
+		Name:                    "health",
+		Exec:                    "gc beads health --quiet",
+		Trigger:                 "cooldown",
+		Interval:                "30s",
+		TrackingDegradedAllowed: true,
+	}
+	if err := Validate(a); err == nil {
+		t.Fatal("Validate succeeded, want tracking_degraded_allowed/idempotent error")
+	}
+}
+
+func TestValidateTrackingDegradedAllowedRejectsEventOrders(t *testing.T) {
+	a := Order{
+		Name:                    "event-health",
+		Exec:                    "true",
+		Trigger:                 "event",
+		On:                      "bead.closed",
+		Idempotent:              true,
+		TrackingDegradedAllowed: true,
+	}
+	if err := Validate(a); err == nil {
+		t.Fatal("Validate succeeded, want event tracking_degraded_allowed error")
+	}
+}
+
+func TestValidateDegradedMinInterval(t *testing.T) {
+	a := Order{
+		Name:                    "health",
+		Exec:                    "true",
+		Trigger:                 "cooldown",
+		Interval:                "30s",
+		Idempotent:              true,
+		TrackingDegradedAllowed: true,
+		DegradedMinInterval:     "bad",
+	}
+	if err := Validate(a); err == nil {
+		t.Fatal("Validate succeeded, want degraded_min_interval parse error")
 	}
 }
 

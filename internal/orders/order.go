@@ -42,6 +42,16 @@ type Order struct {
 	Timeout string `toml:"timeout,omitempty"`
 	// Enabled controls whether the order is active. Defaults to true.
 	Enabled *bool `toml:"enabled,omitempty"`
+	// Idempotent marks an order action as safe to run more than once for the
+	// same trigger fingerprint when durable tracking persistence is degraded.
+	Idempotent bool `toml:"idempotent,omitempty"`
+	// TrackingDegradedAllowed allows explicitly idempotent orders to run with
+	// only local runtime lease protection when Beads tracking reservation is
+	// degraded. Defaults to false.
+	TrackingDegradedAllowed bool `toml:"tracking_degraded_allowed,omitempty"`
+	// DegradedMinInterval bounds how frequently a degraded-safe order may run
+	// while durable tracking reservation is degraded.
+	DegradedMinInterval string `toml:"degraded_min_interval,omitempty"`
 	// Source is the absolute file path to the discovered order file (set by scanner, not from TOML).
 	Source string `toml:"-"`
 	// FormulaLayer is the formula layer directory this order was
@@ -62,18 +72,21 @@ func (a *Order) ScopedName() string {
 }
 
 type orderDecode struct {
-	Description string `toml:"description,omitempty"`
-	Formula     string `toml:"formula,omitempty"`
-	Exec        string `toml:"exec,omitempty"`
-	Trigger     string `toml:"trigger,omitempty"`
-	Gate        string `toml:"gate,omitempty"`
-	Interval    string `toml:"interval,omitempty"`
-	Schedule    string `toml:"schedule,omitempty"`
-	Check       string `toml:"check,omitempty"`
-	On          string `toml:"on,omitempty"`
-	Pool        string `toml:"pool,omitempty"`
-	Timeout     string `toml:"timeout,omitempty"`
-	Enabled     *bool  `toml:"enabled,omitempty"`
+	Description             string `toml:"description,omitempty"`
+	Formula                 string `toml:"formula,omitempty"`
+	Exec                    string `toml:"exec,omitempty"`
+	Trigger                 string `toml:"trigger,omitempty"`
+	Gate                    string `toml:"gate,omitempty"`
+	Interval                string `toml:"interval,omitempty"`
+	Schedule                string `toml:"schedule,omitempty"`
+	Check                   string `toml:"check,omitempty"`
+	On                      string `toml:"on,omitempty"`
+	Pool                    string `toml:"pool,omitempty"`
+	Timeout                 string `toml:"timeout,omitempty"`
+	Enabled                 *bool  `toml:"enabled,omitempty"`
+	Idempotent              bool   `toml:"idempotent,omitempty"`
+	TrackingDegradedAllowed bool   `toml:"tracking_degraded_allowed,omitempty"`
+	DegradedMinInterval     string `toml:"degraded_min_interval,omitempty"`
 }
 
 func (d orderDecode) normalized() Order {
@@ -82,17 +95,20 @@ func (d orderDecode) normalized() Order {
 		trigger = d.Gate
 	}
 	return Order{
-		Description: d.Description,
-		Formula:     d.Formula,
-		Exec:        d.Exec,
-		Trigger:     trigger,
-		Interval:    d.Interval,
-		Schedule:    d.Schedule,
-		Check:       d.Check,
-		On:          d.On,
-		Pool:        d.Pool,
-		Timeout:     d.Timeout,
-		Enabled:     d.Enabled,
+		Description:             d.Description,
+		Formula:                 d.Formula,
+		Exec:                    d.Exec,
+		Trigger:                 trigger,
+		Interval:                d.Interval,
+		Schedule:                d.Schedule,
+		Check:                   d.Check,
+		On:                      d.On,
+		Pool:                    d.Pool,
+		Timeout:                 d.Timeout,
+		Enabled:                 d.Enabled,
+		Idempotent:              d.Idempotent,
+		TrackingDegradedAllowed: d.TrackingDegradedAllowed,
+		DegradedMinInterval:     d.DegradedMinInterval,
 	}
 }
 
@@ -156,6 +172,17 @@ func Validate(a Order) error {
 		if _, err := time.ParseDuration(a.Timeout); err != nil {
 			return fmt.Errorf("order %q: invalid timeout %q: %w", a.Name, a.Timeout, err)
 		}
+	}
+	if a.DegradedMinInterval != "" {
+		if _, err := time.ParseDuration(a.DegradedMinInterval); err != nil {
+			return fmt.Errorf("order %q: invalid degraded_min_interval %q: %w", a.Name, a.DegradedMinInterval, err)
+		}
+	}
+	if a.TrackingDegradedAllowed && !a.Idempotent {
+		return fmt.Errorf("order %q: tracking_degraded_allowed requires idempotent=true", a.Name)
+	}
+	if a.TrackingDegradedAllowed && a.Trigger == "event" {
+		return fmt.Errorf("order %q: tracking_degraded_allowed is not supported for event triggers", a.Name)
 	}
 	switch a.Trigger {
 	case "cooldown":

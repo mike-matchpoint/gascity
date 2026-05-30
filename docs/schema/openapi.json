@@ -4226,6 +4226,10 @@
             "format": "int64",
             "type": "integer"
           },
+          "local_lease_count": {
+            "format": "int64",
+            "type": "integer"
+          },
           "orders_considered": {
             "format": "int64",
             "type": "integer"
@@ -4242,6 +4246,10 @@
             "type": "integer"
           },
           "tracking_write_failures": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "write_degraded": {
             "format": "int64",
             "type": "integer"
           }
@@ -4401,6 +4409,9 @@
           "check": {
             "type": "string"
           },
+          "degraded_min_interval": {
+            "type": "string"
+          },
           "description": {
             "type": "string"
           },
@@ -4416,6 +4427,9 @@
           "gate": {
             "deprecated": true,
             "type": "string"
+          },
+          "idempotent": {
+            "type": "boolean"
           },
           "interval": {
             "type": "string"
@@ -4445,6 +4459,9 @@
             "format": "int64",
             "type": "integer"
           },
+          "tracking_degraded_allowed": {
+            "type": "boolean"
+          },
           "trigger": {
             "type": "string"
           },
@@ -4458,6 +4475,8 @@
           "type",
           "timeout_ms",
           "enabled",
+          "idempotent",
+          "tracking_degraded_allowed",
           "capture_output"
         ],
         "type": "object"
@@ -7526,6 +7545,7 @@
             "order.dispatch.tick": "#/components/schemas/TypedEventStreamEnvelopeOrderDispatchTick",
             "order.failed": "#/components/schemas/TypedEventStreamEnvelopeOrderFailed",
             "order.fired": "#/components/schemas/TypedEventStreamEnvelopeOrderFired",
+            "order.tracking.degraded": "#/components/schemas/TypedEventStreamEnvelopeOrderTrackingDegraded",
             "project.identity.stamped": "#/components/schemas/TypedEventStreamEnvelopeProjectIdentityStamped",
             "provider.swapped": "#/components/schemas/TypedEventStreamEnvelopeProviderSwapped",
             "request.failed": "#/components/schemas/TypedEventStreamEnvelopeRequestFailed",
@@ -7657,6 +7677,9 @@
           },
           {
             "$ref": "#/components/schemas/TypedEventStreamEnvelopeOrderFired"
+          },
+          {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelopeOrderTrackingDegraded"
           },
           {
             "$ref": "#/components/schemas/TypedEventStreamEnvelopeProjectIdentityStamped"
@@ -8288,6 +8311,7 @@
                 "order.completed",
                 "order.failed",
                 "order.dispatch.tick",
+                "order.tracking.degraded",
                 "provider.swapped",
                 "worker.operation",
                 "project.identity.stamped",
@@ -9209,6 +9233,48 @@
           "payload"
         ],
         "title": "TypedEventStreamEnvelope order.fired",
+        "type": "object"
+      },
+      "TypedEventStreamEnvelopeOrderTrackingDegraded": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/NoPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "order.tracking.degraded",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload"
+        ],
+        "title": "TypedEventStreamEnvelope order.tracking.degraded",
         "type": "object"
       },
       "TypedEventStreamEnvelopeProjectIdentityStamped": {
@@ -10591,6 +10657,7 @@
             "order.dispatch.tick": "#/components/schemas/TypedTaggedEventStreamEnvelopeOrderDispatchTick",
             "order.failed": "#/components/schemas/TypedTaggedEventStreamEnvelopeOrderFailed",
             "order.fired": "#/components/schemas/TypedTaggedEventStreamEnvelopeOrderFired",
+            "order.tracking.degraded": "#/components/schemas/TypedTaggedEventStreamEnvelopeOrderTrackingDegraded",
             "project.identity.stamped": "#/components/schemas/TypedTaggedEventStreamEnvelopeProjectIdentityStamped",
             "provider.swapped": "#/components/schemas/TypedTaggedEventStreamEnvelopeProviderSwapped",
             "request.failed": "#/components/schemas/TypedTaggedEventStreamEnvelopeRequestFailed",
@@ -10722,6 +10789,9 @@
           },
           {
             "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeOrderFired"
+          },
+          {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeOrderTrackingDegraded"
           },
           {
             "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeProjectIdentityStamped"
@@ -11400,6 +11470,7 @@
                 "order.completed",
                 "order.failed",
                 "order.dispatch.tick",
+                "order.tracking.degraded",
                 "provider.swapped",
                 "worker.operation",
                 "project.identity.stamped",
@@ -12406,6 +12477,52 @@
           "city"
         ],
         "title": "TypedTaggedEventStreamEnvelope order.fired",
+        "type": "object"
+      },
+      "TypedTaggedEventStreamEnvelopeOrderTrackingDegraded": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/NoPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "order.tracking.degraded",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload",
+          "city"
+        ],
+        "title": "TypedTaggedEventStreamEnvelope order.tracking.degraded",
         "type": "object"
       },
       "TypedTaggedEventStreamEnvelopeProjectIdentityStamped": {

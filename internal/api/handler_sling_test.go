@@ -640,7 +640,7 @@ title = "Do work"
 		t.Fatal(err)
 	}
 	store := state.stores["myrig"]
-	source, err := store.Create(beads.Bead{ID: "BL-42", Title: "test task", Type: "task"})
+	source, err := store.Create(beads.Bead{ID: "gc-42", Title: "test task", Type: "task"})
 	if err != nil {
 		t.Fatal(err)
 	}

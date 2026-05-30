@@ -1766,11 +1766,13 @@ type OrderDispatchTickPayload struct {
 	DispatchesCreated     int64             `json:"dispatches_created"`
 	DurationS             float64           `json:"duration_s"`
 	InFlight              *int64            `json:"in_flight,omitempty"`
+	LocalLeaseCount       *int64            `json:"local_lease_count,omitempty"`
 	OrdersConsidered      int64             `json:"orders_considered"`
 	OrdersDeferred        int64             `json:"orders_deferred"`
 	StartedAt             string            `json:"started_at"`
 	StoresTouched         int64             `json:"stores_touched"`
 	TrackingWriteFailures *int64            `json:"tracking_write_failures,omitempty"`
+	WriteDegraded         *int64            `json:"write_degraded,omitempty"`
 }
 
 // OrderHistoryDetailResponse defines model for OrderHistoryDetailResponse.
@@ -1814,25 +1816,28 @@ type OrderListBody struct {
 
 // OrderResponse defines model for OrderResponse.
 type OrderResponse struct {
-	CaptureOutput bool    `json:"capture_output"`
-	Check         *string `json:"check,omitempty"`
-	Description   *string `json:"description,omitempty"`
-	Enabled       bool    `json:"enabled"`
-	Exec          *string `json:"exec,omitempty"`
-	Formula       *string `json:"formula,omitempty"`
+	CaptureOutput       bool    `json:"capture_output"`
+	Check               *string `json:"check,omitempty"`
+	DegradedMinInterval *string `json:"degraded_min_interval,omitempty"`
+	Description         *string `json:"description,omitempty"`
+	Enabled             bool    `json:"enabled"`
+	Exec                *string `json:"exec,omitempty"`
+	Formula             *string `json:"formula,omitempty"`
 	// Deprecated: this property has been marked as deprecated upstream, but no `x-deprecated-reason` was set
-	Gate       *string `json:"gate,omitempty"`
-	Interval   *string `json:"interval,omitempty"`
-	Name       string  `json:"name"`
-	On         *string `json:"on,omitempty"`
-	Pool       *string `json:"pool,omitempty"`
-	Rig        *string `json:"rig,omitempty"`
-	Schedule   *string `json:"schedule,omitempty"`
-	ScopedName string  `json:"scoped_name"`
-	Timeout    *string `json:"timeout,omitempty"`
-	TimeoutMs  int64   `json:"timeout_ms"`
-	Trigger    *string `json:"trigger,omitempty"`
-	Type       string  `json:"type"`
+	Gate                    *string `json:"gate,omitempty"`
+	Idempotent              bool    `json:"idempotent"`
+	Interval                *string `json:"interval,omitempty"`
+	Name                    string  `json:"name"`
+	On                      *string `json:"on,omitempty"`
+	Pool                    *string `json:"pool,omitempty"`
+	Rig                     *string `json:"rig,omitempty"`
+	Schedule                *string `json:"schedule,omitempty"`
+	ScopedName              string  `json:"scoped_name"`
+	Timeout                 *string `json:"timeout,omitempty"`
+	TimeoutMs               int64   `json:"timeout_ms"`
+	TrackingDegradedAllowed bool    `json:"tracking_degraded_allowed"`
+	Trigger                 *string `json:"trigger,omitempty"`
+	Type                    string  `json:"type"`
 }
 
 // OrdersFeedBody defines model for OrdersFeedBody.
@@ -3430,6 +3435,18 @@ type TypedEventStreamEnvelopeOrderFired struct {
 	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
 }
 
+// TypedEventStreamEnvelopeOrderTrackingDegraded defines model for TypedEventStreamEnvelopeOrderTrackingDegraded.
+type TypedEventStreamEnvelopeOrderTrackingDegraded struct {
+	Actor    string                   `json:"actor"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  NoPayload                `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
 // TypedEventStreamEnvelopeProjectIdentityStamped defines model for TypedEventStreamEnvelopeProjectIdentityStamped.
 type TypedEventStreamEnvelopeProjectIdentityStamped struct {
 	Actor    string                        `json:"actor"`
@@ -4237,6 +4254,19 @@ type TypedTaggedEventStreamEnvelopeOrderFailed struct {
 
 // TypedTaggedEventStreamEnvelopeOrderFired defines model for TypedTaggedEventStreamEnvelopeOrderFired.
 type TypedTaggedEventStreamEnvelopeOrderFired struct {
+	Actor    string                   `json:"actor"`
+	City     string                   `json:"city"`
+	Message  *string                  `json:"message,omitempty"`
+	Payload  NoPayload                `json:"payload"`
+	Seq      int64                    `json:"seq"`
+	Subject  *string                  `json:"subject,omitempty"`
+	Ts       time.Time                `json:"ts"`
+	Type     string                   `json:"type"`
+	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedTaggedEventStreamEnvelopeOrderTrackingDegraded defines model for TypedTaggedEventStreamEnvelopeOrderTrackingDegraded.
+type TypedTaggedEventStreamEnvelopeOrderTrackingDegraded struct {
 	Actor    string                   `json:"actor"`
 	City     string                   `json:"city"`
 	Message  *string                  `json:"message,omitempty"`
@@ -7596,6 +7626,34 @@ func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeOrderFired(v Typ
 	return err
 }
 
+// AsTypedEventStreamEnvelopeOrderTrackingDegraded returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeOrderTrackingDegraded
+func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeOrderTrackingDegraded() (TypedEventStreamEnvelopeOrderTrackingDegraded, error) {
+	var body TypedEventStreamEnvelopeOrderTrackingDegraded
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedEventStreamEnvelopeOrderTrackingDegraded overwrites any union data inside the TypedEventStreamEnvelope as the provided TypedEventStreamEnvelopeOrderTrackingDegraded
+func (t *TypedEventStreamEnvelope) FromTypedEventStreamEnvelopeOrderTrackingDegraded(v TypedEventStreamEnvelopeOrderTrackingDegraded) error {
+	v.Type = "order.tracking.degraded"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedEventStreamEnvelopeOrderTrackingDegraded performs a merge with any union data inside the TypedEventStreamEnvelope, using the provided TypedEventStreamEnvelopeOrderTrackingDegraded
+func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeOrderTrackingDegraded(v TypedEventStreamEnvelopeOrderTrackingDegraded) error {
+	v.Type = "order.tracking.degraded"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
 // AsTypedEventStreamEnvelopeProjectIdentityStamped returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeProjectIdentityStamped
 func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeProjectIdentityStamped() (TypedEventStreamEnvelopeProjectIdentityStamped, error) {
 	var body TypedEventStreamEnvelopeProjectIdentityStamped
@@ -8600,6 +8658,8 @@ func (t TypedEventStreamEnvelope) ValueByDiscriminator() (interface{}, error) {
 		return t.AsTypedEventStreamEnvelopeOrderFailed()
 	case "order.fired":
 		return t.AsTypedEventStreamEnvelopeOrderFired()
+	case "order.tracking.degraded":
+		return t.AsTypedEventStreamEnvelopeOrderTrackingDegraded()
 	case "project.identity.stamped":
 		return t.AsTypedEventStreamEnvelopeProjectIdentityStamped()
 	case "provider.swapped":
@@ -9565,6 +9625,34 @@ func (t *TypedTaggedEventStreamEnvelope) FromTypedTaggedEventStreamEnvelopeOrder
 // MergeTypedTaggedEventStreamEnvelopeOrderFired performs a merge with any union data inside the TypedTaggedEventStreamEnvelope, using the provided TypedTaggedEventStreamEnvelopeOrderFired
 func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeOrderFired(v TypedTaggedEventStreamEnvelopeOrderFired) error {
 	v.Type = "order.fired"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedTaggedEventStreamEnvelopeOrderTrackingDegraded returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeOrderTrackingDegraded
+func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeOrderTrackingDegraded() (TypedTaggedEventStreamEnvelopeOrderTrackingDegraded, error) {
+	var body TypedTaggedEventStreamEnvelopeOrderTrackingDegraded
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedTaggedEventStreamEnvelopeOrderTrackingDegraded overwrites any union data inside the TypedTaggedEventStreamEnvelope as the provided TypedTaggedEventStreamEnvelopeOrderTrackingDegraded
+func (t *TypedTaggedEventStreamEnvelope) FromTypedTaggedEventStreamEnvelopeOrderTrackingDegraded(v TypedTaggedEventStreamEnvelopeOrderTrackingDegraded) error {
+	v.Type = "order.tracking.degraded"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedTaggedEventStreamEnvelopeOrderTrackingDegraded performs a merge with any union data inside the TypedTaggedEventStreamEnvelope, using the provided TypedTaggedEventStreamEnvelopeOrderTrackingDegraded
+func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeOrderTrackingDegraded(v TypedTaggedEventStreamEnvelopeOrderTrackingDegraded) error {
+	v.Type = "order.tracking.degraded"
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -10579,6 +10667,8 @@ func (t TypedTaggedEventStreamEnvelope) ValueByDiscriminator() (interface{}, err
 		return t.AsTypedTaggedEventStreamEnvelopeOrderFailed()
 	case "order.fired":
 		return t.AsTypedTaggedEventStreamEnvelopeOrderFired()
+	case "order.tracking.degraded":
+		return t.AsTypedTaggedEventStreamEnvelopeOrderTrackingDegraded()
 	case "project.identity.stamped":
 		return t.AsTypedTaggedEventStreamEnvelopeProjectIdentityStamped()
 	case "provider.swapped":

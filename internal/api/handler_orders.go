@@ -18,24 +18,27 @@ var (
 )
 
 type orderResponse struct {
-	Name          string `json:"name"`
-	ScopedName    string `json:"scoped_name"`
-	Description   string `json:"description,omitempty"`
-	Type          string `json:"type"`
-	Trigger       string `json:"trigger,omitempty"`
-	Gate          string `json:"gate,omitempty" deprecated:"true"`
-	Interval      string `json:"interval,omitempty"`
-	Schedule      string `json:"schedule,omitempty"`
-	Check         string `json:"check,omitempty"`
-	On            string `json:"on,omitempty"`
-	Formula       string `json:"formula,omitempty"`
-	Exec          string `json:"exec,omitempty"`
-	Pool          string `json:"pool,omitempty"`
-	Timeout       string `json:"timeout,omitempty"`
-	TimeoutMs     int64  `json:"timeout_ms"`
-	Enabled       bool   `json:"enabled"`
-	Rig           string `json:"rig,omitempty"`
-	CaptureOutput bool   `json:"capture_output"`
+	Name                    string `json:"name"`
+	ScopedName              string `json:"scoped_name"`
+	Description             string `json:"description,omitempty"`
+	Type                    string `json:"type"`
+	Trigger                 string `json:"trigger,omitempty"`
+	Gate                    string `json:"gate,omitempty" deprecated:"true"`
+	Interval                string `json:"interval,omitempty"`
+	Schedule                string `json:"schedule,omitempty"`
+	Check                   string `json:"check,omitempty"`
+	On                      string `json:"on,omitempty"`
+	Formula                 string `json:"formula,omitempty"`
+	Exec                    string `json:"exec,omitempty"`
+	Pool                    string `json:"pool,omitempty"`
+	Timeout                 string `json:"timeout,omitempty"`
+	TimeoutMs               int64  `json:"timeout_ms"`
+	Enabled                 bool   `json:"enabled"`
+	Idempotent              bool   `json:"idempotent"`
+	TrackingDegradedAllowed bool   `json:"tracking_degraded_allowed"`
+	DegradedMinInterval     string `json:"degraded_min_interval,omitempty"`
+	Rig                     string `json:"rig,omitempty"`
+	CaptureOutput           bool   `json:"capture_output"`
 }
 
 func resolveOrder(aa []orders.Order, name string) (*orders.Order, error) {
@@ -72,24 +75,27 @@ func toOrderResponse(a orders.Order) orderResponse {
 		typ = "exec"
 	}
 	return orderResponse{
-		Name:          a.Name,
-		ScopedName:    a.ScopedName(),
-		Description:   a.Description,
-		Type:          typ,
-		Trigger:       a.Trigger,
-		Gate:          a.Trigger, // Deprecated alias: mirror trigger during the migration window.
-		Interval:      a.Interval,
-		Schedule:      a.Schedule,
-		Check:         a.Check,
-		On:            a.On,
-		Formula:       a.Formula,
-		Exec:          a.Exec,
-		Pool:          a.Pool,
-		Timeout:       a.Timeout,
-		TimeoutMs:     a.TimeoutOrDefault().Milliseconds(),
-		Enabled:       a.IsEnabled(),
-		Rig:           a.Rig,
-		CaptureOutput: a.IsExec(), // exec orders capture output
+		Name:                    a.Name,
+		ScopedName:              a.ScopedName(),
+		Description:             a.Description,
+		Type:                    typ,
+		Trigger:                 a.Trigger,
+		Gate:                    a.Trigger, // Deprecated alias: mirror trigger during the migration window.
+		Interval:                a.Interval,
+		Schedule:                a.Schedule,
+		Check:                   a.Check,
+		On:                      a.On,
+		Formula:                 a.Formula,
+		Exec:                    a.Exec,
+		Pool:                    a.Pool,
+		Timeout:                 a.Timeout,
+		TimeoutMs:               a.TimeoutOrDefault().Milliseconds(),
+		Enabled:                 a.IsEnabled(),
+		Idempotent:              a.Idempotent,
+		TrackingDegradedAllowed: a.TrackingDegradedAllowed,
+		DegradedMinInterval:     a.DegradedMinInterval,
+		Rig:                     a.Rig,
+		CaptureOutput:           a.IsExec(), // exec orders capture output
 	}
 }
 

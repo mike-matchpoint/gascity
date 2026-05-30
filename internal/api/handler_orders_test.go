@@ -43,12 +43,15 @@ func TestHandleOrderList(t *testing.T) {
 	enabled := true
 	fs.autos = []orders.Order{
 		{
-			Name:        "dolt-health",
-			Description: "Check dolt status",
-			Exec:        "dolt status",
-			Trigger:     "cooldown",
-			Interval:    "5m",
-			Enabled:     &enabled,
+			Name:                    "dolt-health",
+			Description:             "Check dolt status",
+			Exec:                    "dolt status",
+			Trigger:                 "cooldown",
+			Interval:                "5m",
+			Enabled:                 &enabled,
+			Idempotent:              true,
+			TrackingDegradedAllowed: true,
+			DegradedMinInterval:     "60s",
 		},
 		{
 			Name:    "deploy",
@@ -94,6 +97,15 @@ func TestHandleOrderList(t *testing.T) {
 	if !a0.Enabled {
 		t.Error("expected enabled=true")
 	}
+	if !a0.Idempotent {
+		t.Error("expected idempotent=true")
+	}
+	if !a0.TrackingDegradedAllowed {
+		t.Error("expected tracking_degraded_allowed=true")
+	}
+	if a0.DegradedMinInterval != "60s" {
+		t.Errorf("degraded_min_interval = %q, want 60s", a0.DegradedMinInterval)
+	}
 
 	a1 := resp.Orders[1]
 	if a1.Name != "deploy" {
@@ -114,11 +126,14 @@ func TestHandleOrderGet(t *testing.T) {
 	fs := newFakeState(t)
 	fs.autos = []orders.Order{
 		{
-			Name:        "dolt-health",
-			Description: "Check dolt status",
-			Exec:        "dolt status",
-			Trigger:     "cooldown",
-			Interval:    "5m",
+			Name:                    "dolt-health",
+			Description:             "Check dolt status",
+			Exec:                    "dolt status",
+			Trigger:                 "cooldown",
+			Interval:                "5m",
+			Idempotent:              true,
+			TrackingDegradedAllowed: true,
+			DegradedMinInterval:     "60s",
 		},
 	}
 	h := newTestCityHandler(t, fs)
@@ -140,6 +155,15 @@ func TestHandleOrderGet(t *testing.T) {
 	}
 	if resp.Type != "exec" {
 		t.Errorf("type = %q, want %q", resp.Type, "exec")
+	}
+	if !resp.Idempotent {
+		t.Error("expected idempotent=true")
+	}
+	if !resp.TrackingDegradedAllowed {
+		t.Error("expected tracking_degraded_allowed=true")
+	}
+	if resp.DegradedMinInterval != "60s" {
+		t.Errorf("degraded_min_interval = %q, want 60s", resp.DegradedMinInterval)
 	}
 }
 

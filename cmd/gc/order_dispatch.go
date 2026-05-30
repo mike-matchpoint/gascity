@@ -74,13 +74,9 @@ const (
 	staleOrderWispCloseReason     = "order-tracking sweep: stale order wisp subtree exceeded retention window"
 
 	completedOrderTrackingCloseReason = "order dispatch completed: tracking bead lifecycle finished"
-	abandonedOrderTrackingCloseReason = "order dispatch abandoned: tracking create finished after timeout"
 )
 
-var (
-	orderDispatchTrackingWriteBudget = 60 * time.Second
-	orderDispatchMaxCreatesPerTick   = 4
-)
+var orderDispatchMaxCreatesPerTick = 4
 
 // orderDispatchStartupThrottleWindow bounds how long after controller start the
 // per-tick create cap (orderDispatchMaxCreatesPerTick) is enforced. The cap
@@ -291,8 +287,10 @@ type memoryOrderDispatcher struct {
 	cityName           string
 	cacheMu            sync.Mutex
 	lastRunCache       map[string]time.Time
+	degradedRunCache   map[string]time.Time
 	nextCandidateStart int
 	startedAt          time.Time
+	leaseStore         *orderRuntimeLeaseStore
 
 	dispatchCtx    context.Context
 	dispatchCancel context.CancelFunc
@@ -340,11 +338,14 @@ type orderDispatchTickStats struct {
 	ordersDeferred        int
 	deferReasons          map[string]int
 	trackingWriteFailures int
+	writeDegraded         int
 }
 
-type orderTrackingCreateResult struct {
-	bead beads.Bead
-	err  error
+type orderDispatchRun struct {
+	TrackingID       string
+	LeaseID          string
+	TrackingReserved bool
+	EventSeq         uint64
 }
 
 // buildOrderDispatcher scans formula layers for orders and returns a
@@ -444,6 +445,7 @@ func buildOrderDispatcherFromOrderSet(cityPath string, cfg *config.City, allAA [
 		cfg:            cfg,
 		cityName:       loadedCityName(cfg, cityPath),
 		startedAt:      time.Now(),
+		leaseStore:     newOrderRuntimeLeaseStore(cityPath),
 		dispatchCtx:    dispatchCtx,
 		dispatchCancel: dispatchCancel,
 	}
@@ -592,19 +594,20 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 			redacted := redactOrderEnvError(err, os.Environ())
 			msg := fmt.Sprintf("building trigger env: %s", redacted)
 			logDispatchError(m.stderr, "gc: order dispatch: building trigger env for %s: %s", a.ScopedName(), redacted)
-			// Leave this open so the existing open-work gate suppresses repeat
-			// ticks until the normal stale tracking sweep gives the order another try.
-			trackingBead, createErr := createOrderTrackingBeadBounded(ctx, candidate.store, beads.Bead{
-				Title:  "order:" + scoped,
-				Labels: append(orderTrackingLabels(scoped), labelTriggerEnvFailed),
-			})
-			if createErr != nil {
-				logDispatchError(m.stderr, "gc: order dispatch: creating trigger env failure tracking bead for %s: %v", scoped, createErr)
-				stats.recordTrackingWriteFailure()
-				stats.recordDeferred("tracking_write")
-				return
+			run, reservedAt, ok := m.reserveOrderForDispatch(ctx, candidate.store, candidate.storeKey, a, now, 0, append(orderTrackingLabels(scoped), labelTriggerEnvFailed), stats)
+			if !ok {
+				continue
 			}
-			m.rememberLastRun(scoped, candidate.gateStoreKeys, trackingBead.CreatedAt)
+			m.rememberLastRun(scoped, candidate.gateStoreKeys, reservedAt)
+			if err := m.runtimeTrackingUpdate(ctx, candidate.store, run.TrackingID, beads.UpdateOpts{Labels: []string{labelTriggerEnvFailed}}, beads.WriteClassAuditRepair, "order.dispatch.trigger-env-failed", run.TrackingID); err != nil {
+				m.recordOrderTrackingDegraded(scoped, run.TrackingID, "trigger-env-failed", err, stats)
+			}
+			if run.TrackingReserved {
+				if err := m.closeOrderTrackingRuntime(ctx, candidate.store, run); err != nil {
+					m.recordOrderTrackingDegraded(scoped, run.TrackingID, "trigger-env-close", err, stats)
+				}
+			}
+			m.leaseStore.markReservationDegraded(run.LeaseID, errors.New("trigger env failed"))
 			stats.recordDeferred("trigger_env")
 			m.rec.Record(events.Event{
 				Type:    events.OrderFailed,
@@ -625,6 +628,9 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 		if !result.Due {
 			continue
 		}
+		if m.degradedCadenceSuppresses(scoped, a, now) {
+			continue
+		}
 		if m.dispatchCreateLimitReached(stats, limit) {
 			// Cap reached before dispatching this due candidate. Resume the
 			// round-robin here next tick so this order — and the ones after
@@ -636,19 +642,16 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 			return
 		}
 
-		// Create tracking bead synchronously BEFORE dispatch goroutine.
-		// This prevents the cooldown trigger from re-firing on the next tick.
-		trackingBead, err := createOrderTrackingBeadBounded(ctx, candidate.store, beads.Bead{
-			Title:  "order:" + scoped,
-			Labels: orderTrackingLabels(scoped),
-		})
+		eventSeq, err := m.eventReservationSeq(a)
 		if err != nil {
-			logDispatchError(m.stderr, "gc: order dispatch: creating tracking bead for %s: %v", scoped, err)
-			stats.recordTrackingWriteFailure()
-			stats.recordDeferred("tracking_write")
-			return
+			m.recordOrderDispatchDeferred(scoped, fmt.Errorf("event cursor head: %w", err), stats)
+			continue
 		}
-		m.rememberLastRun(scoped, candidate.gateStoreKeys, trackingBead.CreatedAt)
+		run, reservedAt, ok := m.reserveOrderForDispatch(ctx, candidate.store, candidate.storeKey, a, now, eventSeq, orderTrackingLabels(scoped), stats)
+		if !ok {
+			continue
+		}
+		m.rememberLastRun(scoped, candidate.gateStoreKeys, reservedAt)
 		stats.dispatchesCreated++
 		if candidateCount > 0 {
 			advanceTo = (rotateStart + j + 1) % candidateCount
@@ -659,7 +662,7 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 		// controller exit or config reload.
 		orderToDispatch := a
 		m.addInflight()
-		m.launchDispatchOne(ctx, candidate.store, candidate.target, orderToDispatch, cityPath, trackingBead.ID)
+		m.launchDispatchOne(ctx, candidate.store, candidate.target, orderToDispatch, cityPath, run)
 	}
 
 	// Loop completed without hitting the cap. If anything dispatched, resume
@@ -720,6 +723,84 @@ func (m *memoryOrderDispatcher) dispatchCreateLimitReached(stats *orderDispatchT
 	return stats.dispatchesCreated >= limit
 }
 
+func (m *memoryOrderDispatcher) eventReservationSeq(a orders.Order) (uint64, error) {
+	if a.Trigger != "event" || m.ep == nil {
+		return 0, nil
+	}
+	seq, err := m.ep.LatestSeq()
+	if err != nil {
+		return 0, err
+	}
+	return seq, nil
+}
+
+func (m *memoryOrderDispatcher) reserveOrderForDispatch(ctx context.Context, store beads.Store, storeKey string, a orders.Order, now time.Time, eventSeq uint64, labels []string, stats *orderDispatchTickStats) (orderDispatchRun, time.Time, bool) {
+	scoped := a.ScopedName()
+	reservation := orderRuntimeReservationFor(a, storeKey, now, eventSeq)
+	reservation.Lease.ControllerStartID = m.controllerStartID()
+	lease, acquired, err := m.leaseStore.acquire(reservation.Lease)
+	if err != nil {
+		logDispatchError(m.stderr, "gc: order dispatch: acquiring runtime lease for %s: %v", scoped, err)
+		stats.recordDeferred("local_lease")
+		return orderDispatchRun{}, time.Time{}, false
+	}
+	if !acquired {
+		stats.recordDeferred("local_lease")
+		logDispatchError(m.stderr, "gc: order dispatch: suppressing %s behind runtime lease %s state=%s", scoped, lease.LeaseID, lease.State)
+		return orderDispatchRun{}, time.Time{}, false
+	}
+
+	run := orderDispatchRun{
+		TrackingID: reservation.TrackingID,
+		LeaseID:    reservation.Lease.LeaseID,
+		EventSeq:   eventSeq,
+	}
+	bead := beads.Bead{
+		ID:     reservation.TrackingID,
+		Title:  "order:" + scoped,
+		Labels: labels,
+		Metadata: map[string]string{
+			"gc.order.runtime_write_isolation": orderRuntimeLeaseVersion,
+			"gc.order.scoped":                  scoped,
+			"gc.order.trigger_kind":            a.Trigger,
+			"gc.order.trigger_fingerprint":     reservation.Fingerprint,
+			"gc.order.reservation_input":       reservation.Input,
+			"gc.order.reservation_hash":        reservation.Hash,
+			"gc.order.lease_id":                reservation.Lease.LeaseID,
+			"gc.idempotency_key":               reservation.Hash,
+		},
+	}
+	policy := beads.RuntimeWritePolicy(beads.WriteClassReservation, "order.dispatch.tracking-reservation", reservation.Hash)
+	created, err := beads.RuntimeCreate(ctx, store, bead, policy)
+	if err == nil {
+		run.TrackingReserved = true
+		reservedAt := created.CreatedAt
+		if reservedAt.IsZero() {
+			reservedAt = now
+		}
+		m.leaseStore.markActive(run.LeaseID, effectiveTimeout(a, m.maxTimeout))
+		return run, reservedAt, true
+	}
+	m.recordOrderTrackingDegraded(scoped, reservation.TrackingID, "reservation", err, stats)
+	if !a.TrackingDegradedAllowed {
+		logDispatchError(m.stderr, "gc: order dispatch: deferring %s because tracking reservation is degraded: %v", scoped, err)
+		stats.recordTrackingWriteFailure()
+		stats.recordDeferred("tracking_reservation")
+		m.leaseStore.markReservationDegraded(run.LeaseID, err)
+		return orderDispatchRun{}, time.Time{}, false
+	}
+	m.leaseStore.markActive(run.LeaseID, effectiveTimeout(a, m.maxTimeout))
+	m.rememberDegradedRun(scoped, now)
+	return run, now, true
+}
+
+func (m *memoryOrderDispatcher) controllerStartID() string {
+	if m == nil || m.startedAt.IsZero() {
+		return ""
+	}
+	return m.startedAt.UTC().Format(time.RFC3339Nano)
+}
+
 func (s *orderDispatchTickStats) touchStore(key string) {
 	if s == nil || key == "" {
 		return
@@ -749,6 +830,13 @@ func (s *orderDispatchTickStats) recordTrackingWriteFailure() {
 		return
 	}
 	s.trackingWriteFailures++
+}
+
+func (s *orderDispatchTickStats) recordWriteDegraded() {
+	if s == nil {
+		return
+	}
+	s.writeDegraded++
 }
 
 func buildOrderDispatchSnapshots(ctx context.Context, inputs map[string]*orderDispatchSnapshotInput, now time.Time) orderDispatchSnapshots {
@@ -824,6 +912,9 @@ func (s *orderDispatchStoreSnapshot) captureOpenTracking(ctx context.Context, st
 		if b.Status == "closed" {
 			continue
 		}
+		if b.Metadata["gc.order.runtime_write_isolation"] == orderRuntimeLeaseVersion {
+			continue
+		}
 		name, ok := orderNameFromTrackingBead(b)
 		if !ok {
 			continue
@@ -855,6 +946,9 @@ func (s *orderDispatchStoreSnapshot) captureOrder(ctx context.Context, store bea
 	for _, b := range openWork {
 		if needsLastRun && b.CreatedAt.After(s.lastRunByOrder[scopedName]) {
 			s.lastRunByOrder[scopedName] = b.CreatedAt
+		}
+		if b.Metadata["gc.order.runtime_write_isolation"] == orderRuntimeLeaseVersion {
+			continue
 		}
 		if b.Status == "closed" {
 			continue
@@ -1102,6 +1196,8 @@ func (m *memoryOrderDispatcher) recordOrderDispatchTick(stats *orderDispatchTick
 		OrdersDeferred:     stats.ordersDeferred,
 		DeferReasons:       deferReasons,
 		TrackingWriteFails: stats.trackingWriteFailures,
+		LocalLeaseCount:    m.leaseStore.count(),
+		WriteDegraded:      stats.writeDegraded,
 		InFlight:           m.currentInflight(),
 	})
 	if err != nil {
@@ -1116,51 +1212,14 @@ func (m *memoryOrderDispatcher) recordOrderDispatchTick(stats *orderDispatchTick
 	})
 }
 
-func createOrderTrackingBeadBounded(ctx context.Context, store beads.Store, bead beads.Bead) (beads.Bead, error) {
-	if store == nil {
-		return beads.Bead{}, fmt.Errorf("nil store")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	writeCtx, cancel := context.WithTimeout(ctx, orderDispatchTrackingWriteBudget)
-	defer cancel()
-	done := make(chan orderTrackingCreateResult, 1)
-	go func() {
-		created, err := store.Create(bead)
-		done <- orderTrackingCreateResult{bead: created, err: err}
-	}()
-	select {
-	case result := <-done:
-		return result.bead, result.err
-	case <-writeCtx.Done():
-		go closeLateCreatedOrderTrackingBead(store, done)
-		return beads.Bead{}, writeCtx.Err()
-	}
-}
-
-func closeLateCreatedOrderTrackingBead(store beads.Store, done <-chan orderTrackingCreateResult) {
-	result := <-done
-	if result.err != nil || result.bead.ID == "" {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), orderDispatchTrackingWriteBudget)
-	defer cancel()
-	_, _ = closeAndVerifyOrderTrackingBeads(ctx, store, []string{result.bead.ID}, map[string]string{
-		"close_reason":            abandonedOrderTrackingCloseReason,
-		"order_tracking_cleanup":  "late-create-timeout",
-		"order_tracking_sweep_by": "controller-timeout-cleanup",
-	})
-}
-
 // launchDispatchOne spawns dispatchOne with a context that cancels when
 // EITHER the caller's tick ctx OR m.dispatchCtx is done — required so
 // cancel() reaches goroutines whose tick ctx was context.Background().
 // Falls back to the bare caller ctx when m.dispatchCtx is nil (test
 // sites that don't initialize the cancel fields).
-func (m *memoryOrderDispatcher) launchDispatchOne(ctx context.Context, store beads.Store, target execStoreTarget, a orders.Order, cityPath, trackingID string) {
+func (m *memoryOrderDispatcher) launchDispatchOne(ctx context.Context, store beads.Store, target execStoreTarget, a orders.Order, cityPath string, run orderDispatchRun) {
 	if m.dispatchCtx == nil {
-		go m.dispatchOne(ctx, store, target, a, cityPath, trackingID)
+		go m.dispatchOne(ctx, store, target, a, cityPath, run)
 		return
 	}
 	mergedCtx, cancelMerged := context.WithCancel(ctx)
@@ -1168,7 +1227,7 @@ func (m *memoryOrderDispatcher) launchDispatchOne(ctx context.Context, store bea
 	go func() {
 		defer stopAfter()
 		defer cancelMerged()
-		m.dispatchOne(mergedCtx, store, target, a, cityPath, trackingID)
+		m.dispatchOne(mergedCtx, store, target, a, cityPath, run)
 	}()
 }
 
@@ -1263,6 +1322,34 @@ func (m *memoryOrderDispatcher) rememberLastRun(orderName string, storeKeys []st
 	}
 }
 
+func (m *memoryOrderDispatcher) rememberDegradedRun(orderName string, at time.Time) {
+	if m == nil || orderName == "" || at.IsZero() {
+		return
+	}
+	m.cacheMu.Lock()
+	defer m.cacheMu.Unlock()
+	if m.degradedRunCache == nil {
+		m.degradedRunCache = make(map[string]time.Time)
+	}
+	if existing, ok := m.degradedRunCache[orderName]; !ok || at.After(existing) {
+		m.degradedRunCache[orderName] = at
+	}
+}
+
+func (m *memoryOrderDispatcher) degradedCadenceSuppresses(orderName string, a orders.Order, now time.Time) bool {
+	minInterval := orderDegradedMinInterval(a)
+	if m == nil || minInterval <= 0 {
+		return false
+	}
+	m.cacheMu.Lock()
+	last := m.degradedRunCache[orderName]
+	m.cacheMu.Unlock()
+	if last.IsZero() {
+		return false
+	}
+	return now.Sub(last) < minInterval
+}
+
 func orderHistoryCacheKey(orderName string, storeKeys []string) string {
 	return orderName + "\x00" + strings.Join(storeKeys, "\x00")
 }
@@ -1292,31 +1379,83 @@ func eventCursorLabels(scoped string, headSeq uint64) []string {
 // dispatchOne runs a single order dispatch in its own goroutine.
 // For exec orders, runs the script directly. For formula orders,
 // instantiates a wisp. Emits events and updates the tracking bead.
-func (m *memoryOrderDispatcher) dispatchOne(ctx context.Context, store beads.Store, target execStoreTarget, a orders.Order, cityPath, trackingID string) {
+func (m *memoryOrderDispatcher) dispatchOne(ctx context.Context, store beads.Store, target execStoreTarget, a orders.Order, cityPath string, run orderDispatchRun) {
 	// Defer order matters: doneInflight runs last, after Close makes the
 	// tracking bead outcome observable to a waiting drain.
 	defer m.doneInflight()
 	defer func() {
-		if err := closeOrderTrackingBead(ctx, store, trackingID); err != nil {
-			logDispatchError(m.stderr, "gc: order %s: closing tracking bead %s: %v", a.ScopedName(), trackingID, err)
+		if !run.TrackingReserved {
+			m.leaseStore.markCompletedPendingAudit(run.LeaseID, "tracking-reservation", errors.New("tracking reservation degraded"))
+			return
 		}
+		if lease, ok := m.leaseStore.load(run.LeaseID); ok && lease.State == orderRuntimeLeaseCompletedPendingCritical {
+			return
+		}
+		if err := m.closeOrderTrackingRuntime(ctx, store, run); err != nil {
+			logDispatchError(m.stderr, "gc: order %s: closing tracking bead %s: %v", a.ScopedName(), run.TrackingID, err)
+			m.recordOrderTrackingDegraded(a.ScopedName(), run.TrackingID, "tracking-close", err, nil)
+			m.leaseStore.markCompletedPendingAudit(run.LeaseID, "tracking-close", err)
+			return
+		}
+		m.leaseStore.completeAndRemove(run.LeaseID)
 	}()
 
 	timeout := effectiveTimeout(a, m.maxTimeout)
 	childCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	stopHeartbeat := m.startOrderLeaseHeartbeat(childCtx, run.LeaseID)
+	defer stopHeartbeat()
 
 	scoped := a.ScopedName()
-	m.rec.Record(events.Event{
-		Type:    events.OrderFired,
-		Actor:   "controller",
-		Subject: scoped,
-	})
+	if a.Trigger == "event" && run.EventSeq > 0 {
+		if err := m.runtimeTrackingUpdate(childCtx, store, run.TrackingID, beads.UpdateOpts{Labels: eventCursorLabels(scoped, run.EventSeq)}, beads.WriteClassCursorReservation, "order.dispatch.event-cursor", run.TrackingID); err != nil {
+			logDispatchError(m.stderr, "gc: order %s: failed to persist event cursor seq=%d on tracking bead %s: %v", scoped, run.EventSeq, run.TrackingID, err)
+			m.recordOrderTrackingDegraded(scoped, run.TrackingID, "event-cursor", err, nil)
+			m.leaseStore.markAbandoned(run.LeaseID, err)
+			return
+		}
+	}
 
 	if a.IsExec() {
-		m.dispatchExec(childCtx, store, target, a, cityPath, trackingID)
+		m.dispatchExec(childCtx, store, target, a, cityPath, run)
 	} else {
-		m.dispatchWisp(childCtx, store, a, cityPath, trackingID)
+		m.dispatchWisp(childCtx, store, a, cityPath, run)
+	}
+}
+
+func (m *memoryOrderDispatcher) closeOrderTrackingRuntime(ctx context.Context, store beads.Store, run orderDispatchRun) error {
+	if !run.TrackingReserved || run.TrackingID == "" {
+		return nil
+	}
+	_, err := beads.RuntimeCloseAll(ctx, store, []string{run.TrackingID}, map[string]string{
+		"close_reason": completedOrderTrackingCloseReason,
+	}, beads.RuntimeWritePolicy(beads.WriteClassAuditRepair, "order.dispatch.tracking-close", run.TrackingID))
+	return err
+}
+
+func (m *memoryOrderDispatcher) runtimeTrackingUpdate(ctx context.Context, store beads.Store, id string, opts beads.UpdateOpts, class beads.WriteClass, caller, idempotencyKey string) error {
+	if id == "" {
+		return fmt.Errorf("runtime tracking update: empty id")
+	}
+	policy := beads.RuntimeWritePolicy(class, caller, idempotencyKey)
+	return beads.RuntimeUpdate(ctx, store, id, opts, policy)
+}
+
+func (m *memoryOrderDispatcher) recordOrderTrackingDegraded(scoped, trackingID, operation string, err error, stats *orderDispatchTickStats) {
+	if err == nil {
+		return
+	}
+	if stats != nil {
+		stats.recordWriteDegraded()
+	}
+	if m != nil && m.rec != nil {
+		msg := fmt.Sprintf("%s tracking bead %s degraded: %v", operation, trackingID, err)
+		m.rec.Record(events.Event{
+			Type:    events.OrderTrackingDegraded,
+			Actor:   "controller",
+			Subject: scoped,
+			Message: msg,
+		})
 	}
 }
 
@@ -1325,6 +1464,32 @@ func closeOrderTrackingBead(ctx context.Context, store beads.Store, trackingID s
 		"close_reason": completedOrderTrackingCloseReason,
 	})
 	return err
+}
+
+func (m *memoryOrderDispatcher) startOrderLeaseHeartbeat(ctx context.Context, leaseID string) func() {
+	if m == nil || m.leaseStore == nil || leaseID == "" {
+		return func() {}
+	}
+	done := make(chan struct{})
+	var ctxDone <-chan struct{}
+	if ctx != nil {
+		ctxDone = ctx.Done()
+	}
+	go func() {
+		ticker := time.NewTicker(orderRuntimeLeaseHeartbeatEvery)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctxDone:
+				return
+			case <-ticker.C:
+				m.leaseStore.heartbeat(leaseID)
+			}
+		}
+	}()
+	return func() { close(done) }
 }
 
 func closeAndVerifyOrderTrackingBeads(ctx context.Context, store beads.Store, ids []string, metadata map[string]string) (int, error) {
@@ -1425,47 +1590,9 @@ func openOrderTrackingIDs(store beads.Store, ids []string) ([]string, error) {
 }
 
 // dispatchExec runs an exec order's shell command.
-func (m *memoryOrderDispatcher) dispatchExec(ctx context.Context, store beads.Store, target execStoreTarget, a orders.Order, cityPath, trackingID string) {
+func (m *memoryOrderDispatcher) dispatchExec(ctx context.Context, store beads.Store, target execStoreTarget, a orders.Order, cityPath string, run orderDispatchRun) {
 	scoped := a.ScopedName()
 	labels := []string{"exec"}
-	var headSeq uint64
-	var hasEventCursor bool
-	if a.Trigger == "event" && m.ep != nil {
-		var err error
-		headSeq, err = m.ep.LatestSeq()
-		if err != nil {
-			errMsg := fmt.Sprintf("reading event cursor: %v", err)
-			labels = []string{"exec-failed"}
-			logDispatchError(m.stderr, "gc: order dispatch: reading event cursor for %s: %v", scoped, err)
-			if updateErr := store.Update(trackingID, beads.UpdateOpts{Labels: labels}); updateErr != nil {
-				logDispatchError(m.stderr, "gc: order %s: failed to label exec tracking bead %s: %v", scoped, trackingID, updateErr)
-			}
-			m.rec.Record(events.Event{
-				Type:    events.OrderFailed,
-				Actor:   "controller",
-				Subject: scoped,
-				Message: errMsg,
-			})
-			return
-		}
-		hasEventCursor = true
-		// Event-triggered exec orders persist the cursor before the command
-		// runs; otherwise a crash after the side effect can replay the event.
-		if err := store.Update(trackingID, beads.UpdateOpts{Labels: eventCursorLabels(scoped, headSeq)}); err != nil {
-			logDispatchError(m.stderr, "gc: order %s: failed to label exec event cursor on tracking bead %s: %v", scoped, trackingID, err)
-			labels = []string{"exec-failed"}
-			if updateErr := store.Update(trackingID, beads.UpdateOpts{Labels: labels}); updateErr != nil {
-				logDispatchError(m.stderr, "gc: order %s: failed to label exec tracking bead %s: %v", scoped, trackingID, updateErr)
-			}
-			m.rec.Record(events.Event{
-				Type:    events.OrderFailed,
-				Actor:   "controller",
-				Subject: scoped,
-				Message: fmt.Sprintf("exec tracking bead %s event cursor label failed for seq=%d: %v", trackingID, headSeq, err),
-			})
-			return
-		}
-	}
 
 	env, err := orderExecEnvWithError(cityPath, m.cfg, target, a)
 	var output []byte
@@ -1477,6 +1604,11 @@ func (m *memoryOrderDispatcher) dispatchExec(ctx context.Context, store beads.St
 		labels = []string{"exec-env-failed"}
 		logDispatchError(m.stderr, "gc: order exec %s env failed: %s", scoped, redacted)
 	} else {
+		m.rec.Record(events.Event{
+			Type:    events.OrderFired,
+			Actor:   "controller",
+			Subject: scoped,
+		})
 		output, err = m.execRun(ctx, a.Exec, target.ScopeRoot, env)
 		if err != nil {
 			redactionEnv := append(os.Environ(), env...)
@@ -1491,23 +1623,15 @@ func (m *memoryOrderDispatcher) dispatchExec(ctx context.Context, store beads.St
 
 	// Label tracking bead with outcome via store (not CLI). For event execs,
 	// cursor labels were already persisted before the command ran.
-	if err := store.Update(trackingID, beads.UpdateOpts{Labels: labels}); err != nil {
-		logDispatchError(m.stderr, "gc: order %s: failed to label exec tracking bead %s: %v", scoped, trackingID, err)
-		msg := fmt.Sprintf("exec tracking bead %s label failed: %v", trackingID, err)
-		if hasEventCursor {
-			msg = fmt.Sprintf("seq=%d: %s", headSeq, msg)
+	if run.TrackingReserved {
+		if err := m.runtimeTrackingUpdate(ctx, store, run.TrackingID, beads.UpdateOpts{Labels: labels}, beads.WriteClassAuditRepair, "order.dispatch.exec-outcome", run.TrackingID); err != nil {
+			logDispatchError(m.stderr, "gc: order %s: failed to label exec tracking bead %s: %v", scoped, run.TrackingID, err)
+			m.recordOrderTrackingDegraded(scoped, run.TrackingID, "exec-outcome", err, nil)
 		}
-		m.rec.Record(events.Event{
-			Type:    events.OrderFailed,
-			Actor:   "controller",
-			Subject: scoped,
-			Message: msg,
-		})
-		return
 	}
 	if execErrMsg != "" {
-		if hasEventCursor {
-			execErrMsg = fmt.Sprintf("seq=%d: %s", headSeq, execErrMsg)
+		if run.EventSeq > 0 {
+			execErrMsg = fmt.Sprintf("seq=%d: %s", run.EventSeq, execErrMsg)
 		}
 		m.rec.Record(events.Event{
 			Type:    events.OrderFailed,
@@ -1532,7 +1656,7 @@ func redactOrderEnvError(err error, env []string) string {
 }
 
 // dispatchWisp instantiates a wisp from the order's formula.
-func (m *memoryOrderDispatcher) dispatchWisp(ctx context.Context, store beads.Store, a orders.Order, cityPath, trackingID string) {
+func (m *memoryOrderDispatcher) dispatchWisp(ctx context.Context, store beads.Store, a orders.Order, cityPath string, run orderDispatchRun) {
 	scoped := a.ScopedName()
 
 	if err := ctx.Err(); err != nil {
@@ -1542,28 +1666,10 @@ func (m *memoryOrderDispatcher) dispatchWisp(ctx context.Context, store beads.St
 			Subject: scoped,
 			Message: err.Error(),
 		})
-		store.Update(trackingID, beads.UpdateOpts{Labels: []string{"wisp", "wisp-canceled"}}) //nolint:errcheck // best-effort
-		return
-	}
-
-	// Capture event head before wisp creation for event triggers. Event runs
-	// fail closed when the cursor cannot be read.
-	var headSeq uint64
-	if a.Trigger == "event" && m.ep != nil {
-		var err error
-		headSeq, err = m.ep.LatestSeq()
-		if err != nil {
-			errMsg := fmt.Sprintf("reading event cursor: %v", err)
-			logDispatchError(m.stderr, "gc: order dispatch: reading event cursor for %s: %v", scoped, err)
-			m.rec.Record(events.Event{
-				Type:    events.OrderFailed,
-				Actor:   "controller",
-				Subject: scoped,
-				Message: errMsg,
-			})
-			m.markTrackingFailure(store, trackingID, scoped, a, 0)
-			return
+		if run.TrackingReserved {
+			_ = m.runtimeTrackingUpdate(ctx, store, run.TrackingID, beads.UpdateOpts{Labels: []string{"wisp", "wisp-canceled"}}, beads.WriteClassAuditRepair, "order.dispatch.wisp-canceled", run.TrackingID)
 		}
+		return
 	}
 
 	var searchPaths []string
@@ -1578,7 +1684,7 @@ func (m *memoryOrderDispatcher) dispatchWisp(ctx context.Context, store beads.St
 			Subject: scoped,
 			Message: err.Error(),
 		})
-		m.markTrackingFailure(store, trackingID, scoped, a, headSeq)
+		m.markTrackingFailure(ctx, store, run, scoped, a)
 		return
 	}
 	if err := molecule.ValidateRecipeRuntimeVars(recipe, molecule.Options{}); err != nil {
@@ -1588,7 +1694,7 @@ func (m *memoryOrderDispatcher) dispatchWisp(ctx context.Context, store beads.St
 			Subject: scoped,
 			Message: err.Error(),
 		})
-		m.markTrackingFailure(store, trackingID, scoped, a, headSeq)
+		m.markTrackingFailure(ctx, store, run, scoped, a)
 		return
 	}
 
@@ -1603,7 +1709,7 @@ func (m *memoryOrderDispatcher) dispatchWisp(ctx context.Context, store beads.St
 				Subject: scoped,
 				Message: err.Error(),
 			})
-			m.markTrackingFailure(store, trackingID, scoped, a, headSeq)
+			m.markTrackingFailure(ctx, store, run, scoped, a)
 			return
 		}
 	}
@@ -1617,6 +1723,12 @@ func (m *memoryOrderDispatcher) dispatchWisp(ctx context.Context, store beads.St
 		}
 	}
 
+	m.rec.Record(events.Event{
+		Type:    events.OrderFired,
+		Actor:   "controller",
+		Subject: scoped,
+	})
+
 	cookResult, err := molecule.Instantiate(ctx, store, recipe, molecule.Options{})
 	if err != nil {
 		m.rec.Record(events.Event{
@@ -1625,9 +1737,10 @@ func (m *memoryOrderDispatcher) dispatchWisp(ctx context.Context, store beads.St
 			Subject: scoped,
 			Message: err.Error(),
 		})
-		m.markTrackingFailure(store, trackingID, scoped, a, headSeq)
+		m.markTrackingFailure(ctx, store, run, scoped, a)
 		return
 	}
+
 	rootID := cookResult.RootID
 
 	// Stamp the created wisp through the store contract rather than a raw
@@ -1636,13 +1749,13 @@ func (m *memoryOrderDispatcher) dispatchWisp(ctx context.Context, store beads.St
 	if a.Trigger == "event" && m.ep != nil {
 		update.Labels = append(update.Labels,
 			fmt.Sprintf("order:%s", scoped),
-			fmt.Sprintf("seq:%d", headSeq),
+			fmt.Sprintf("seq:%d", run.EventSeq),
 		)
 	}
 	if a.Pool != "" {
 		update.Metadata = routedwork.FormulaOrderPoolDemandMetadata(pool)
 	}
-	if err := store.Update(rootID, update); err != nil {
+	if err := m.runtimeTrackingUpdate(ctx, store, rootID, update, beads.WriteClassPostActionCritical, "order.dispatch.wisp-root-critical", rootID); err != nil {
 		// Label failure is critical for duplicate-dispatch prevention.
 		// Log and emit an event so operators can investigate.
 		logDispatchError(m.stderr, "gc: order %s: failed to label wisp %s: %v", scoped, rootID, err)
@@ -1652,7 +1765,8 @@ func (m *memoryOrderDispatcher) dispatchWisp(ctx context.Context, store beads.St
 			Subject: scoped,
 			Message: fmt.Sprintf("wisp %s created but label failed: %v", rootID, err),
 		})
-		m.markTrackingFailure(store, trackingID, scoped, a, headSeq)
+		m.leaseStore.markCompletedPendingCritical(run.LeaseID, "wisp-root-label:"+rootID, err)
+		m.markTrackingFailure(ctx, store, run, scoped, a)
 		return
 	}
 
@@ -1663,7 +1777,11 @@ func (m *memoryOrderDispatcher) dispatchWisp(ctx context.Context, store beads.St
 	})
 
 	// Label tracking bead with outcome.
-	store.Update(trackingID, beads.UpdateOpts{Labels: []string{"wisp"}}) //nolint:errcheck // best-effort
+	if run.TrackingReserved {
+		if err := m.runtimeTrackingUpdate(ctx, store, run.TrackingID, beads.UpdateOpts{Labels: []string{"wisp"}}, beads.WriteClassAuditRepair, "order.dispatch.wisp-outcome", run.TrackingID); err != nil {
+			m.recordOrderTrackingDegraded(scoped, run.TrackingID, "wisp-outcome", err, nil)
+		}
+	}
 }
 
 // orderRigSuspended reports whether the order targets a suspended rig.
@@ -1685,13 +1803,17 @@ func (m *memoryOrderDispatcher) orderRigSuspended(a orders.Order) bool {
 	return m.rigSuspendedByName(rigName)
 }
 
-func (m *memoryOrderDispatcher) markTrackingFailure(store beads.Store, trackingID, scoped string, a orders.Order, headSeq uint64) {
-	labels := []string{"wisp", "wisp-failed"}
-	if a.Trigger == "event" && headSeq > 0 {
-		labels = append(labels, eventCursorLabels(scoped, headSeq)...)
+func (m *memoryOrderDispatcher) markTrackingFailure(ctx context.Context, store beads.Store, run orderDispatchRun, scoped string, a orders.Order) {
+	if !run.TrackingReserved {
+		return
 	}
-	if err := store.Update(trackingID, beads.UpdateOpts{Labels: labels}); err != nil {
-		logDispatchError(m.stderr, "gc: order %s: failed to mark tracking bead %s as failed: %v", scoped, trackingID, err)
+	labels := []string{"wisp", "wisp-failed"}
+	if a.Trigger == "event" && run.EventSeq > 0 {
+		labels = append(labels, eventCursorLabels(scoped, run.EventSeq)...)
+	}
+	if err := m.runtimeTrackingUpdate(ctx, store, run.TrackingID, beads.UpdateOpts{Labels: labels}, beads.WriteClassAuditRepair, "order.dispatch.mark-failed", run.TrackingID); err != nil {
+		logDispatchError(m.stderr, "gc: order %s: failed to mark tracking bead %s as failed: %v", scoped, run.TrackingID, err)
+		m.recordOrderTrackingDegraded(scoped, run.TrackingID, "mark-failed", err, nil)
 	}
 }
 

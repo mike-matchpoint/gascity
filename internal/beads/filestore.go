@@ -1,10 +1,13 @@
 package beads
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -202,6 +205,41 @@ func (fs *FileStore) Create(b Bead) (Bead, error) {
 	return result, nil
 }
 
+// RuntimeCreate persists a bead under a runtime write policy. FileStore writes
+// are local in-process mutations guarded by the existing file lock, so the
+// runtime path preserves normal persistence semantics while honoring already
+// canceled callers.
+func (fs *FileStore) RuntimeCreate(ctx context.Context, b Bead, policy WritePolicy) (Bead, error) {
+	if fs == nil {
+		return Bead{}, degradedWrite(policy, "", "create", WriteOutcomeUnsupported, errors.New("nil FileStore"))
+	}
+	policy = normalizeWritePolicy(policy)
+	key := strings.TrimSpace(b.ID)
+	if key == "" {
+		key = strings.TrimSpace(policy.IdempotencyKey)
+	}
+	value, err := fs.runtimeWriteManager().do(ctx, policy, "create", key, func(writeCtx context.Context) (any, error) {
+		select {
+		case <-ctxDone(writeCtx):
+			return Bead{}, degradedWrite(policy, fs.runtimeWriteStoreKey(), "create", WriteOutcomeNotStarted, writeCtx.Err())
+		default:
+		}
+		created, createErr := fs.Create(b)
+		if existing, ok, duplicateErr := runtimeCreateDuplicateResult(fs, b, createErr, policy, fs.runtimeWriteStoreKey()); ok {
+			return existing, duplicateErr
+		}
+		return created, createErr
+	})
+	if err != nil {
+		return Bead{}, err
+	}
+	created, ok := value.(Bead)
+	if !ok {
+		return Bead{}, degradedWrite(policy, fs.runtimeWriteStoreKey(), "create", WriteOutcomeFailed, errors.New("runtime create returned non-bead result"))
+	}
+	return created, nil
+}
+
 // Update delegates to MemStore.Update and flushes to disk.
 // If the disk flush fails, the in-memory mutation is rolled back.
 func (fs *FileStore) Update(id string, opts UpdateOpts) error {
@@ -223,6 +261,23 @@ func (fs *FileStore) Update(id string, opts UpdateOpts) error {
 		return err
 	}
 	return nil
+}
+
+// RuntimeUpdate updates a bead under a runtime write policy.
+func (fs *FileStore) RuntimeUpdate(ctx context.Context, id string, opts UpdateOpts, policy WritePolicy) error {
+	if fs == nil {
+		return degradedWrite(policy, "", "update", WriteOutcomeUnsupported, errors.New("nil FileStore"))
+	}
+	policy = normalizeWritePolicy(policy)
+	_, err := fs.runtimeWriteManager().do(ctx, policy, "update", id, func(writeCtx context.Context) (any, error) {
+		select {
+		case <-ctxDone(writeCtx):
+			return nil, degradedWrite(policy, fs.runtimeWriteStoreKey(), "update", WriteOutcomeNotStarted, writeCtx.Err())
+		default:
+		}
+		return nil, fs.Update(id, opts)
+	})
+	return err
 }
 
 // Claim atomically claims a bead under the file-store cross-process lock.
@@ -340,6 +395,36 @@ func (fs *FileStore) CloseAll(ids []string, metadata map[string]string) (int, er
 		}
 	}
 	return closed, nil
+}
+
+// RuntimeCloseAll closes beads under a runtime write policy.
+func (fs *FileStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy WritePolicy) (int, error) {
+	if fs == nil {
+		return 0, degradedWrite(policy, "", "close-all", WriteOutcomeUnsupported, errors.New("nil FileStore"))
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	policy = normalizeWritePolicy(policy)
+	value, err := fs.runtimeWriteManager().do(ctx, policy, "close-all", strings.Join(ids, ","), func(writeCtx context.Context) (any, error) {
+		select {
+		case <-ctxDone(writeCtx):
+			return 0, degradedWrite(policy, fs.runtimeWriteStoreKey(), "close-all", WriteOutcomeNotStarted, writeCtx.Err())
+		default:
+		}
+		return fs.CloseAll(ids, metadata)
+	})
+	if err != nil {
+		if n, ok := value.(int); ok {
+			return n, err
+		}
+		return 0, err
+	}
+	n, ok := value.(int)
+	if !ok {
+		return 0, degradedWrite(policy, fs.runtimeWriteStoreKey(), "close-all", WriteOutcomeFailed, errors.New("runtime close-all returned non-int result"))
+	}
+	return n, nil
 }
 
 // SetMetadata delegates to MemStore.SetMetadata and flushes to disk.
@@ -482,6 +567,34 @@ func (fs *FileStore) Ping() error {
 		return fmt.Errorf("pinging file store: %w", err)
 	}
 	return nil
+}
+
+// RuntimePing checks file-store write health under a runtime write policy.
+func (fs *FileStore) RuntimePing(ctx context.Context, policy WritePolicy) error {
+	if fs == nil {
+		return degradedWrite(policy, "", "ping", WriteOutcomeUnsupported, errors.New("nil FileStore"))
+	}
+	policy = normalizeWritePolicy(policy)
+	_, err := fs.runtimeWriteManager().do(ctx, policy, "ping", "ping", func(writeCtx context.Context) (any, error) {
+		select {
+		case <-ctxDone(writeCtx):
+			return nil, degradedWrite(policy, fs.runtimeWriteStoreKey(), "ping", WriteOutcomeNotStarted, writeCtx.Err())
+		default:
+		}
+		return nil, fs.Ping()
+	})
+	return err
+}
+
+func (fs *FileStore) runtimeWriteStoreKey() string {
+	if fs == nil {
+		return ""
+	}
+	return "file:" + fs.path
+}
+
+func (fs *FileStore) runtimeWriteManager() *runtimeWriteManager {
+	return runtimeWriteManagerForKey(fs.runtimeWriteStoreKey())
 }
 
 // DepAdd delegates to MemStore.DepAdd and flushes to disk.

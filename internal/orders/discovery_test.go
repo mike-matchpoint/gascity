@@ -270,3 +270,25 @@ func TestDiscoverRootReturnsUnreadableRootError(t *testing.T) {
 		t.Fatalf("error = %v, want readable root context", err)
 	}
 }
+
+func TestDiscoverRootValidatesTrackingDegradedPolicy(t *testing.T) {
+	fs := fsys.NewFake()
+	fs.Files["/pack/orders/health-check.toml"] = []byte(`
+[order]
+exec = "true"
+trigger = "cooldown"
+interval = "30s"
+tracking_degraded_allowed = true
+`)
+
+	_, err := discoverRoot(fs, ScanRoot{
+		Dir:          "/pack/orders",
+		FormulaLayer: "/pack/formulas",
+	})
+	if err == nil {
+		t.Fatal("discoverRoot succeeded, want tracking_degraded_allowed validation error")
+	}
+	if !strings.Contains(err.Error(), "tracking_degraded_allowed requires idempotent=true") {
+		t.Fatalf("error = %v, want tracking degraded validation", err)
+	}
+}
