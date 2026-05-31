@@ -72,6 +72,7 @@ const (
 	// WriteOutcomeNotStarted means the runtime write was rejected before the
 	// Beads command started.
 	WriteOutcomeNotStarted       WriteOutcome = "not-started"
+	WriteOutcomeNotFound         WriteOutcome = "not-found"
 	WriteOutcomeAmbiguousTimeout WriteOutcome = "ambiguous-timeout"
 	WriteOutcomeFailed           WriteOutcome = "failed"
 	WriteOutcomePartial          WriteOutcome = "partial"

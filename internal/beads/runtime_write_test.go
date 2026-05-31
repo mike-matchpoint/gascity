@@ -588,6 +588,33 @@ func TestBdStoreRuntimeUpdateRetriesTransientWriteError(t *testing.T) {
 	}
 }
 
+func TestBdStoreRuntimeGetNotFoundTraceIsNonDegraded(t *testing.T) {
+	tracePath := filepath.Join(t.TempDir(), "bd.trace")
+	t.Setenv("GC_BD_TRACE", tracePath)
+	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(_ context.Context, _ string, _ string, args ...string) ([]byte, error) {
+		if strings.Join(args, " ") != "show --json gc-missing" {
+			t.Fatalf("args = %v, want show --json gc-missing", args)
+		}
+		return nil, fmt.Errorf("exit status 1: Error fetching gc-missing: no issue found matching %q", "gc-missing")
+	})
+	policy := RuntimeReadPolicy(ReadClassHotAuthoritative, "test.runtime-get-missing")
+	_, err := store.RuntimeGet(context.Background(), "gc-missing", policy)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("RuntimeGet err = %v, want ErrNotFound", err)
+	}
+	traceBytes, err := os.ReadFile(tracePath)
+	if err != nil {
+		t.Fatalf("read trace: %v", err)
+	}
+	trace := string(traceBytes)
+	if !strings.Contains(trace, "outcome=not-found") {
+		t.Fatalf("trace missing not-found outcome:\n%s", trace)
+	}
+	if strings.Contains(trace, "outcome=failed") || strings.Contains(trace, "outcome=ambiguous-timeout") {
+		t.Fatalf("trace recorded expected not-found as degraded:\n%s", trace)
+	}
+}
+
 func TestBdStoreRuntimeWriteHotStateSuccessClosesOpenBreaker(t *testing.T) {
 	var fail atomic.Bool
 	fail.Store(true)

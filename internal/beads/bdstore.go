@@ -326,10 +326,10 @@ func (s *BdStore) RuntimeGet(ctx context.Context, id string, policy ReadPolicy) 
 	defer cancel()
 	writePolicy := RuntimeWritePolicy(WriteClassHotState, policy.Caller, "runtime-get:"+id)
 	writePolicy.Timeout = policy.Timeout
-	out, err := s.runRuntimeBD(readCtx, writePolicy, "get", "show", "--json", id)
+	out, err := s.runRuntimeBDGet(readCtx, writePolicy, id)
 	if err != nil {
-		if isBdNotFound(err) {
-			return Bead{}, fmt.Errorf("getting bead %q: %w", id, ErrNotFound)
+		if errors.Is(err, ErrNotFound) {
+			return Bead{}, err
 		}
 		return Bead{}, degradedRead(policy, "get", "bd", "", err)
 	}
@@ -341,6 +341,33 @@ func (s *BdStore) RuntimeGet(ctx context.Context, id string, policy ReadPolicy) 
 		return Bead{}, fmt.Errorf("getting bead %q: %w", id, ErrNotFound)
 	}
 	return issues[0].toBead(), nil
+}
+
+func (s *BdStore) runRuntimeBDGet(ctx context.Context, policy WritePolicy, id string) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	args := []string{"show", "--json", id}
+	start := time.Now()
+	s.recordRuntimeWriteEvent(events.RuntimeWriteStarted, policy, "get", args, 0, nil)
+	if s.ctxRunner == nil && s.runner == nil {
+		err := degradedWrite(policy, s.RuntimeWriteStoreKey(), "get", WriteOutcomeUnsupported, errors.New("nil bd command runner"))
+		s.traceRuntimeWrite(policy, "get", args, time.Since(start), err)
+		return nil, err
+	}
+	out, err := s.runRuntimeBDCommand(ctx, args...)
+	if err != nil {
+		if isBdNotFound(err) {
+			notFound := fmt.Errorf("getting bead %q: %w", id, ErrNotFound)
+			s.traceRuntimeWrite(policy, "get", args, time.Since(start), notFound)
+			return out, notFound
+		}
+		wrapped := s.runtimeCommandError(ctx, policy, "get", err)
+		s.traceRuntimeWrite(policy, "get", args, time.Since(start), wrapped)
+		return out, wrapped
+	}
+	s.traceRuntimeWrite(policy, "get", args, time.Since(start), nil)
+	return out, nil
 }
 
 // RuntimeReady has no safe direct BdStore implementation because bd ready is a
@@ -1703,6 +1730,8 @@ func (s *BdStore) traceRuntimeWrite(policy WritePolicy, operation string, args [
 	switch {
 	case err == nil:
 		s.recordRuntimeWriteEvent(events.RuntimeWriteCompleted, policy, operation, args, duration, nil)
+	case outcome == WriteOutcomeNotFound:
+		s.recordRuntimeWriteEvent(events.RuntimeWriteCompleted, policy, operation, args, duration, err)
 	case outcome == WriteOutcomeAmbiguousTimeout:
 		s.recordRuntimeWriteEvent(events.RuntimeWriteTimeout, policy, operation, args, duration, err)
 	default:
@@ -1713,6 +1742,9 @@ func (s *BdStore) traceRuntimeWrite(policy WritePolicy, operation string, args [
 func runtimeWriteOutcomeForTrace(err error) WriteOutcome {
 	if err == nil {
 		return "success"
+	}
+	if errors.Is(err, ErrNotFound) {
+		return WriteOutcomeNotFound
 	}
 	var degraded *DegradedWriteError
 	if errors.As(err, &degraded) && degraded.Outcome != "" {
