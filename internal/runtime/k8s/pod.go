@@ -231,6 +231,7 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 	if err != nil {
 		return nil, err
 	}
+	env = appendAgentEnvDefaults(env, p.agentEnv)
 
 	// Build volume mounts for the main container.
 	// When prebaked, skip the ws EmptyDir — it would shadow baked image content.
@@ -440,20 +441,32 @@ func buildPodEnvForRoot(cfgEnv map[string]string, podCityRoot, podWorkDir, manag
 	// Start with cfg.Env, removing controller-only vars.
 	// Auth creds (GC_DOLT_USER, GC_DOLT_PASSWORD, BEADS_DOLT_*_USER/PASSWORD) intentionally pass through.
 	skip := map[string]bool{
-		"GC_BEADS":               true,
-		"GC_SESSION":             true,
-		"GC_EVENTS":              true,
-		"GC_K8S_DOLT_HOST":       true,
-		"GC_K8S_DOLT_PORT":       true,
-		"GC_DOLT_HOST":           true,
-		"GC_DOLT_PORT":           true,
-		"BEADS_DOLT_SERVER_HOST": true,
-		"BEADS_DOLT_SERVER_PORT": true,
-		"HOME":                   true,
-		"CODEX_HOME":             true,
-		"CLAUDE_CONFIG_DIR":      true,
-		"XDG_CONFIG_HOME":        true,
-		"XDG_STATE_HOME":         true,
+		"GC_BEADS":                               true,
+		"GC_SESSION":                             true,
+		"GC_EVENTS":                              true,
+		"GC_K8S_DOLT_HOST":                       true,
+		"GC_K8S_DOLT_PORT":                       true,
+		"GC_K8S_AGENT_ENV_JSON":                  true,
+		"GC_DOLT_HOST":                           true,
+		"GC_DOLT_PORT":                           true,
+		"BEADS_DOLT_SERVER_HOST":                 true,
+		"BEADS_DOLT_SERVER_PORT":                 true,
+		"AWS_ACCESS_KEY_ID":                      true,
+		"AWS_SECRET_ACCESS_KEY":                  true,
+		"AWS_SESSION_TOKEN":                      true,
+		"AWS_SECURITY_TOKEN":                     true,
+		"AWS_PROFILE":                            true,
+		"AWS_ROLE_ARN":                           true,
+		"AWS_WEB_IDENTITY_TOKEN_FILE":            true,
+		"AWS_CONTAINER_CREDENTIALS_FULL_URI":     true,
+		"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": true,
+		"AWS_CONTAINER_AUTHORIZATION_TOKEN":      true,
+		"AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE": true,
+		"HOME":                                   true,
+		"CODEX_HOME":                             true,
+		"CLAUDE_CONFIG_DIR":                      true,
+		"XDG_CONFIG_HOME":                        true,
+		"XDG_STATE_HOME":                         true,
 	}
 
 	ctrlCity := controllerCityPath(cfgEnv)
@@ -538,6 +551,30 @@ func buildPodEnvForRoot(cfgEnv map[string]string, podCityRoot, podWorkDir, manag
 	}
 
 	return env, nil
+}
+
+func appendAgentEnvDefaults(env []corev1.EnvVar, defaults map[string]string) []corev1.EnvVar {
+	if len(defaults) == 0 {
+		return env
+	}
+	present := make(map[string]bool, len(env))
+	for _, entry := range env {
+		present[entry.Name] = true
+	}
+	keys := make([]string, 0, len(defaults))
+	for key := range defaults {
+		key = strings.TrimSpace(key)
+		if key == "" || present[key] {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		env = append(env, corev1.EnvVar{Name: key, Value: defaults[key]})
+		present[key] = true
+	}
+	return env
 }
 
 func podProviderHome(cfgEnv map[string]string) string {
