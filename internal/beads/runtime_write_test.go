@@ -26,7 +26,7 @@ func TestRuntimeWritePolicyDefaults(t *testing.T) {
 		{WriteClassCursorReservation, time.Second},
 		{WriteClassPostActionCritical, 2 * time.Second},
 		{WriteClassAuditRepair, time.Second},
-		{WriteClassHotState, 2 * time.Second},
+		{WriteClassHotState, 5 * time.Second},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.class), func(t *testing.T) {
@@ -438,6 +438,59 @@ func TestBdStoreRuntimeWriterPrioritizesHotState(t *testing.T) {
 	mu.Unlock()
 	if len(got) < 2 || got[0] != "gc-hot" || got[1] != "gc-normal" {
 		t.Fatalf("runtime write order = %v, want hot-state before normal audit write", got)
+	}
+}
+
+func TestBdStoreRuntimeWriteExecutionBudgetStartsWhenDequeued(t *testing.T) {
+	holdStarted := make(chan struct{})
+	releaseHold := make(chan struct{})
+	var holdOnce sync.Once
+	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(ctx context.Context, _ string, _ string, args ...string) ([]byte, error) {
+		if len(args) < 3 || args[0] != "update" {
+			return []byte(`[]`), nil
+		}
+		switch args[2] {
+		case "gc-hold":
+			holdOnce.Do(func() { close(holdStarted) })
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-releaseHold:
+				return []byte(`[]`), nil
+			}
+		case "gc-hot":
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(20 * time.Millisecond):
+				return []byte(`[]`), nil
+			}
+		default:
+			return []byte(`[]`), nil
+		}
+	})
+
+	holdPolicy := RuntimeWritePolicy(WriteClassAuditRepair, "test.dequeue-hold", "hold")
+	holdPolicy.Timeout = 500 * time.Millisecond
+	errs := make(chan error, 2)
+	go func() {
+		errs <- store.RuntimeUpdate(context.Background(), "gc-hold", UpdateOpts{Metadata: map[string]string{"hold": "true"}}, holdPolicy)
+	}()
+	<-holdStarted
+
+	hotPolicy := RuntimeWritePolicy(WriteClassHotState, "test.dequeue-hot", "hot")
+	hotPolicy.Timeout = 50 * time.Millisecond
+	go func() {
+		errs <- store.RuntimeUpdate(context.Background(), "gc-hot", UpdateOpts{Metadata: map[string]string{"hot": "true"}}, hotPolicy)
+	}()
+	waitForRuntimeWriteQueueDepth(t, store, 1)
+	time.Sleep(hotPolicy.Timeout + 25*time.Millisecond)
+	close(releaseHold)
+
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("RuntimeUpdate error: %v", err)
+		}
 	}
 }
 

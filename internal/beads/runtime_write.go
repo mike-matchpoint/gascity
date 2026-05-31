@@ -43,8 +43,9 @@ const (
 	RuntimeWriteCursorReservationBudget = time.Second
 	RuntimeWritePostActionBudget        = 2 * time.Second
 	RuntimeWriteAuditRepairBudget       = time.Second
-	RuntimeWriteHotStateBudget          = 2 * time.Second
+	RuntimeWriteHotStateBudget          = 5 * time.Second
 	RuntimeWritePingBudget              = time.Second
+	RuntimeWriteQueueWaitBudget         = 3 * time.Second
 
 	// RuntimeWriteBreakerRecoveryAfter bounds how long a process-local writer
 	// can stay open-loop before it admits one bounded recovery probe.
@@ -296,6 +297,14 @@ func contextWithWritePolicy(ctx context.Context, policy WritePolicy) (context.Co
 	return context.WithTimeout(ctx, policy.Timeout)
 }
 
+func contextWithRuntimeWriteWaitPolicy(ctx context.Context, policy WritePolicy, waitBudget time.Duration) (context.Context, context.CancelFunc) {
+	policy = normalizeWritePolicy(policy)
+	if policy.Timeout > 0 && waitBudget > 0 {
+		policy.Timeout += waitBudget
+	}
+	return contextWithWritePolicy(ctx, policy)
+}
+
 func ctxDone(ctx context.Context) <-chan struct{} {
 	if ctx == nil {
 		return nil
@@ -347,9 +356,10 @@ type RuntimeWriteManagerStats struct {
 }
 
 type runtimeWriteManager struct {
-	storeKey string
-	queue    chan *runtimeWriteJob
-	hotQueue chan *runtimeWriteJob
+	storeKey   string
+	waitBudget time.Duration
+	queue      chan *runtimeWriteJob
+	hotQueue   chan *runtimeWriteJob
 
 	mu        sync.Mutex
 	pending   map[string]*runtimeWriteJob
@@ -391,9 +401,10 @@ type runtimeWriteResult struct {
 	err   error
 }
 
-func newRuntimeWriteManager(storeKey string) *runtimeWriteManager {
+func newRuntimeWriteManager(storeKey string, waitBudget time.Duration) *runtimeWriteManager {
 	m := &runtimeWriteManager{
 		storeKey:     storeKey,
+		waitBudget:   waitBudget,
 		queue:        make(chan *runtimeWriteJob, RuntimeWriteQueueLimit),
 		hotQueue:     make(chan *runtimeWriteJob, RuntimeWriteQueueLimit),
 		pending:      make(map[string]*runtimeWriteJob),
@@ -414,7 +425,10 @@ func (m *runtimeWriteManager) doWithPayload(ctx context.Context, policy WritePol
 		return nil, degradedWrite(policy, "", op, WriteOutcomeUnsupported, errors.New("nil runtime write manager"))
 	}
 	policy = normalizeWritePolicy(policy)
-	writeCtx, cancel := contextWithWritePolicy(ctx, policy)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	waitCtx, cancel := contextWithRuntimeWriteWaitPolicy(ctx, policy, m.waitBudget)
 	defer cancel()
 	if err := m.admit(policy, op); err != nil {
 		return nil, err
@@ -422,7 +436,7 @@ func (m *runtimeWriteManager) doWithPayload(ctx context.Context, policy WritePol
 	result := make(chan runtimeWriteResult, 1)
 	collapseKey := runtimeWriteCollapseKey(policy, op, objectKey)
 	job := &runtimeWriteJob{
-		ctx:         writeCtx,
+		ctx:         ctx,
 		policy:      policy,
 		operation:   op,
 		objectKey:   objectKey,
@@ -448,12 +462,12 @@ func (m *runtimeWriteManager) doWithPayload(ctx context.Context, policy WritePol
 				existing.waiters = append(existing.waiters, result)
 				m.collapsed++
 				m.mu.Unlock()
-				return m.awaitResult(writeCtx, policy, op, result)
+				return m.awaitResult(waitCtx, policy, op, result)
 			default:
 				existing.waiters = append(existing.waiters, result)
 				m.collapsed++
 				m.mu.Unlock()
-				return m.awaitResult(writeCtx, policy, op, result)
+				return m.awaitResult(waitCtx, policy, op, result)
 			}
 		}
 		if collapseKey != "" && !tracked {
@@ -468,9 +482,9 @@ func (m *runtimeWriteManager) doWithPayload(ctx context.Context, policy WritePol
 	select {
 	case queue <- job:
 		m.noteEnqueued(job.enqueued)
-	case <-writeCtx.Done():
+	case <-waitCtx.Done():
 		m.removePending(collapseKey, job)
-		return nil, degradedWrite(policy, m.storeKey, op, WriteOutcomeNotStarted, writeCtx.Err())
+		return nil, degradedWrite(policy, m.storeKey, op, WriteOutcomeNotStarted, waitCtx.Err())
 	default:
 		m.mu.Lock()
 		m.dropped++
@@ -478,7 +492,7 @@ func (m *runtimeWriteManager) doWithPayload(ctx context.Context, policy WritePol
 		m.removePending(collapseKey, job)
 		return nil, degradedWrite(policy, m.storeKey, op, WriteOutcomeNotStarted, fmt.Errorf("runtime write queue full: %d", RuntimeWriteQueueLimit))
 	}
-	return m.awaitResult(writeCtx, policy, op, result)
+	return m.awaitResult(waitCtx, policy, op, result)
 }
 
 func (m *runtimeWriteManager) awaitResult(ctx context.Context, policy WritePolicy, op string, result <-chan runtimeWriteResult) (any, error) {
@@ -573,7 +587,9 @@ func (m *runtimeWriteManager) runJob(job *runtimeWriteJob) {
 	job.started = true
 	payload := job.payload
 	m.mu.Unlock()
-	value, err := job.run(job.ctx, payload)
+	runCtx, cancel := contextWithWritePolicy(job.ctx, job.policy)
+	value, err := job.run(runCtx, payload)
+	cancel()
 	res := runtimeWriteResult{value: value, err: err}
 	m.recordResult(err)
 	m.mu.Lock()
@@ -680,13 +696,16 @@ var runtimeWriteManagers = struct {
 	managers: make(map[string]*runtimeWriteManager),
 }
 
-func runtimeWriteManagerForKey(storeKey string) *runtimeWriteManager {
+func runtimeWriteManagerForKey(storeKey string, waitBudget time.Duration) *runtimeWriteManager {
 	runtimeWriteManagers.mu.Lock()
 	defer runtimeWriteManagers.mu.Unlock()
 	if m := runtimeWriteManagers.managers[storeKey]; m != nil {
+		if waitBudget > m.waitBudget {
+			m.waitBudget = waitBudget
+		}
 		return m
 	}
-	m := newRuntimeWriteManager(storeKey)
+	m := newRuntimeWriteManager(storeKey, waitBudget)
 	runtimeWriteManagers.managers[storeKey] = m
 	return m
 }

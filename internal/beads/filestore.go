@@ -618,7 +618,7 @@ func (fs *FileStore) runtimeWriteStoreKey() string {
 }
 
 func (fs *FileStore) runtimeWriteManager() *runtimeWriteManager {
-	return runtimeWriteManagerForKey(fs.runtimeWriteStoreKey())
+	return runtimeWriteManagerForKey(fs.runtimeWriteStoreKey(), 0)
 }
 
 // DepAdd delegates to MemStore.DepAdd and flushes to disk.

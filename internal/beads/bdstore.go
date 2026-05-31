@@ -1427,7 +1427,7 @@ func (s *BdStore) RuntimeWriteManagerStats() RuntimeWriteManagerStats {
 }
 
 func (s *BdStore) runtimeWriteManager() *runtimeWriteManager {
-	return runtimeWriteManagerForKey(s.RuntimeWriteStoreKey())
+	return runtimeWriteManagerForKey(s.RuntimeWriteStoreKey(), RuntimeWriteQueueWaitBudget)
 }
 
 // RuntimeCreate persists a new bead through a bounded runtime write policy.
