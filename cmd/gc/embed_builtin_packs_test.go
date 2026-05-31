@@ -259,6 +259,123 @@ path = "."
 	}
 }
 
+func TestCodegenSupportFreshInitImportInstallPath(t *testing.T) {
+	clearGCEnv(t)
+	t.Setenv("GC_DOLT", "skip")
+	configureIsolatedRuntimeEnv(t)
+
+	root := t.TempDir()
+	cityDir := filepath.Join(root, "codegen-city")
+	var stdout, stderr bytes.Buffer
+	if code := doInit(fsys.OSFS{}, cityDir, wizardConfig{
+		configName: "minimal",
+		provider:   "claude",
+	}, "codegen-city", &stdout, &stderr, false); code != 0 {
+		t.Fatalf("doInit = %d, stderr = %s", code, stderr.String())
+	}
+	if err := MaterializeBuiltinPacks(cityDir); err != nil {
+		t.Fatalf("MaterializeBuiltinPacks() error: %v", err)
+	}
+
+	for _, imp := range []struct {
+		name   string
+		source string
+	}{
+		{name: "gastown", source: ".gc/system/packs/gastown"},
+		{name: "codegen-support", source: ".gc/system/packs/codegen-support"},
+	} {
+		stdout.Reset()
+		stderr.Reset()
+		if code := doImportAdd(fsys.OSFS{}, cityDir, imp.source, imp.name, "", &stdout, &stderr); code != 0 {
+			t.Fatalf("doImportAdd(%s) = %d, stderr = %s", imp.name, code, stderr.String())
+		}
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := doImportInstall(cityDir, &stdout, &stderr); code != 0 {
+		t.Fatalf("doImportInstall(root imports) = %d, stderr = %s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := doImportCheck(cityDir, &stdout, &stderr); code != 0 {
+		t.Fatalf("doImportCheck(root imports) = %d, stdout = %s stderr = %s", code, stdout.String(), stderr.String())
+	}
+
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`[workspace]
+name = "codegen-city"
+provider = "claude"
+global_fragments = ["command-glossary", "operational-awareness"]
+
+[defaults.rig.imports.gastown]
+source = ".gc/system/packs/gastown"
+
+[defaults.rig.imports.codegen-support]
+source = ".gc/system/packs/codegen-support"
+
+[[rigs]]
+name = "app"
+prefix = "app"
+[rigs.imports]
+[rigs.imports.gastown]
+source = ".gc/system/packs/gastown"
+[rigs.imports.codegen-support]
+source = ".gc/system/packs/codegen-support"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(city.toml): %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := doImportInstall(cityDir, &stdout, &stderr); code != 0 {
+		t.Fatalf("doImportInstall(composed imports) = %d, stderr = %s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := doImportCheck(cityDir, &stdout, &stderr); code != 0 {
+		t.Fatalf("doImportCheck(composed imports) = %d, stdout = %s stderr = %s", code, stdout.String(), stderr.String())
+	}
+
+	codegenPackDir := filepath.Join(cityDir, citylayout.SystemPacksRoot, "codegen-support")
+	for _, rel := range []string{
+		"pack.toml",
+		filepath.Join("agents", "cartographer", "agent.toml"),
+		filepath.Join("agents", "debugger", "agent.toml"),
+		filepath.Join("agents", "landing-arbiter", "agent.toml"),
+		filepath.Join("formulas", "spec-cartographer.formula.toml"),
+		filepath.Join("orders", "spec-cartographer-watch.toml"),
+		filepath.Join("assets", "scripts", "cartographer-inventory.sh"),
+		filepath.Join("template-fragments", "mayor-cartographer-protocol.template.md"),
+		filepath.Join("template-fragments", "polecat-handoff-override.template.md"),
+		filepath.Join("template-fragments", "refinery-merge-close-contract.template.md"),
+	} {
+		if _, err := os.Stat(filepath.Join(codegenPackDir, rel)); err != nil {
+			t.Fatalf("installed codegen-support pack missing %s: %v", rel, err)
+		}
+	}
+
+	cfg, _, err := config.LoadWithIncludes(fsys.OSFS{}, filepath.Join(cityDir, "city.toml"))
+	if err != nil {
+		t.Fatalf("LoadWithIncludes: %v", err)
+	}
+	got := map[string]bool{}
+	for i := range cfg.Agents {
+		got[cfg.Agents[i].QualifiedName()] = true
+	}
+	for _, want := range []string{
+		"gastown.mayor",
+		"gastown.dog",
+		"codegen-support.debugger",
+		"app/gastown.polecat",
+		"app/gastown.refinery",
+		"app/codegen-support.cartographer",
+		"app/codegen-support.landing-arbiter",
+	} {
+		if !got[want] {
+			t.Fatalf("missing composed agent %q; got agents=%v", want, got)
+		}
+	}
+}
+
 func assertNoPackText(t *testing.T, root, needle string) {
 	t.Helper()
 	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
