@@ -372,7 +372,7 @@ Use "gc supervisor run" for foreground operation.`,
   gc supervisor run`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			if jsonOut && (foregroundMode || dryRunMode) {
+			if jsonOut && foregroundMode {
 				fmt.Fprintln(stderr, "gc start: --json is only supported for supervisor-managed start") //nolint:errcheck // best-effort stderr
 				return errExit
 			}
@@ -502,6 +502,21 @@ func doStartWithNameOverrideJSON(args []string, controllerMode bool, stdout, std
 	// check, so operators get a Supervisor: identity line and any drift
 	// report even in preview mode.
 	if dryRunMode {
+		if jsonOut {
+			if code := doStartStandalone(args, controllerMode, io.Discard, stderr); code != 0 {
+				return code
+			}
+			if err := writeLifecycleActionJSON(stdout, lifecycleActionJSON{
+				Command:  "start",
+				Action:   "dry-run",
+				Message:  "Dry-run completed.",
+				CityPath: cityPath,
+			}); err != nil {
+				fmt.Fprintf(stderr, "gc start: writing JSON result: %v\n", err) //nolint:errcheck // best-effort stderr
+				return 1
+			}
+			return 0
+		}
 		return doStartStandalone(args, controllerMode, stdout, stderr)
 	}
 

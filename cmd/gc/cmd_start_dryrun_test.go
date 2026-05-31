@@ -2,10 +2,14 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/fsys"
 )
 
 func TestPrintDryRunPreview(t *testing.T) {
@@ -71,5 +75,55 @@ func TestStartDryRunFlagExists(t *testing.T) {
 	}
 	if f.Shorthand != "n" {
 		t.Errorf("--dry-run shorthand = %q, want %q", f.Shorthand, "n")
+	}
+}
+
+func TestStartDryRunJSON(t *testing.T) {
+	cityPath := filepath.Join(t.TempDir(), "city")
+	if err := os.MkdirAll(cityPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte("[workspace]\nname = \"dry-run-json\"\n\n[beads]\nprovider = \"file\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureCityScaffold(cityPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := bootstrapScopedFileProviderCityFS(fsys.OSFS{}, cityPath); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("GC_HOME", filepath.Join(t.TempDir(), "gc-home"))
+	t.Setenv("GC_BEADS", "file")
+	t.Setenv("GC_BEADS_SCOPE_ROOT", "")
+
+	oldDryRun := dryRunMode
+	oldExtraConfigFiles := extraConfigFiles
+	oldNoStrict := noStrictMode
+	t.Cleanup(func() {
+		dryRunMode = oldDryRun
+		extraConfigFiles = oldExtraConfigFiles
+		noStrictMode = oldNoStrict
+	})
+	dryRunMode = true
+	extraConfigFiles = nil
+	noStrictMode = false
+
+	var stdout, stderr bytes.Buffer
+	if code := doStartWithNameOverrideJSON([]string{cityPath}, false, &stdout, &stderr, "", true); code != 0 {
+		t.Fatalf("doStartWithNameOverrideJSON code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "Dry-run:") {
+		t.Fatalf("stdout contains human dry-run preview instead of JSON only:\n%s", stdout.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &payload); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout.String())
+	}
+	if payload["ok"] != true || payload["command"] != "start" || payload["action"] != "dry-run" {
+		t.Fatalf("payload = %#v, want ok start dry-run", payload)
+	}
+	if payload["city_path"] != cityPath {
+		t.Fatalf("city_path = %q, want %q", payload["city_path"], cityPath)
 	}
 }

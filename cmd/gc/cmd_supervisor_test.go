@@ -3713,6 +3713,70 @@ func TestEnsureSupervisorRunningRejectsHomeOverride(t *testing.T) {
 	}
 }
 
+func TestEnsureSupervisorRunningUsesDetachedStartForIsolatedGCHome(t *testing.T) {
+	t.Setenv("GC_HOME", filepath.Join(t.TempDir(), "gc-home"))
+
+	oldAlive := supervisorAliveHook
+	oldInstall := ensureSupervisorInstallFunc
+	oldStart := ensureSupervisorStartFunc
+	t.Cleanup(func() {
+		supervisorAliveHook = oldAlive
+		ensureSupervisorInstallFunc = oldInstall
+		ensureSupervisorStartFunc = oldStart
+	})
+
+	var installCalled bool
+	var startCalled bool
+	supervisorAliveHook = func() int { return 0 }
+	ensureSupervisorInstallFunc = func(io.Writer, io.Writer) int {
+		installCalled = true
+		return 0
+	}
+	ensureSupervisorStartFunc = func(io.Writer, io.Writer) int {
+		startCalled = true
+		return 0
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := ensureSupervisorRunning(&stdout, &stderr); code != 0 {
+		t.Fatalf("ensureSupervisorRunning code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if installCalled {
+		t.Fatal("ensureSupervisorRunning installed a platform service for isolated GC_HOME")
+	}
+	if !startCalled {
+		t.Fatal("ensureSupervisorRunning did not use detached supervisor start for isolated GC_HOME")
+	}
+}
+
+func TestEnsureSupervisorRunningNoopsWhenIsolatedSupervisorAlreadyAlive(t *testing.T) {
+	t.Setenv("GC_HOME", filepath.Join(t.TempDir(), "gc-home"))
+
+	oldAlive := supervisorAliveHook
+	oldInstall := ensureSupervisorInstallFunc
+	oldStart := ensureSupervisorStartFunc
+	t.Cleanup(func() {
+		supervisorAliveHook = oldAlive
+		ensureSupervisorInstallFunc = oldInstall
+		ensureSupervisorStartFunc = oldStart
+	})
+
+	supervisorAliveHook = func() int { return 4242 }
+	ensureSupervisorInstallFunc = func(io.Writer, io.Writer) int {
+		t.Fatal("ensureSupervisorRunning installed a platform service for an already-running isolated supervisor")
+		return 1
+	}
+	ensureSupervisorStartFunc = func(io.Writer, io.Writer) int {
+		t.Fatal("ensureSupervisorRunning started a detached process for an already-running isolated supervisor")
+		return 1
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := ensureSupervisorRunning(&stdout, &stderr); code != 0 {
+		t.Fatalf("ensureSupervisorRunning code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+}
+
 func TestWaitForSupervisorReadyUsesHookedTimeout(t *testing.T) {
 	oldAlive := supervisorAliveHook
 	oldTimeout := supervisorReadyTimeout

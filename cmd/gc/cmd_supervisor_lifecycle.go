@@ -31,6 +31,8 @@ import (
 
 var (
 	ensureSupervisorRunningHook              = ensureSupervisorRunning
+	ensureSupervisorInstallFunc              = doSupervisorInstall
+	ensureSupervisorStartFunc                = doSupervisorStart
 	reloadSupervisorHook                     = reloadSupervisor
 	supervisorAliveHook                      = supervisorAlive
 	supervisorReadyTimeout                   = 15 * time.Second
@@ -466,14 +468,20 @@ func ensureSupervisorRunning(stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "gc supervisor start: %s\n", msg) //nolint:errcheck // best-effort stderr
 		return 1
 	}
+	if supervisor.UsesIsolatedGCHomeOverride() {
+		if supervisorAliveHook() != 0 {
+			return 0
+		}
+		return ensureSupervisorStartFunc(stdout, stderr)
+	}
 	// Always regenerate the service file so upgrades pick up template
 	// changes (e.g. PATH captured from the user's shell).
-	if doSupervisorInstall(stdout, stderr) != 0 {
+	if ensureSupervisorInstallFunc(stdout, stderr) != 0 {
 		if supervisorAlive() != 0 {
 			return 0
 		}
 		// Fall back to bare start if install fails (e.g., unsupported OS).
-		return doSupervisorStart(stdout, stderr)
+		return ensureSupervisorStartFunc(stdout, stderr)
 	}
 	if supervisorAliveHook() != 0 {
 		return 0
