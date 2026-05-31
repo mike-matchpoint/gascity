@@ -1437,6 +1437,13 @@ func (m *memoryOrderDispatcher) runtimeTrackingUpdate(ctx context.Context, store
 	return beads.RuntimeUpdate(ctx, store, id, opts, policy)
 }
 
+func orderDispatchPostActionWriteContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return context.WithoutCancel(ctx)
+}
+
 func (m *memoryOrderDispatcher) recordOrderTrackingDegraded(scoped, trackingID, operation string, err error, stats *orderDispatchTickStats) {
 	if err == nil {
 		return
@@ -1620,7 +1627,8 @@ func (m *memoryOrderDispatcher) dispatchExec(ctx context.Context, store beads.St
 	// Label tracking bead with outcome via store (not CLI). For event execs,
 	// cursor labels were already persisted before the command ran.
 	if run.TrackingReserved {
-		if err := m.runtimeTrackingUpdate(ctx, store, run.TrackingID, beads.UpdateOpts{Labels: labels}, beads.WriteClassAuditRepair, "order.dispatch.exec-outcome", run.TrackingID); err != nil {
+		writeCtx := orderDispatchPostActionWriteContext(ctx)
+		if err := m.runtimeTrackingUpdate(writeCtx, store, run.TrackingID, beads.UpdateOpts{Labels: labels}, beads.WriteClassAuditRepair, "order.dispatch.exec-outcome", run.TrackingID); err != nil {
 			logDispatchError(m.stderr, "gc: order %s: failed to label exec tracking bead %s: %v", scoped, run.TrackingID, err)
 			m.recordOrderTrackingDegraded(scoped, run.TrackingID, "exec-outcome", err, nil)
 		}
@@ -1663,7 +1671,8 @@ func (m *memoryOrderDispatcher) dispatchWisp(ctx context.Context, store beads.St
 			Message: err.Error(),
 		})
 		if run.TrackingReserved {
-			_ = m.runtimeTrackingUpdate(ctx, store, run.TrackingID, beads.UpdateOpts{Labels: []string{"wisp", "wisp-canceled"}}, beads.WriteClassAuditRepair, "order.dispatch.wisp-canceled", run.TrackingID)
+			writeCtx := orderDispatchPostActionWriteContext(ctx)
+			_ = m.runtimeTrackingUpdate(writeCtx, store, run.TrackingID, beads.UpdateOpts{Labels: []string{"wisp", "wisp-canceled"}}, beads.WriteClassAuditRepair, "order.dispatch.wisp-canceled", run.TrackingID)
 		}
 		return
 	}
@@ -1751,7 +1760,8 @@ func (m *memoryOrderDispatcher) dispatchWisp(ctx context.Context, store beads.St
 	if a.Pool != "" {
 		update.Metadata = routedwork.FormulaOrderPoolDemandMetadata(pool)
 	}
-	if err := m.runtimeTrackingUpdate(ctx, store, rootID, update, beads.WriteClassPostActionCritical, "order.dispatch.wisp-root-critical", rootID); err != nil {
+	writeCtx := orderDispatchPostActionWriteContext(ctx)
+	if err := m.runtimeTrackingUpdate(writeCtx, store, rootID, update, beads.WriteClassPostActionCritical, "order.dispatch.wisp-root-critical", rootID); err != nil {
 		// Label failure is critical for duplicate-dispatch prevention.
 		// Log and emit an event so operators can investigate.
 		logDispatchError(m.stderr, "gc: order %s: failed to label wisp %s: %v", scoped, rootID, err)
@@ -1774,7 +1784,7 @@ func (m *memoryOrderDispatcher) dispatchWisp(ctx context.Context, store beads.St
 
 	// Label tracking bead with outcome.
 	if run.TrackingReserved {
-		if err := m.runtimeTrackingUpdate(ctx, store, run.TrackingID, beads.UpdateOpts{Labels: []string{"wisp"}}, beads.WriteClassAuditRepair, "order.dispatch.wisp-outcome", run.TrackingID); err != nil {
+		if err := m.runtimeTrackingUpdate(writeCtx, store, run.TrackingID, beads.UpdateOpts{Labels: []string{"wisp"}}, beads.WriteClassAuditRepair, "order.dispatch.wisp-outcome", run.TrackingID); err != nil {
 			m.recordOrderTrackingDegraded(scoped, run.TrackingID, "wisp-outcome", err, nil)
 		}
 	}
@@ -1807,7 +1817,8 @@ func (m *memoryOrderDispatcher) markTrackingFailure(ctx context.Context, store b
 	if a.Trigger == "event" && run.EventSeq > 0 {
 		labels = append(labels, eventCursorLabels(scoped, run.EventSeq)...)
 	}
-	if err := m.runtimeTrackingUpdate(ctx, store, run.TrackingID, beads.UpdateOpts{Labels: labels}, beads.WriteClassAuditRepair, "order.dispatch.mark-failed", run.TrackingID); err != nil {
+	writeCtx := orderDispatchPostActionWriteContext(ctx)
+	if err := m.runtimeTrackingUpdate(writeCtx, store, run.TrackingID, beads.UpdateOpts{Labels: labels}, beads.WriteClassAuditRepair, "order.dispatch.mark-failed", run.TrackingID); err != nil {
 		logDispatchError(m.stderr, "gc: order %s: failed to mark tracking bead %s as failed: %v", scoped, run.TrackingID, err)
 		m.recordOrderTrackingDegraded(scoped, run.TrackingID, "mark-failed", err, nil)
 	}

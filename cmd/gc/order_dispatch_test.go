@@ -2205,6 +2205,55 @@ func TestOrderDispatchExecFailure(t *testing.T) {
 	}
 }
 
+func TestOrderDispatchExecFailureLabelsTrackingAfterActionContextCanceled(t *testing.T) {
+	store := beads.NewMemStore()
+	var rec memRecorder
+	var stderr bytes.Buffer
+	tracking, err := store.Create(beads.Bead{
+		Title:  "order:timeout-exec",
+		Labels: []string{"order-run:timeout-exec", labelOrderTracking},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fakeExec := func(ctx context.Context, _, _ string, _ []string) ([]byte, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return nil, context.DeadlineExceeded
+	}
+
+	aa := []orders.Order{{
+		Name:     "timeout-exec",
+		Trigger:  "cooldown",
+		Interval: "2m",
+		Exec:     "scripts/timeout.sh",
+	}}
+	ad := buildOrderDispatcherFromListExec(aa, store, nil, fakeExec, &rec)
+	mad := ad.(*memoryOrderDispatcher)
+	mad.stderr = &stderr
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	mad.dispatchExec(ctx, store, execStoreTarget{ScopeRoot: t.TempDir()}, aa[0], t.TempDir(), trackingRunForTest(tracking.ID))
+
+	all := trackingBeads(t, store, "order-run:timeout-exec")
+	if len(all) != 1 {
+		t.Fatalf("tracking bead count = %d, want 1", len(all))
+	}
+	if !slicesContain(all[0].Labels, "exec-failed") {
+		t.Fatalf("tracking bead labels = %v, want exec-failed despite canceled action context", all[0].Labels)
+	}
+	if !rec.hasType(events.OrderFailed) {
+		t.Fatal("missing order.failed event")
+	}
+	if rec.hasType(events.OrderTrackingDegraded) {
+		t.Fatal("unexpected order.tracking.degraded event after successful post-action write")
+	}
+}
+
 func TestOrderDispatchExecEnvFailureUsesEnvFailureLabel(t *testing.T) {
 	clearAmbientPostgresEnv(t)
 	t.Setenv("GC_BEADS", "bd")
