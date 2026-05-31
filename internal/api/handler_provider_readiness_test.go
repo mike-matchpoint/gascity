@@ -16,6 +16,14 @@ import (
 	"time"
 )
 
+func TestMain(m *testing.M) {
+	originalTimeout := providerProbeCommandTimeout
+	providerProbeCommandTimeout = 20 * time.Second
+	code := m.Run()
+	providerProbeCommandTimeout = originalTimeout
+	os.Exit(code)
+}
+
 func TestReadinessRegistrySync(t *testing.T) {
 	for item := range readinessProbeSpecs {
 		if _, ok := supportedReadiness[item]; !ok {

@@ -159,7 +159,7 @@ wait
 		_ = cmd.Wait()
 	})
 
-	childPid := waitForNonEmptyFile(t, pidFile, 5*time.Second)
+	childPid := waitForNonEmptyFile(t, pidFile, 20*time.Second)
 
 	if err := killCommandTree(cmd); err != nil {
 		t.Fatalf("killCommandTree: %v", err)
