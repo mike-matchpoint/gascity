@@ -158,6 +158,10 @@ func (s *getErrorStore) Get(string) (beads.Bead, error) {
 	return beads.Bead{}, fmt.Errorf("get failed")
 }
 
+func (s *getErrorStore) RuntimeGet(context.Context, string, beads.ReadPolicy) (beads.Bead, error) {
+	return beads.Bead{}, fmt.Errorf("get failed")
+}
+
 type closedMetadataMatchStore struct {
 	*beads.MemStore
 	matches []beads.Bead

@@ -134,7 +134,10 @@ func (s *failingCloseStore) Close(_ string) error {
 	return errors.New("close failed")
 }
 
-func (s *failingCloseStore) RuntimeCloseAll(context.Context, []string, map[string]string, beads.WritePolicy) (int, error) {
+func (s *failingCloseStore) RuntimeCloseAll(_ context.Context, ids []string, metadata map[string]string, _ beads.WritePolicy) (int, error) {
+	for _, id := range ids {
+		_ = s.SetMetadataBatch(id, metadata)
+	}
 	return 0, errors.New("close failed")
 }
 
@@ -205,7 +208,7 @@ func (s *failingPoolSessionNameStore) Close(_ string) error {
 
 func (s *failingPoolSessionNameStore) RuntimeCloseAll(_ context.Context, ids []string, metadata map[string]string, _ beads.WritePolicy) (int, error) {
 	for _, id := range ids {
-		_ = s.MemStore.SetMetadataBatch(id, metadata)
+		_ = s.SetMetadataBatch(id, metadata)
 	}
 	return 0, errors.New("close failed")
 }

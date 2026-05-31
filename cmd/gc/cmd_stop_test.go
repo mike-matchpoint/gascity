@@ -337,6 +337,10 @@ func TestCmdStopForceEscalatesInProgressControllerStop(t *testing.T) {
 
 	waitForControllerAvailable(t, dir)
 	const sess = "force-escalate-session"
+	t.Cleanup(func() {
+		sp.release(sess)
+		sp.releaseInterrupt(sess)
+	})
 	if err := sp.Start(context.Background(), sess, runtime.Config{}); err != nil {
 		t.Fatal(err)
 	}

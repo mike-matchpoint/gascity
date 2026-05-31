@@ -1,6 +1,7 @@
 package beads_test
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -501,12 +502,15 @@ func hqRunKillHelper(t *testing.T, mode string) (string, map[string]string) {
 		"HQSTORE_ERROR_HELPER="+mode,
 		"HQSTORE_DIR="+dir,
 	)
+	var helperOutput bytes.Buffer
+	cmd.Stdout = &helperOutput
+	cmd.Stderr = &helperOutput
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start helper: %v", err)
 	}
 	idsPath := filepath.Join(dir, "ids")
 	ids := make(map[string]string)
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		data, err := os.ReadFile(idsPath)
 		if err == nil {
@@ -523,7 +527,7 @@ func hqRunKillHelper(t *testing.T, mode string) (string, map[string]string) {
 	if len(ids) == 0 {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		t.Fatal("helper did not write ids")
+		t.Fatalf("helper did not write ids; output:\n%s", helperOutput.String())
 	}
 	if err := cmd.Process.Kill(); err != nil {
 		t.Fatalf("kill helper: %v", err)

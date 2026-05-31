@@ -1338,6 +1338,11 @@ func clearPendingStartInFlightLease(session *beads.Bead, store beads.Store, stde
 	if session == nil || store == nil {
 		return
 	}
+	defer func() {
+		if recovered := recover(); recovered != nil && stderr != nil {
+			fmt.Fprintf(stderr, "session reconciler: clearing pending start lease for %s: panic: %v\n", session.ID, recovered) //nolint:errcheck
+		}
+	}()
 	if setMeta(store, session.ID, "last_woke_at", "", stderr) == nil {
 		if session.Metadata == nil {
 			session.Metadata = make(map[string]string)
@@ -2788,6 +2793,23 @@ func stopTargetThroughWorkerBoundary(target stopTarget, store beads.Store, sp ru
 	return workerStopSessionTargetWithConfig("", store, sp, cfg, targetID)
 }
 
+func forceStopTargetThroughWorkerBoundary(target stopTarget, store beads.Store, sp runtime.Provider, cfg *config.City) error {
+	targetID := strings.TrimSpace(target.sessionID)
+	if targetID == "" {
+		targetID = strings.TrimSpace(target.name)
+	}
+	if !stopTargetHasVerifiedBoundary(store, target) {
+		markStopTargetContinuation(store, target, "force-stop", sessionpkg.StopBoundaryForce)
+	}
+	if err := workerKillSessionTargetWithConfig("", store, sp, cfg, targetID); err != nil {
+		return err
+	}
+	if cityStopSessionMarked(store, target.sessionID) {
+		markCityStopSessionAsAsleep(store, target.sessionID, nil)
+	}
+	return nil
+}
+
 func markStopTargetContinuation(store beads.Store, target stopTarget, reason string, boundary sessionpkg.StopBoundary) {
 	if store == nil || strings.TrimSpace(target.sessionID) == "" {
 		return
@@ -2958,6 +2980,33 @@ func stopTargetsBounded(
 	actor string,
 	stdout, stderr io.Writer,
 ) int {
+	return stopTargetsBoundedWithRunner(targets, cfg, store, sp, rec, actor, stdout, stderr, stopTargetThroughWorkerBoundary)
+}
+
+func forceStopTargetsBounded(
+	targets []stopTarget,
+	cfg *config.City,
+	store beads.Store,
+	sp runtime.Provider,
+	rec events.Recorder,
+	actor string,
+	stdout, stderr io.Writer,
+) {
+	stopTargetsBoundedWithRunner(targets, cfg, store, sp, rec, actor, stdout, stderr, forceStopTargetThroughWorkerBoundary)
+}
+
+type stopTargetRunner func(stopTarget, beads.Store, runtime.Provider, *config.City) error
+
+func stopTargetsBoundedWithRunner(
+	targets []stopTarget,
+	cfg *config.City,
+	store beads.Store,
+	sp runtime.Provider,
+	rec events.Recorder,
+	actor string,
+	stdout, stderr io.Writer,
+	runTarget stopTargetRunner,
+) int {
 	targets = hydrateStopTargets(targets, cfg, store, stderr)
 	for _, target := range targets {
 		if !target.resolved {
@@ -2968,7 +3017,7 @@ func stopTargetsBounded(
 			for wave, target := range targets {
 				waveStarted := time.Now()
 				results := executeTargetWave([]stopTarget{target}, 1, stopPerTargetTimeoutDefault, func(target stopTarget) error {
-					return stopTargetThroughWorkerBoundary(target, store, sp, cfg)
+					return runTarget(target, store, sp, cfg)
 				})
 				for _, result := range results {
 					if shouldLogStopOutcome(result.target, cfg) {
@@ -3011,7 +3060,7 @@ func stopTargetsBounded(
 			}
 		}
 		results := executeTargetWave(waveTargets, defaultMaxParallelStopsPerWave, stopPerTargetTimeoutDefault, func(target stopTarget) error {
-			return stopTargetThroughWorkerBoundary(target, store, sp, cfg)
+			return runTarget(target, store, sp, cfg)
 		})
 		for _, result := range results {
 			if shouldLogStopOutcome(result.target, cfg) {
