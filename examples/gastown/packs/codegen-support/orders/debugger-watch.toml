@@ -1,0 +1,25 @@
+# Drain the bug queue: create plan-mode beads for pending bugs, surface
+# the investigation-replan signal, and close bugs whose repair beads
+# have landed.
+#
+# No verify bead is created. Polecat (`polecat-validate-before-commit`)
+# and refinery (`refinery-merge-close-contract`) both run the bug's
+# validation_commands against the eventual merged_sha before the merge
+# is allowed to push. A third pass in a fresh debugger session would
+# be tautological against the same immutable SHA, and any spurious
+# failure (flakiness, env drift) would falsely re-open a healthy fix.
+# Bug closure is metadata-only and runs in this script, mirroring the
+# `convoy-autoclose` order's deterministic close pattern.
+#
+# Why cooldown rather than `bead.updated` event triggers: gascity's
+# event subsystem does not support metadata-based event filters, so a
+# `bead.updated` event would fire on every bead update and force the
+# same scan anyway.
+#
+# Cadence: 30s. Empty queue = a few cheap `bd list` calls and exit.
+[order]
+description = "Create debugger plan beads, surface investigation-replan, close landed bugs"
+exec = "bash $PACK_DIR/assets/scripts/debugger-watch.sh"
+trigger = "cooldown"
+interval = "30s"
+timeout = "60s"

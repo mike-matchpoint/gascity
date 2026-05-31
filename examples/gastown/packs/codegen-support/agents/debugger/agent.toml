@@ -1,0 +1,63 @@
+# City-scoped concurrent debugger pool.
+#
+# Activates via cooldown-triggered `orders/debugger-watch.toml`, which
+# creates one plan bead per eligible bug every 30s. Each plan targets a single
+# bug via its `bug_id` variable; concurrent sessions process independent
+# bugs in parallel up to `max_active_sessions`. One plan bead = one bug =
+# one fresh session.
+#
+# This agent runs one formula:
+#   - mol-debugger-plan — diagnose a pending bug and emit repair work.
+#
+# Decision and audit state lives on the bug bead (metadata + description).
+# The agent reads the plan bead's rig_name metadata into $RIG to scope its
+# work to a specific rig per invocation.
+scope = "city"
+provider = "codex"
+wake_mode = "fresh"
+idle_timeout = "1h"
+nudge = "Claim the debugger plan bead on your hook and execute it."
+
+# Per-instance scratch directory. City-scoped agents do not get a
+# .Rig template var, so the work_dir is a plain agent-pool directory.
+# The debugger formula uses $RIG from the plan bead's rig_name metadata to
+# locate the rig's git worktree at runtime when it needs to read
+# source files or run validation commands.
+work_dir = ".gc/agents/debuggers/{{.AgentBase}}"
+
+# Concurrent sessions, polecat-style. Independent bugs are
+# embarrassingly parallel — each session is bound to a distinct bug
+# via its plan bead's `bug_id` and there is no shared state between bugs.
+min_active_sessions = 0
+max_active_sessions = 4
+
+# The debugger formula consumes durable molecule plan beads. Declare a typed
+# selector so controller demand, worker discovery, and claim all use the same
+# route/formula predicate without shelling through `bd list`.
+[work_selector]
+status = "open"
+type = "molecule"
+tier = "issues"
+unassigned = true
+ready = false
+sort = "created_asc"
+
+[work_selector.metadata]
+"gc.routed_to" = "{{.Agent}}"
+"formula" = "mol-debugger-plan"
+
+[scale_check_query]
+status = "open"
+type = "molecule"
+tier = "issues"
+unassigned = true
+ready = false
+sort = "created_asc"
+
+[scale_check_query.metadata]
+"gc.routed_to" = "{{.Agent}}"
+"formula" = "mol-debugger-plan"
+
+[option_defaults]
+effort = "xhigh"
+model = "gpt-5.5"

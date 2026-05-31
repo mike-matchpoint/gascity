@@ -1,0 +1,3290 @@
+description = """
+Translate a rig work order + supplementary specs into a self-contained,
+dependency-resolved bead DAG that polecats can execute with zero extra
+context.
+
+The cartographer does not write code. It reads specs and emits beads.
+The mayor (or the spec-cartographer-watch order) slings this formula
+against the rig's cartographer agent. The formula materializes as one
+molecule with ten step beads; each step is picked up in a fresh
+agent session (gastown's `wake_mode = "fresh"`), so no in-memory or
+conversation context survives between steps.
+
+The cartographer's configured `work_dir` is a launcher worktree only.
+`init-run` creates a UNIQUE detached git worktree for this molecule/run
+from the freshly fetched `origin/main` tip, copies the cartographer helper
+scripts into that run worktree, and records the run worktree path in
+`state.env`. State flows step-to-step via artifacts persisted under
+`.cartographer-runs/<work-order-id>/<epoch>/` inside the per-run
+worktree. A locator copy of `state.env` is also written under the launcher
+worktree's `.cartographer-runs/<work-order-id>/<epoch>/` so fresh sessions
+can find the active run. Every post-init step begins by sourcing
+`WO_PATH_INPUT="{{work_order_path}}" . .gc/scripts/cartographer-load-state.sh`;
+that helper locates the latest run's `state.env`, exports `REPO_ROOT` as
+the per-run worktree, and `cd`s there before the step continues. Later
+steps read prior steps' JSON artifacts from `$RUN_DIR`.
+
+Outputs: a set of new, unhooked beads in the rig's bead store, labeled
+`source:work-order:<work-order-id>` and `epoch:<iso-date>`, optionally
+grouped into convoys, with `depends_on` edges in BOTH directions:
+
+Open cross-WO blockers are expected runtime dependencies, not a reason
+to suppress emission of this work order. The cartographer still emits
+the target work order's non-duplicate beads and wires dependencies so
+polecats can complete the resulting DAG in order. Only duplicate beads
+for this same work order should be skipped by reconciliation.
+
+Outbound from new beads (the new bead `depends_on` the existing one):
+(a) other new beads in this run,
+(b) beads from prior work orders this work order is `Blocked by`,
+(c) any in-flight open beads that are real blockers of new beads.
+
+Inbound to new beads — added on EXISTING open beads:
+(d) any in-flight open bead whose `done_when` is genuinely blocked
+    by one or more of THIS run's new beads. The new bead is a real
+    prerequisite for the existing bead's completion. Direction (d)
+    is implemented by calling
+    `gc bd dep add <existing-open-bead> <new-bead>` in the emit step — the
+    first argument is the bead that NEEDS the second (the dep list
+    that grows belongs to the first argument). This does NOT mutate the existing bead's body, title,
+    labels, status, or convoy membership; it only appends to its
+    dependency list. Adding such edges is in scope for the
+    create-only invariant. The bar for (d) is the same as (c): the
+    relationship must be a *real* blocker grounded in module paths,
+    contracts, schemas, runtime surfaces, or named artifacts the
+    new bead creates that the existing bead's `done_when` requires.
+    Aesthetic or thematic similarity is NOT sufficient.
+
+**Human-review notifications.** This city has NO separate `overseer`
+mail alias. The mayor IS the operator-facing proxy. Any time a step
+below tells you to "mail the overseer", "notify the operator", or
+otherwise escalate to a human, instead do:
+
+```
+gc mail send gastown.mayor \
+  -s "[HUMAN REVIEW NEEDED] <short summary>" \
+  -m "<details>"
+```
+
+The `[HUMAN REVIEW NEEDED]` subject prefix is the operator's signal —
+the mayor's role is to surface these to the human, not to act on them
+autonomously. Do NOT call `gc mail send overseer` — that alias does
+not resolve in this city and the send will fail silently or fall
+back to a noisy mayor message that is not flagged for review.
+
+**Human-review step disposition.** A failed cartographer step must be
+passive to automation. After writing `failure.json` or
+`needs_human.json` and sending the mayor mail, run:
+
+```bash
+.gc/scripts/cartographer-human-review-block.sh "<short failure reason>"
+gc runtime drain-ack
+exit 0
+```
+
+Do not leave a failed step `open` or `in_progress` with the cartographer
+assignee or `gc.routed_to={{rig_name}}/codegen-support.cartographer`; the
+controller treats assigned/routed work as demand and will keep
+re-spawning the cartographer. The helper sets `status=blocked`, clears
+the cartographer assignee, routes the bead to `human-escalation`, and
+records `cartographer.resume_routed_to` so an operator can explicitly
+resume after fixing the plan:
+
+```bash
+RIG={{rig_name}} .gc/scripts/cartographer-human-review-resume.sh <step-bead-id>
+```
+"""
+formula = "spec-cartographer"
+version = 1
+
+[vars]
+[vars.work_order_path]
+description = "Path (relative to the rig root) to the target work order file"
+required = true
+
+[vars.rig_name]
+description = "The rig this planning run belongs to (matches city.toml rig name)"
+required = true
+
+[[steps]]
+id = "init-run"
+title = "Initialize the planning run"
+description = """
+Anchor this run in a dedicated cartographer run worktree, derive the
+stable work-order id and epoch, and create artifact directories that
+later steps read from.
+
+**1. Prime and create the per-run worktree from current `origin/main`:**
+```bash
+gc prime
+gc bd prime
+CARTOGRAPHER_HOME=$(git rev-parse --show-toplevel)
+cd "$CARTOGRAPHER_HOME"
+WO_PATH="{{work_order_path}}"
+RIG="{{rig_name}}"
+WORK_ORDER_ID=$(basename "$WO_PATH" .md)
+EPOCH=$(date -u +%Y-%m-%dT%H-%M-%SZ)
+RUN_INDEX_DIR="$CARTOGRAPHER_HOME/.cartographer-runs/${WORK_ORDER_ID}/${EPOCH}"
+mkdir -p "$RUN_INDEX_DIR"
+
+CITY_ROOT="$CARTOGRAPHER_HOME"
+while [ "$CITY_ROOT" != "/" ] && [ ! -f "$CITY_ROOT/city.toml" ]; do
+  CITY_ROOT=$(dirname "$CITY_ROOT")
+done
+if [ ! -f "$CITY_ROOT/city.toml" ]; then
+  jq -n --arg repo "$CARTOGRAPHER_HOME" \
+        '{step: "init-run", reason: "city.toml not found", repo_root: $repo}' \
+        > "$RUN_INDEX_DIR/failure.json"
+  gc mail send gastown.mayor \
+    -s "[HUMAN REVIEW NEEDED] cartographer city root resolution failed for $WORK_ORDER_ID" \
+    -m "Could not locate city.toml walking up from $CARTOGRAPHER_HOME. See $RUN_INDEX_DIR/failure.json. Step bead $GC_BEAD_ID blocked for human review."
+  .gc/scripts/cartographer-human-review-block.sh "city root resolution failed"
+  gc runtime drain-ack
+  exit 0
+fi
+
+# Resolve the rig's canonical beads JSONL path. Every step-bead close and
+# every non-label bd write needs this for the post-write export (gascity
+# #2079, #2080). The cartographer runs in a per-run worktree; the
+# canonical .beads/issues.jsonl lives at the rig's repo path.
+RIG_PATH="$(gc rig status "$RIG" 2>/dev/null \
+  | awk '/^  *Path:/{print $2; exit}')"
+if [ -z "$RIG_PATH" ]; then
+  jq -n --arg rig "$RIG" \
+        '{step: "init-run", reason: "rig path not resolved", rig: $rig}' \
+        > "$RUN_INDEX_DIR/failure.json"
+  gc mail send gastown.mayor \
+    -s "[HUMAN REVIEW NEEDED] cartographer rig path resolution failed for $WORK_ORDER_ID" \
+    -m "Could not resolve rig path for $RIG. See $RUN_INDEX_DIR/failure.json. Step bead $GC_BEAD_ID blocked for human review."
+  .gc/scripts/cartographer-human-review-block.sh "rig path resolution failed"
+  gc runtime drain-ack
+  exit 0
+fi
+RIG_BEADS_JSONL="$RIG_PATH/.beads/issues.jsonl"
+
+if ! git -C "$CARTOGRAPHER_HOME" fetch --prune origin main; then
+  jq -n --arg repo "$CARTOGRAPHER_HOME" \
+        '{step: "init-run", reason: "origin main fetch failed", repo_root: $repo}' \
+        > "$RUN_INDEX_DIR/failure.json"
+  gc mail send gastown.mayor \
+    -s "[HUMAN REVIEW NEEDED] cartographer origin/main fetch failed for $WORK_ORDER_ID" \
+    -m "Could not fetch origin main before creating a per-run worktree. See $RUN_INDEX_DIR/failure.json. Step bead $GC_BEAD_ID blocked for human review."
+  .gc/scripts/cartographer-human-review-block.sh "origin main fetch failed"
+  gc runtime drain-ack
+  exit 0
+fi
+
+RUN_WORKTREE="$CITY_ROOT/.gc/worktrees/$RIG/cartographer-runs/${WORK_ORDER_ID}-${EPOCH}"
+if [ -e "$RUN_WORKTREE" ] && [ ! -d "$RUN_WORKTREE/.git" ] && [ ! -f "$RUN_WORKTREE/.git" ]; then
+  jq -n --arg path "$RUN_WORKTREE" \
+        '{step: "init-run", reason: "run worktree path exists but is not a git worktree", path: $path}' \
+        > "$RUN_INDEX_DIR/failure.json"
+  gc mail send gastown.mayor \
+    -s "[HUMAN REVIEW NEEDED] cartographer run worktree path collision for $WORK_ORDER_ID" \
+    -m "Path $RUN_WORKTREE exists but is not a git worktree. See $RUN_INDEX_DIR/failure.json. Step bead $GC_BEAD_ID blocked for human review."
+  .gc/scripts/cartographer-human-review-block.sh "run worktree path collision"
+  gc runtime drain-ack
+  exit 0
+fi
+
+if [ ! -d "$RUN_WORKTREE/.git" ] && [ ! -f "$RUN_WORKTREE/.git" ]; then
+  mkdir -p "$(dirname "$RUN_WORKTREE")"
+  if ! git -C "$CARTOGRAPHER_HOME" worktree add --detach "$RUN_WORKTREE" origin/main; then
+    jq -n --arg path "$RUN_WORKTREE" \
+          '{step: "init-run", reason: "run worktree creation failed", path: $path}' \
+          > "$RUN_INDEX_DIR/failure.json"
+    gc mail send gastown.mayor \
+      -s "[HUMAN REVIEW NEEDED] cartographer run worktree creation failed for $WORK_ORDER_ID" \
+      -m "Could not create $RUN_WORKTREE from origin/main. See $RUN_INDEX_DIR/failure.json. Step bead $GC_BEAD_ID blocked for human review."
+    .gc/scripts/cartographer-human-review-block.sh "run worktree creation failed"
+    gc runtime drain-ack
+    exit 0
+  fi
+fi
+
+REPO_ROOT="$RUN_WORKTREE"
+cd "$REPO_ROOT"
+RUN_DIR="$REPO_ROOT/.cartographer-runs/${WORK_ORDER_ID}/${EPOCH}"
+mkdir -p "$RUN_DIR"
+
+mkdir -p "$REPO_ROOT/.gc/scripts"
+if [ -d "$CARTOGRAPHER_HOME/.gc/scripts" ]; then
+  for SCRIPT in "$CARTOGRAPHER_HOME"/.gc/scripts/*.sh; do
+    [ -f "$SCRIPT" ] || continue
+    cp "$SCRIPT" "$REPO_ROOT/.gc/scripts/"
+    chmod +x "$REPO_ROOT/.gc/scripts/$(basename "$SCRIPT")"
+  done
+else
+  jq -n --arg scripts "$CARTOGRAPHER_HOME/.gc/scripts" \
+        '{step: "init-run", reason: "cartographer helper scripts missing", scripts_dir: $scripts}' \
+        > "$RUN_DIR/failure.json"
+  cp "$RUN_DIR/failure.json" "$RUN_INDEX_DIR/failure.json"
+  gc mail send gastown.mayor \
+    -s "[HUMAN REVIEW NEEDED] cartographer helper scripts missing for $WORK_ORDER_ID" \
+    -m "Could not copy helper scripts from $CARTOGRAPHER_HOME/.gc/scripts into $REPO_ROOT/.gc/scripts. See $RUN_DIR/failure.json. Step bead $GC_BEAD_ID blocked for human review."
+  gc --rig "$RIG" bd update "$GC_BEAD_ID" \
+    --status blocked \
+    --assignee "" \
+    --set-metadata decision_state=human_review \
+    --set-metadata "gc.routed_to=human-escalation" \
+    --set-metadata "cartographer.review_state=human_review" \
+    --set-metadata "cartographer.review_reason=helper scripts missing" \
+    --set-metadata "cartographer.resume_routed_to=$RIG/codegen-support.cartographer" \
+    --set-metadata "work_order_id=$WORK_ORDER_ID" \
+    --set-metadata "cartographer.epoch=$EPOCH" \
+    --set-metadata "cartographer.failure_run_dir=$RUN_DIR" \
+    --notes "Blocked for human review: helper scripts missing"
+  gc runtime drain-ack
+  exit 0
+fi
+
+mkdir -p "$REPO_ROOT/.beads"
+echo "$RIG_PATH/.beads" > "$REPO_ROOT/.beads/redirect"
+EXCLUDE=$(git -C "$REPO_ROOT" rev-parse --git-path info/exclude)
+mkdir -p "$(dirname "$EXCLUDE")"
+touch "$EXCLUDE"
+for PATTERN in ".beads/redirect" ".gc/scripts/" ".cartographer-runs/" "__pycache__/"; do
+  grep -qxF "$PATTERN" "$EXCLUDE" 2>/dev/null || printf '%s\n' "$PATTERN" >> "$EXCLUDE"
+done
+```
+
+**2. Derive the run identifiers and persist them:**
+
+Work-order id convention is the basename of the work order path with
+`.md` stripped (e.g., `specs/agent-work-orders/001-identity-backfill.md`
+becomes `001-identity-backfill`). Re-runs of the same work order MUST
+produce the same id so prior-epoch reconciliation in step 7 works.
+
+```bash
+if [ ! -f "$WO_PATH" ]; then
+  jq -n --arg path "$WO_PATH" \
+        '{step: "init-run", reason: "work order not found on origin/main", work_order_path: $path}' \
+        > "$RUN_DIR/failure.json"
+  cp "$RUN_DIR/failure.json" "$RUN_INDEX_DIR/failure.json"
+  gc mail send gastown.mayor \
+    -s "[HUMAN REVIEW NEEDED] cartographer work order not found for $WORK_ORDER_ID" \
+    -m "Work order path $WO_PATH does not exist in per-run worktree $REPO_ROOT created from origin/main. See $RUN_DIR/failure.json. Step bead $GC_BEAD_ID blocked for human review."
+  .gc/scripts/cartographer-human-review-block.sh "work order not found"
+  gc runtime drain-ack
+  exit 0
+fi
+
+cat > "$RUN_DIR/state.env" <<EOF
+export WO_PATH=$WO_PATH
+export WORK_ORDER_ID=$WORK_ORDER_ID
+export EPOCH=$EPOCH
+export RIG=$RIG
+export REPO_ROOT=$REPO_ROOT
+export CARTOGRAPHER_HOME=$CARTOGRAPHER_HOME
+export CITY_ROOT=$CITY_ROOT
+export RUN_WORKTREE=$RUN_WORKTREE
+export RUN_INDEX_DIR=$RUN_INDEX_DIR
+export RUN_DIR=$RUN_DIR
+export RIG_ROOT=$RIG_PATH
+export GC_RIG_ROOT=$RIG_PATH
+export RIG_BEADS_JSONL=$RIG_BEADS_JSONL
+EOF
+cp "$RUN_DIR/state.env" "$RUN_INDEX_DIR/state.env"
+```
+
+All later steps source
+`WO_PATH_INPUT="{{work_order_path}}" . .gc/scripts/cartographer-load-state.sh`
+before doing anything. The helper re-derives WORK_ORDER_ID from
+`{{work_order_path}}`, picks the most recent EPOCH locator under the
+launcher worktree's `.cartographer-runs/<work-order-id>/`, sources
+`state.env`, and returns to the per-run worktree root before the step
+continues.
+**Mark this step complete.**
+
+```bash
+gc --rig "$RIG" bd close "$GC_BEAD_ID" --continue
+gc runtime drain-ack
+```
+
+This explicit close and drain acknowledgement are REQUIRED. gascity's formula engine does not
+auto-close step beads when a fresh-wake session exits; omitting the close
+leaves the step bead open and deadlocks downstream steps that `needs`
+this one. The `--continue` flag advances the molecule to the next
+eligible step. The `gc runtime drain-ack` call lets the controller archive
+this fresh session so the singleton Cartographer pool can spawn a new
+session for the next ready step.
+
+If you took a failure-mode branch above and exited early (wrote
+`failure.json` or `needs_human.json` and stopped), do NOT close and do
+NOT leave the step assigned to cartographer. Run the human-review step
+disposition helper from the formula description so automation stops
+dispatching this failed step until an operator explicitly resumes it.
+
+"""
+
+[[steps]]
+id = "inventory"
+title = "Inventory the rig's specs directory and root context files"
+needs = ["init-run"]
+description = """
+Produce a manifest of every file later steps will need to read. Do
+not read file contents yet — paths, types, and direct-reference
+relationships only.
+
+**1. Load state:**
+```bash
+WO_PATH_INPUT="{{work_order_path}}" . .gc/scripts/cartographer-load-state.sh
+```
+
+**2. Walk the spec tree and rig-root context files.**
+
+Classify every spec into one of five buckets. The first four are the
+rig's documented foundation; `adr` and `roadmap` are distinct because
+the rig's `specs/README.md` calls them out as load-bearing:
+
+- **work_order** — `specs/agent-work-orders/*.md` (the target plus
+  any siblings it references)
+- **invariant** — system-wide rules, constraints, or guarantees that
+  all work must respect (e.g. `specs/01-core-invariants.md`)
+- **roadmap** — cross-work-order dependency graph and sequencing
+  (e.g. `specs/13-implementation-roadmap.md`)
+- **adr** — architecture decision records (`specs/adr/*.md`)
+- **supplementary** — other design docs, interface specs, schemas,
+  schema-modeling explorations
+- **other** — READMEs, changelogs, archived specs
+
+**3. Also surface rig-root context files** that are not under specs/
+but are load-bearing for polecat execution:
+
+- `README.md` (rig overview, where-to-start)
+- `AGENTS.md` (build/validation/operational commands — critical for
+  polecats, must land in inlined bead bodies when relevant)
+- `PROMPT_build.md`, `PROMPT_plan.md`, `PROMPT_specgen.md` if present
+
+**4. Honor the rig's Operating Rule.** If `specs/README.md` exists,
+read it (this is the only file you read in this step). It typically
+defines a foundation set — files every iteration must load. For this
+rig the foundation is:
+
+  `01-core-invariants.md` → `02-system-boundaries.md`
+    → `13-implementation-roadmap.md` → `14-monorepo-structure.md`
+  plus load-bearing ADRs (commonly 001, 002, 004, 006).
+
+Mark every foundation file with `foundation: true` in the manifest
+so step 3 can guarantee they are read.
+
+**5. Identify direct references from the target work order.** Scan
+the target work order for explicit file paths, spec names, "Blocked
+by:" / "Blocks:" annotations, and `see also` markers. Record direct
+references only — do not follow transitively yet.
+
+**5b. Detect index / sub-WO family cohorts.** This is a SECOND cohort
+source, distinct from the `Land-together rule:` mechanism handled by
+`land_together_set` below. An index family is a parent work order
+that splits one feature into lettered sub-WOs (e.g.
+`008-ai-enrichment.md` ↔ `008a-...md`, `008b-...md`, `008c-...md`,
+`008d-...md`). All members of a family ship through ONE convoy whose
+title reflects the parent feature.
+
+The target WO participates in a family cohort if EITHER:
+
+- **The target is a sub-WO** — its filename matches the regex
+  `^([0-9]+)([a-z])-.*\\.md$` (numeric prefix + single lowercase
+  letter) AND a sibling parent file `^\\1-.*\\.md$` (same numeric
+  prefix, no letter) exists in the same directory, AND that parent
+  file contains a `## Sub-work-orders` section listing the lettered
+  children, AND the parent file contains EITHER a
+  `## Cross-Cutting Acceptance Criteria` section OR an explicit
+  "land them … together" / "ship as one" phrase in its prose.
+
+- **The target IS the index parent** — its filename matches
+  `^([0-9]+)-.*\\.md$` (numeric prefix, NO letter suffix) AND it
+  contains a `## Sub-work-orders` section listing `<N><letter>-*`
+  children that exist on disk.
+
+When the target participates in a family cohort, record three new
+fields in `inventory.json`:
+
+- `family_cohort_label` = `"family:<parent-basename-without-.md>"`
+  (e.g. `family:008-ai-enrichment`). The label uses the `family:`
+  prefix; `land-together:` is reserved for the older mechanism.
+- `convoy_title_override` = the parent file's first H1 line with
+  the leading `# ` stripped (e.g. `Work Order: AI Enrichment
+  (Index)` or `AI Enrichment`). Step 8 uses this title when the
+  current run is the one that physically creates the family
+  convoy — so the convoy reflects the parent feature, not
+  whichever sub-WO raced ahead.
+- `family_members` = list of basenames (without `.md`), sorted in
+  filename order: parent first, then every existing lettered
+  sibling. Mailed to the mayor for cohort visibility; the
+  cartographer does NOT plan or modify the other members in this
+  run.
+
+**Cohort label precedence.** If the target carries BOTH a
+`Land-together rule:` (populating `land_together_set` with ≥2
+entries) AND a family relationship, prefer the family cohort label.
+A family relationship reflects a deliberate split of one feature
+across files — the parent's `## Sub-work-orders` enumeration is an
+explicit structural cohort declaration. A land-together rule, by
+contrast, is a cross-WO timing constraint between work that may
+otherwise be unrelated. When both apply, the structural cohort
+outranks the timing cohort. Set `cohort_label =
+family_cohort_label` in that case, and record the original
+land-together label in `secondary_cohort_label` for the mayor mail.
+
+If the target has ONLY a family relationship (no land-together
+rule), set `cohort_label = family_cohort_label`.
+
+If the target has NEITHER, leave `cohort_label = null` and the run
+plans a per-WO convoy as before.
+
+**6. Write the manifest to `$RUN_DIR/inventory.json`:**
+
+```json
+{
+  "specs_root": "specs",
+  "target_work_order": "specs/agent-work-orders/008a-document-ingestion.md",
+  "files": [
+    {"path": "specs/01-core-invariants.md",
+     "type": "invariant", "foundation": true},
+    {"path": "specs/13-implementation-roadmap.md",
+     "type": "roadmap", "foundation": true},
+    {"path": "specs/adr/001-monorepo-and-package-boundaries.md",
+     "type": "adr", "foundation": true},
+    {"path": "README.md", "type": "rig_root_context"},
+    {"path": "AGENTS.md", "type": "rig_root_context"}
+  ],
+  "directly_referenced_by_target": [
+    "specs/03-aws-resources-and-naming.md",
+    "specs/07-routing-and-workflows.md",
+    "specs/08-ai-enrichment.md"
+  ],
+  "blocked_by_annotations": ["WO-000", "WO-015"],
+  "blocks_annotations": ["WO-008b"],
+  "land_together_set": [],
+  "family_cohort_label": "family:008-ai-enrichment",
+  "convoy_title_override": "WO-008: AI Enrichment (Index)",
+  "family_members": [
+    "008-ai-enrichment",
+    "008a-document-ingestion",
+    "008b-ai-fact-extraction",
+    "008c-validation-pipeline-and-prompts",
+    "008d-operator-review-surface"
+  ],
+  "secondary_cohort_label": null,
+  "cohort_label": "family:008-ai-enrichment",
+  "inline_wo_blockers": ["017-schema-modeling-exploration"],
+  "large_specs_root": false
+}
+```
+
+The `blocked_by_annotations`, `blocks_annotations`, and
+`land_together_set` fields are critical and feed steps 4 and 6.
+Convert work-order references (WO-XYZ) to the file-basename id
+convention used by labels (e.g., `WO-000` →
+`000-cdk-foundation-and-persistence`) by matching against the
+filenames under `specs/agent-work-orders/`.
+
+**Derive `inline_wo_blockers`.** This field captures other work
+orders the target depends on as runtime gates expressed inline in
+the body prose, but NOT formally listed in `Blocked by:`. The
+canonical example is WO-014's pre-flight ("every net-new excavator
+category must have an SME-approved modeling decision from WO-017
+before profile authoring") — WO-017 is a real gate, but the author
+did not restate it in the formal blocker line.
+
+Derivation is purely a projection of fields you have already
+computed — no new spec-body parsing pass:
+
+```jq
+inline_wo_blockers =
+  ( directly_referenced_by_target
+    | map(select(startswith("specs/agent-work-orders/")))
+    | map(sub("specs/agent-work-orders/"; "") | sub("\\.md$"; ""))
+  )
+  - [ work_order_id ]
+  - blocked_by_annotations
+  - family_members
+```
+
+- `directly_referenced_by_target` already resolves both link form
+  (`[WO-017](017-schema-modeling-exploration.md)`) and bare text
+  form (`WO-008c`) into the file-path basename during step 5's
+  reference walk. No new regex pass is required.
+- Subtract the target itself, the formal blocker set, and the
+  family-cohort siblings — those each have their own dedicated
+  semantics in steps 4 and 6. What remains is the inline runtime
+  gates.
+
+This field feeds step 4's parallel query + step 8's check `m` (the
+inline-WO per-candidate audit coverage check). It does NOT enter
+`cross_wo_blockers`; that artifact is reserved for formal blockers
+which carry the step-6 blanket-edge semantics and step-8 check `g`
+coverage requirement.
+
+**Cohort label derivation.** There are TWO cohort sources. Compute
+both, then resolve precedence per the rule above (family wins when
+both fire).
+
+*Source A — land-together rule (multi-WO).* If `land_together_set`
+has more than one entry, derive a deterministic label so every
+cartographer run for any member of the cohort computes the same
+string:
+
+1. Extract the numeric prefix from each WO id (e.g., `WO-001` → `001`).
+2. Sort numerically ascending.
+3. Join with `-`.
+4. Prefix with `land-together:`.
+
+Result for `["WO-001","WO-003","WO-002"]`: `land-together:001-002-003`.
+
+*Source B — family (parent index + lettered sub-WOs).* If step 5b
+detected a family relationship, `family_cohort_label` is
+`family:<parent-basename-without-.md>`. Every cartographer run for
+any member of the family (parent or any lettered sub-WO) computes
+the SAME label because they all share the same parent basename.
+
+*Precedence.* Family wins over land-together when both fire (see
+step 5b). If only one fires, use it. If neither fires, `cohort_label
+= null` and the run creates a per-WO convoy in step 6.
+
+This label is the convoy-continuity primitive. Step 4 looks it up;
+step 6 plans against it; step 7 uses it.
+
+**Failure modes:**
+
+- If `$WO_PATH` does not exist: write a failure record to
+  `$RUN_DIR/failure.json`, mail the mayor, block the step for human
+  review with the helper, and exit cleanly after `gc runtime drain-ack`.
+  Do not proceed.
+- If the specs tree exceeds ~200 files: emit the manifest with
+  `large_specs_root: true`. Step 3 will use this to bound reading.
+**Mark this step complete.**
+
+```bash
+gc --rig "$RIG" bd close "$GC_BEAD_ID" --continue
+gc runtime drain-ack
+```
+
+This explicit close and drain acknowledgement are REQUIRED. gascity's formula engine does not
+auto-close step beads when a fresh-wake session exits; omitting the close
+leaves the step bead open and deadlocks downstream steps that `needs`
+this one. The `--continue` flag advances the molecule to the next
+eligible step. The `gc runtime drain-ack` call lets the controller archive
+this fresh session so the singleton Cartographer pool can spawn a new
+session for the next ready step.
+
+If you took a failure-mode branch above and exited early (wrote
+`failure.json` or `needs_human.json` and stopped), do NOT close and do
+NOT leave the step assigned to cartographer. Run the human-review step
+disposition helper from the formula description so automation stops
+dispatching this failed step until an operator explicitly resumes it.
+
+"""
+
+[[steps]]
+id = "read_order"
+title = "Read the work order plus foundation and referenced context"
+needs = ["inventory"]
+description = """
+Now read content. Build a complete mental model of what the work order
+wants, what constraints apply, and what context a polecat will need.
+This step's output is the source of every excerpt that gets inlined
+into bead bodies in the emit step.
+
+**1. Load state and manifest:**
+```bash
+WO_PATH_INPUT="{{work_order_path}}" . .gc/scripts/cartographer-load-state.sh
+cat "$RUN_DIR/inventory.json"
+```
+
+**2. Read in this exact order** (mirrors the rig's documented
+Operating Rule):
+
+a. Every file with `foundation: true` in the manifest. These are
+   non-negotiable — invariants apply to all work even when the work
+   order does not reference them. The roadmap doc dictates
+   cross-work-order sequencing.
+b. The target work order in full.
+c. Every file in `directly_referenced_by_target`.
+d. Rig-root `README.md` and `AGENTS.md` if present — `AGENTS.md`
+   contains build/validation/operational commands a polecat will
+   need to satisfy `done_when` criteria.
+e. Transitively-referenced supplementary specs: if a spec read in
+   (b) or (c) references spec X and X looks load-bearing, read it.
+   Use judgment — do not read the whole supplementary set.
+
+If `large_specs_root: true`, restrict yourself to (a)-(d) plus only
+the direct references in (c). Do not fan out further.
+
+**3. Be generous with `key_excerpts`.**
+
+This is where you stage the verbatim spec text that the emit step will
+inline into bead bodies. Quote verbatim — invariants and interface
+contracts must be word-for-word, not paraphrased.
+
+It is better to over-quote here and trim in the `emit` step than to
+under-quote and force polecats to read specs themselves. The bead
+self-containment invariant in `validate-plan` will fail any task body
+that says "see the spec."
+
+**4. Write `$RUN_DIR/context.json`:**
+
+```json
+{
+  "intent": "1-3 sentence summary of what the work order wants",
+  "scope": {
+    "in_scope": ["..."],
+    "out_of_scope": ["..."]
+  },
+  "constraints": [
+    {"source": "specs/01-core-invariants.md",
+     "rule": "verbatim invariant text",
+     "applies_to": "what part of the work this binds"}
+  ],
+  "key_excerpts": [
+    {"source": "specs/04-identity-registry.md",
+     "excerpt": "verbatim text polecats will need"},
+    {"source": "AGENTS.md",
+     "excerpt": "verbatim command/validation a polecat will run"}
+  ],
+  "open_questions": [
+    "anything ambiguous that may block decomposition"
+  ]
+}
+```
+
+**Failure modes:**
+
+- If any `open_questions` is blocking (decomposition cannot proceed
+  without an answer): write `$RUN_DIR/needs_human.json` listing the
+  questions, mail the mayor with subject prefix
+  `[HUMAN REVIEW NEEDED]` (see "Human-review notifications" in the
+  formula description), block the step for human review with the helper,
+  and exit cleanly after `gc runtime drain-ack`. Do not proceed to step 4.
+**Mark this step complete.**
+
+```bash
+gc --rig "$RIG" bd close "$GC_BEAD_ID" --continue
+gc runtime drain-ack
+```
+
+This explicit close and drain acknowledgement are REQUIRED. gascity's formula engine does not
+auto-close step beads when a fresh-wake session exits; omitting the close
+leaves the step bead open and deadlocks downstream steps that `needs`
+this one. The `--continue` flag advances the molecule to the next
+eligible step. The `gc runtime drain-ack` call lets the controller archive
+this fresh session so the singleton Cartographer pool can spawn a new
+session for the next ready step.
+
+If you took a failure-mode branch above and exited early (wrote
+`failure.json` or `needs_human.json` and stopped), do NOT close and do
+NOT leave the step assigned to cartographer. Run the human-review step
+disposition helper from the formula description so automation stops
+dispatching this failed step until an operator explicitly resumes it.
+
+"""
+
+[[steps]]
+id = "inventory_beads"
+title = "Inventory rig beads — open and prior-epoch and cross-work-order"
+needs = ["init-run", "inventory"]
+description = """
+Build the candidate set of existing beads that may (a) block the new
+work, (b) be duplicates of new work, or (c) be the targets of explicit
+`Blocked by:` dependencies from the target work order.
+
+This step is independent of `read_order` — they can run in parallel.
+It only depends on `init-run` for the state file.
+
+**This step is deterministic.** All query, filter, classification, and
+JSON-assembly work is performed by `.gc/scripts/cartographer-inventory.sh`
+(auto-synced from `<city>/scripts/cartographer-inventory.sh` at sling
+time). Your job is to source state, run the script, handle its exit
+status, and close the step bead. Do NOT reproduce the script's logic
+inline — divergence between the script and prose has caused
+correctness drift in the past.
+
+**1. Load state and run the script:**
+
+```bash
+WO_PATH_INPUT="{{work_order_path}}" . .gc/scripts/cartographer-load-state.sh
+cd "$REPO_ROOT"
+
+bash .gc/scripts/cartographer-inventory.sh 2> "$RUN_DIR/inventory_beads.stderr"
+SCRIPT_EXIT=$?
+```
+
+The script writes (under `$RUN_DIR`):
+- `open_beads.json` + `open_beads_raw.json`
+- `prior_epoch_beads.json`
+- `cohort_convoy.json`
+- `cross_wo_blockers_raw.json` + `cross_wo_blockers.json`
+- `candidate_dependents.json`
+- `prior_holding_stubs.json` — open HOLDING stubs whose
+  `placeholder-blocker:` label targets this WO, with their open
+  dependents enumerated. Empty array when no prior run referenced
+  this WO as an unplanned blocker.
+- `beads_inventory.json` — the downstream contract artifact
+- `unresolved_blocker_refs.json` (only when WO-NNN refs failed to resolve)
+
+The `beads_inventory.json` schema is the same one prior formula versions
+produced (open_beads, prior_epoch_beads, cross_wo_blockers,
+existing_cohort_convoy_id, cohort_convoy_label, convoy_title_override,
+unresolved_cohort_dup, stranded_cohort_members, unplanned_family_members,
+unresolved_blocker_refs, large_open_set), plus a new `prior_holding_stubs`
+key and a new `downstream_blocks` key carrying the same arrays as the
+standalone artifacts. Step 6's forward and reverse-edge logic reads
+`candidate_dependents.json` — a relevance-filtered set, NOT a recency-
+sorted top-N pad. A bead is a valid candidate only if its source WO is
+explicitly referenced by THIS work order (Blocked by / inline body link
+or bare-text ref / Blocks / family cohort sibling), OR it is a cohort
+convoy member, OR it is a dependent of a prior HOLDING that targets
+this WO. The artifact is capped at 250 as a safety valve for
+pathological large-cohort WOs; on typical WOs the relevance filter
+returns 20–60 beads and the cap never fires. The graph step (5) reads
+`prior_holding_stubs` to plan HOLDING release.
+
+**2. Handle the script's exit status:**
+
+- **Exit 0 (success).** Verify `$RUN_DIR/beads_inventory.json` exists
+  and is non-empty:
+  ```bash
+  if [ ! -s "$RUN_DIR/beads_inventory.json" ]; then
+    echo "FATAL: script exited 0 but beads_inventory.json missing/empty" \
+      > "$RUN_DIR/failure.json"
+    gc mail send gastown.mayor \
+      -s "[HUMAN REVIEW NEEDED] cartographer inventory_beads output missing for $WORK_ORDER_ID" \
+      -m "inventory_beads exited 0 but beads_inventory.json was missing or empty. See $RUN_DIR/failure.json. Step bead $GC_BEAD_ID blocked for human review."
+    .gc/scripts/cartographer-human-review-block.sh "inventory_beads output missing"
+    gc runtime drain-ack
+    exit 0
+  fi
+  ```
+  Then close the step bead:
+  ```bash
+  gc --rig "$RIG" bd close "$GC_BEAD_ID" --continue
+  gc runtime drain-ack
+  ```
+  The drain acknowledgement archives this fresh session so the singleton
+  Cartographer pool can spawn the next ready step. Do not generate any
+  summary or commentary — downstream steps read the artifacts directly.
+
+- **Exit ≠ 0 (failure).** Write a failure record and mail the mayor.
+  Do NOT close the step bead. Block it for human review so it is no
+  longer dispatched to cartographer:
+  ```bash
+  jq -n \
+    --arg exit "$SCRIPT_EXIT" \
+    --rawfile stderr "$RUN_DIR/inventory_beads.stderr" \
+    '{step: "inventory_beads", script_exit: $exit, stderr: $stderr}' \
+    > "$RUN_DIR/failure.json"
+
+  gc mail send gastown.mayor \
+    -s "[HUMAN REVIEW NEEDED] cartographer inventory_beads failed for $WORK_ORDER_ID" \
+    -m "Script exited $SCRIPT_EXIT. See $RUN_DIR/failure.json and $RUN_DIR/inventory_beads.stderr. Step bead $GC_BEAD_ID blocked for human review."
+  .gc/scripts/cartographer-human-review-block.sh "inventory_beads failed"
+  gc runtime drain-ack
+  exit 0
+  ```
+
+**3. Special signal: unresolved blocker refs.**
+
+If `$RUN_DIR/unresolved_blocker_refs.json` exists, the script
+encountered `WO-NNN` annotations in `inventory.json` that did not
+resolve to any file under `specs/agent-work-orders/`. The script still
+succeeds (this is a soft warning surfaced later by `validate-plan`),
+but mention it in passing in any optional summary you produce.
+
+**Why this is a script, not prose.**
+
+The prior prose drove the LLM through ~10 shell commands plus a
+per-bead `gc bd show` loop that scaled O(N) with open-bead count. On
+the reference dataset (2 open beads) it took ~80s wall-time. The script
+performs the same work — single open-bead query (raw + filtered view),
+one prior-epoch query, one `--label-any` cross-WO blocker query, one
+cohort convoy query, jq-only candidate-dependents derivation — in
+~1–2s wall-time. As the bead store grows, the script's cost stays
+bounded by a constant number of bd-list calls plus a per-family probe
+loop bounded by family size; the prose version's cost grew linearly in
+both bead count and LLM reasoning tokens.
+"""
+
+
+[[steps]]
+id = "decompose"
+title = "Decompose the work order into atomic tasks"
+needs = ["read_order"]
+description = """
+Produce a list of atomic, polecat-executable tasks. Each task must be
+self-contained, sized to one polecat session, and grounded in the
+verbatim spec excerpts staged in `read_order`.
+
+**1. Load state and context:**
+```bash
+WO_PATH_INPUT="{{work_order_path}}" . .gc/scripts/cartographer-load-state.sh
+cat "$RUN_DIR/context.json"
+cat "$RUN_DIR/inventory.json"
+```
+
+**2. Decompose against the work order's Implementation Steps section.**
+
+The rig's work-order template (see
+`specs/agent-work-orders/work-order-template.md`) gives every work
+order an Implementation Steps section and an Acceptance Criteria
+section. Use Implementation Steps as the starting decomposition,
+then refine:
+
+- Merge steps that would be trivial in isolation.
+- Split steps that exceed ~50% of a polecat context window once
+  context (spec excerpts + code touch) is included.
+- Ensure each task has a `done_when` that maps to a concrete subset
+  of the work order's Acceptance Criteria, a behavioral test from
+  `16-testing-strategy.md`, or a named artifact.
+
+**3. For each atomic task, emit one JSON object** to
+`$RUN_DIR/tasks.json` as an array:
+
+```json
+[
+  {
+    "draft_id": "task-1",
+    "title": "<imperative, <70 chars>",
+    "body": "<self-contained execution instructions, written for a polecat with no other context>",
+    "done_when": "<test or artifact or behavior>",
+    "touches": ["apps/neptune-prep/src/build_neptune_ready.py", "..."],
+    "natural_deps": ["task-0"],
+    "acceptance_refs": ["work-order Acceptance Criteria bullet text"],
+    "excerpt_refs": ["specs/04-identity-registry.md", "AGENTS.md"]
+  }
+]
+```
+
+`natural_deps` is informational — step 6 computes final edges.
+
+`excerpt_refs` lists which `key_excerpts` from `context.json` the emit step
+will inline into this bead's body. Every spec the polecat needs MUST
+have an excerpt staged here.
+
+Before writing `tasks.json`, scrub every task `body` for the exact
+self-containment guard phrases enforced later by `validate-plan`:
+`see the spec`, `see section`, `refer to`, `in specs/`, `see specs/`,
+`in the work order`, `per the spec`, and `as described in`. Do not use
+those phrases even in explanatory prose. If you need to identify where
+an embedded requirement came from, write neutral local wording such as
+"Acceptance criteria:", "Contract excerpt:", or "Source excerpt above:"
+instead of naming the external document.
+
+**Sizing rule of thumb:** if you find yourself writing a task body
+shorter than 200 words for a work order this dense, you are
+under-decomposing. If a single body exceeds ~1500 words after the emit step
+inlines excerpts, split.
+
+**4. Do NOT compute `depends_on` against existing beads in this
+step** — that is step 6's job.
+**Mark this step complete.**
+
+```bash
+gc --rig "$RIG" bd close "$GC_BEAD_ID" --continue
+gc runtime drain-ack
+```
+
+This explicit close and drain acknowledgement are REQUIRED. gascity's formula engine does not
+auto-close step beads when a fresh-wake session exits; omitting the close
+leaves the step bead open and deadlocks downstream steps that `needs`
+this one. The `--continue` flag advances the molecule to the next
+eligible step. The `gc runtime drain-ack` call lets the controller archive
+this fresh session so the singleton Cartographer pool can spawn a new
+session for the next ready step.
+
+If you took a failure-mode branch above and exited early (wrote
+`failure.json` or `needs_human.json` and stopped), do NOT close and do
+NOT leave the step assigned to cartographer. Run the human-review step
+disposition helper from the formula description so automation stops
+dispatching this failed step until an operator explicitly resumes it.
+
+"""
+
+[[steps]]
+id = "graph"
+title = "Compute dependency edges and convoy grouping"
+needs = ["decompose", "inventory_beads"]
+description = """
+Build the final graph: edges among new tasks, edges from new tasks to
+existing open beads, edges from new tasks to cross-work-order
+blockers, and convoy grouping (including cross-WO convoys for
+land-together rules).
+
+**1. Load state and inputs:**
+```bash
+WO_PATH_INPUT="{{work_order_path}}" . .gc/scripts/cartographer-load-state.sh
+cat "$RUN_DIR/tasks.json"
+cat "$RUN_DIR/beads_inventory.json"
+cat "$RUN_DIR/inventory.json"
+```
+
+`tasks.json` is expected to be a top-level JSON array. When iterating it,
+use the compatibility form below so resumed runs tolerate older object-shaped
+artifacts without failing on `Cannot index array with string "tasks"`:
+
+```bash
+jq -c 'if type == "array" then .[] else .tasks[] end' "$RUN_DIR/tasks.json"
+```
+
+**2. Compute new-to-new edges.** Start with `natural_deps` from
+`tasks.json`. For each edge, ask: "Could B start before A finishes
+without causing rework or breakage?" If yes, drop the edge. Minimal
+edges beat defensive ones.
+
+**3. Compute new-to-existing edges (forward direction, in-flight
+blockers).** This is category (c) from the formula description:
+cases where a NEW task's `done_when` literally requires a module,
+schema, contract, runtime surface, or named artifact that an
+EXISTING open bead creates. Without these edges, polecats can wake
+on the new bead before its real prerequisite exists, either blocking
+or producing wrong output.
+
+**Why this step matters as much as the others.** Missing (c) edges
+are NOT a "safer default" than speculative (c) edges. A new task
+that wakes before its prereq exists either churns (re-stubbing an
+API that's about to land in the prior WO) or produces output that
+won't integrate with the prereq when it lands. The right error rate
+is "every concrete tie, named once, with the smallest defensible
+reason." Per-candidate iteration (below) exists to force that rate.
+
+**Same candidate set as step 5.5.** Both forward (c) and reverse (d)
+edge detection evaluate the SAME population: every open bead in
+`beads_inventory.json:candidate_dependents`. This artifact is the
+unified candidate inventory — a relevance-filtered set produced by
+step 4: only beads from WOs explicitly referenced by this work order
+(Blocked by / inline body link or bare-text ref / Blocks / family
+cohort sibling), plus cohort convoy members, plus prior-HOLDING
+dependents. Capped at 250 as a safety valve; typical runs return
+20–60 beads and the cap never fires. For each candidate, decide BOTH
+directions independently in one sweep:
+- Does this new run create something the candidate's `done_when`
+  requires? → reverse edge in step 5.5.
+- Does this new run's `done_when` require something the candidate
+  creates? → forward edge here.
+
+This is a single iteration over the candidates, producing two
+decision rows per candidate (one in `new_to_existing_decisions`
+emitted here, one in `existing_to_new_decisions` emitted in 5.5).
+
+**Process candidates ONE AT A TIME**, in list order. Batch
+reasoning ("none of the WO-X beads are blockers...") is forbidden.
+Collapsing a related group of candidates into one prose paragraph
+reliably overlooks the cross-cutting member of that group whose
+relationship to the new run is structurally different from the
+rest — typically the family's cross-cutting verifier or the prior
+WO's contract surface that the new run extends. The cost is
+asymmetric: a single forgotten edge misorders dispatch, while a
+slightly over-explicit per-candidate row costs only a few seconds
+of cartographer thinking. Per-candidate iteration keeps the bar
+visible.
+
+For each candidate:
+
+a. **Bidirectional name matching (forward direction).** Look in BOTH
+   directions:
+   - **New tasks → candidate.** Read each new task's body, `touches`,
+     and `acceptance_refs` from `tasks.json` for explicit references
+     to module paths, schema names, contract names, file paths,
+     layer numbers ("Layer N"), component names, or named artifacts
+     that the candidate creates.
+   - **Candidate → new tasks.** Read the candidate's `title` and
+     `description` (body) for surfaces or contracts the candidate's
+     `done_when` produces. If any new task literally consumes that
+     output, it is in (c) — emit a forward edge.
+
+   Title-level matches count: an existing bead whose title names a
+   specific component, layer, or contract is concretely tied to any
+   new task that consumes that component's output — even when the
+   new task's body refers to the surface generically ("the output
+   of the prior stage") rather than naming the producer.
+
+b. The bar is the SAME as category (d): the relationship must be a
+   real blocker grounded in something concrete the existing bead
+   creates that the new task literally requires. Aesthetic or
+   thematic similarity is NOT sufficient. BUT the bar applies
+   symmetrically. A new task whose body says "reads rule_trace"
+   and an existing bead titled "Add rule_trace contract" is a
+   concrete match, not thematic. Lexical hits on contract names,
+   schema names, file paths, or pipeline-stage labels are exactly
+   the "named artifact" signal.
+
+c. **New-task-is-a-verifier heightened scrutiny.** If ANY new task in
+   this run qualifies as a cohort verifier (title contains
+   "cross-cutting", "e2e", "end-to-end", "integration test",
+   "import-linter contract", or "verifier", or its body is a
+   behavioral/integration-test fixture set), apply heightened
+   scrutiny in the FORWARD direction: that task's `done_when`
+   cannot be satisfied without the implementations it observes
+   existing. Scan the verifier's body for every concrete surface
+   it observes; emit forward edges to existing beads that produce
+   those surfaces, unless the surface is in this same run's
+   emission set (then it's a new_to_new edge). The default for
+   verifier new-tasks is "emit forward edge unless the candidate's
+   surface is provably outside the verifier's scope." Non-verifier
+   new tasks default to "skip unless a concrete tie can be named."
+
+d. **Honor embedded routing directives.** If a NEW task's body
+   contains explicit cartographer-routing instructions like:
+   - "This task depends on X existing..."
+   - "Cannot start before <named surface> lands..."
+   - "Requires <module path> from <prior WO>..."
+   - "Polecat must wait for <bead-or-WO> before starting..."
+
+   follow the directive: emit forward edges to existing beads that
+   match. Symmetric to the reverse-direction directive rule in 5.5.
+
+e. **Soft conflicts** (could-start-but-collide on shared file) are
+   distinct from forward edges. If a new task and a candidate both
+   touch the same file but neither truly blocks the other, flag in
+   `soft_conflicts` (do NOT emit a forward edge here, and do NOT
+   emit a `new_to_existing_decisions` `emit` row — `skip` with
+   reason citing the soft conflict).
+
+f. Skip an existing bead (emit a `skip` decision row in
+   `new_to_existing_decisions`, not an edge) if any of:
+   - its status is closed (blocker already landed)
+   - it is a step or molecule bead (formula scaffolding)
+   - it is in this run's own emission set (those are `new_to_new`)
+   - adding the edge would create a cycle
+   - the edge is already covered by a `new_to_cross_wo` edge from
+     step 4 (explicit Blocked-by annotation took precedence; cite
+     the `new_to_cross_wo` row in the reason)
+   - bidirectional name matching (a) found no concrete tie, no new
+     task is a cohort verifier (c) that observes the candidate, and
+     no embedded directive (d) applies
+
+   `in_progress` candidates ARE valid forward blockers (a polecat
+   mid-work has not yet produced the surface; the new task still
+   needs to wait). This differs from the reverse (d) rule, which
+   skips `in_progress` because the edge would not change dispatch.
+
+g. Emit one entry per (new task → existing bead) pair. The reason
+   field must cite the concrete tie — name the new task's needed
+   surface and the candidate that produces it. Form:
+   "<new-task> reads/imports/grades <named artifact>; <candidate>
+   creates that artifact."
+
+   If no reason of this concrete form can be written AND no new
+   task is a verifier observing the candidate AND no embedded
+   directive applies, emit a `skip` decision row instead.
+
+**4. Compute new-to-existing edges (cross-work-order blockers).** This
+is the critical missing piece in pure heuristic graphs.
+
+For each entry in `beads_inventory.json:cross_wo_blockers`:
+
+- If `all_closed: true`: the blocker work order is fully landed.
+  No edge needed.
+- Else, if `convoy_bead_id` is present and still open: every new
+  task whose body touches files the blocker WO owns gets a
+  `depends_on` edge to the convoy bead. The convoy is the right
+  granularity — depending on individual task beads creates fanout.
+- Else (no convoy, individual tasks): every new task gets a
+  `depends_on` edge to every still-open task bead of the blocker WO.
+
+Use the blocker WO's Implementation Steps and `Blocks:` annotation
+to decide whether the blocker is truly load-bearing for a given new
+task. If unclear, edge it (false positives here just sequence work;
+false negatives produce broken graphs).
+
+**5. Convoy grouping — cohort-aware.**
+
+A convoy is a coherent unit that should ship or fail together. Group
+new tasks into a convoy when ALL of:
+- they share a single user-visible outcome (the work order's intent)
+- closing some subset without the others leaves the system half-shipped
+- a human reviewer would want to see them succeed or fail together
+
+**Per-WO convoys** are the default for solo work orders
+(`inventory.json:cohort_label` is null). Most work orders produce
+exactly one such convoy. Multiple convoys for one WO are appropriate
+when the work order has clearly separable phases.
+
+**Cohort convoys** are the cross-WO mechanism for both
+land-together sets AND index/sub-WO families. If `cohort_label` is
+set, every cartographer run for any cohort member plans into the
+SAME convoy bead. The convoy grows as more cohort members are
+planned over time. This is the correct response to ad-hoc
+work-order additions joining an existing epic, AND to the parent
+index + lettered sub-WO pattern.
+
+Cohort-convoy rules:
+
+a. If `beads_inventory.json:existing_cohort_convoy_id` is non-null:
+   USE that convoy id as the parent for this run's new task beads.
+   Plan a single convoy entry with `use_existing_convoy_id: <that-id>`.
+   Do NOT create a new convoy in step 7. The convoy's existing
+   title is authoritative — do not attempt to rename it.
+
+b. If `existing_cohort_convoy_id` is null: plan to create a NEW
+   convoy in step 7 carrying both
+   `source:work-order:<this-id>` (record of creator) and the bare
+   `<cohort_label>` value (e.g. `family:008-ai-enrichment`) as
+   labels. Apply the cohort label verbatim — do NOT add a `cohort:`
+   prefix or any other wrapper. The step 4 join lookup queries this
+   label as a bare value (`--label="$COHORT_LABEL"`); any wrapping
+   would orphan the convoy from future cohort joins. Future
+   cartographer runs for other cohort members will find this convoy
+   via the cohort label and join it.
+
+   **Convoy title.** If `inventory.json:convoy_title_override` is
+   non-null (set in step 1.5b for family cohorts), write that
+   string directly into the convoy entry's `title` field in
+   `graph.json` regardless of which family member is triggering
+   creation. This is what ensures a sub-WO that races ahead of its
+   parent still produces a convoy titled for the parent feature
+   ("WO-008: AI Enrichment (Index)"), not for the sub-WO that
+   happened to fire first ("WO-008a: Document Ingestion"). For
+   land-together cohorts (no override), construct the title from
+   the cohort intent. Emit (the emit step) uses `convoy.title` verbatim,
+   so the override decision lives entirely in this step.
+
+c. If `stranded_cohort_members` is non-empty: do NOT attempt to
+   adopt their beads. Their existing per-WO convoys stay intact.
+   Step 8's mayor mail flags them for operator review (manual
+   migration is the only safe path; cartographer never calls
+   `gc convoy add` on existing beads).
+
+**Edges remain edges.** Cross-WO `Blocked by:` annotations still
+produce `new_to_cross_wo` `depends_on` edges (separate from convoy
+membership). Convoy says "ship together"; edges say "B needs A".
+Both are needed.
+
+**The cartographer NEVER calls `gc convoy add` on an existing
+bead.** New beads point at the convoy via `--convoy=<id>` at
+creation time, which mutates only the new bead's convoy field.
+This is the only allowed pattern for extending a convoy across
+runs.
+
+**5.5. Compute existing-to-new edges (reverse direction).** This is
+category (d) from the formula description: cases where a NEW bead
+from this run is a genuine prerequisite for an EXISTING open bead's
+completion. The existing bead's `done_when` requires modules,
+schemas, contracts, runtime surfaces, or named artifacts that one
+of this run's new beads creates.
+
+**Why this step matters as much as the others.** Missing (d) edges
+are NOT a "safer default" than speculative (d) edges. A cohort
+verifier polecat that wakes before the implementations exist either
+blocks waiting on the cohort or produces flaky/false-pass output
+that erodes the convoy's land-together guarantee. The right error
+rate for this section is neither "zero edges" nor "everything maybe
+related" — it is "every concrete tie, named once, with the smallest
+defensible reason." Per-candidate iteration (below) exists to force
+that rate.
+
+**Same candidate set as step 6.3 (forward direction).** Both
+directions evaluate the SAME population of open beads in
+`beads_inventory.json:candidate_dependents` (or, if that artifact is
+absent because step 4 ran under an older formula version, fall back
+to `open_beads.json`). Step 6.3 already iterated the candidates and
+recorded a `new_to_existing_decisions` row for each. This step
+iterates the SAME list and records a parallel
+`existing_to_new_decisions` row for each. In practice, the
+cartographer SHOULD perform 6.3 and 5.5 in a single sweep per
+candidate — for each candidate, decide the forward and reverse
+direction together, then emit two decision rows. They are documented
+as separate sections only to keep the bar for each direction
+clearly stated.
+
+**Process candidates ONE AT A TIME**, in list order. See step 6.3
+for the rationale on batch-reasoning; the same prohibition applies
+here.
+
+For each candidate:
+
+a. **Bidirectional name matching.** Look in BOTH directions:
+   - **Candidate → new tasks.** Read the candidate's `description`
+     (body) and `title` for explicit references to module paths,
+     schema names, contract names, file paths, layer numbers
+     ("Layer N"), component names, or named artifacts that match
+     what one of this run's new tasks creates. The new task's
+     body, `touches`, and `acceptance_refs` from `tasks.json` are
+     the matching ground.
+   - **New tasks → candidate.** Read each new task's body for
+     references to surfaces or contracts that the candidate's
+     `done_when` literally produces or consumes. A new task that
+     consumes the candidate's output is in (c), not (d) — but a
+     new task that PRODUCES something the candidate's `done_when`
+     verifies/observes/asserts is in (d).
+
+   Title-level matches count: a candidate titled "Cross-cutting
+   E2E: evidence → canonical facts with provenance + gates" is
+   *concretely* tied to any new task implementing one of the gates,
+   the canonicalizer, the writer, or the workflow that wires them
+   — even if the body uses prose like "the pipeline" rather than
+   enumerating each layer.
+
+b. The bar is the SAME as category (c): the relationship must be a
+   real blocker grounded in something concrete the new bead creates
+   that the existing bead literally requires. Aesthetic or thematic
+   similarity is NOT sufficient. BUT: the bar applies symmetrically.
+   A candidate whose body asserts a specific named output (a
+   particular contract field, a numbered layer's result, a file at
+   a path) and a new task that produces exactly that named output
+   is a concrete match, not a thematic one. Lexical hits on layer
+   numbers, contract names, file paths, or pipeline-stage labels
+   are exactly the "named artifact" signal this section is looking
+   for.
+
+c. **Cohort verifier heightened scrutiny.** A candidate qualifies as
+   a cohort verifier if ANY of the following holds:
+   - title contains "cross-cutting", "e2e", "end-to-end",
+     "integration test", "import-linter contract", or "verifier"
+   - bead lives in this run's cohort convoy AND was authored by a
+     prior cartographer run for the parent index (i.e. created
+     before this run's `parent_epoch` for the cohort)
+   - body explicitly enumerates "cross-cutting acceptance criteria"
+     or names the union of the family's outputs
+
+   For cohort verifiers, apply heightened scrutiny:
+   - scan the candidate's FULL body, not just the first
+     done_when section, for layer numbers, component names,
+     contract surfaces, file paths, and stage labels
+   - presume a tie exists if ANY of this run's new tasks produces a
+     surface the verifier observes/asserts; the cartographer must
+     write an affirmative reason citing the concrete artifact, or
+     an affirmative rejection reason explaining why the verifier's
+     scope is provably narrower
+
+   The default for cohort verifier candidates is "emit edge unless
+   the verifier's scope is demonstrably outside this run's surface
+   area." The default for other candidates remains "skip unless a
+   concrete tie can be named."
+
+d. **Honor embedded routing directives.** Cartographer runs sometimes
+   write explicit routing instructions into a bead's body
+   anticipating downstream WOs. If a candidate's body contains
+   phrases like:
+   - "Wire dependency edges from this bead to..."
+   - "This bead depends on each sub-WO integration entry point..."
+   - "Leave with no sub-WO edges until they exist..."
+   - "Polecats should not start this bead until <named surface>
+     exists..."
+
+   then follow the directive: emit edges to every new task that
+   matches the directive's surface. The directive is the upstream
+   cartographer's explicit guidance and overrides general
+   skepticism. The reason field cites the directive verbatim.
+
+e. Eligible candidates include:
+   - existing beads in the SAME cohort convoy this run is joining
+   - existing beads in OTHER convoys
+   - existing beads in NO convoy
+   - existing beads from prior epochs of this same work order (rare;
+     usually those were already supplied with edges in their own run)
+
+   Convoy membership is irrelevant to whether (d) applies. The
+   primary goal is an accurate dependency graph across the whole
+   rig, not within any single convoy.
+
+f. Skip an existing bead (emit a `skip` decision row, not an edge)
+   if any of:
+   - its status is closed or in_progress (in_progress means a polecat
+     is mid-work; the edge would not change dispatch)
+   - it is a step or molecule bead (formula scaffolding)
+   - it is in this run's own emission set (those are `new_to_new`)
+   - adding the edge would create a cycle when combined with the
+     new_to_new + new_to_existing + new_to_cross_wo edges already
+     planned
+   - bidirectional name matching (a) found no concrete tie, the
+     candidate is not a cohort verifier (c), and no embedded
+     directive (d) applies
+
+g. Emit one entry per (existing bead → new task) pair. If one
+   existing bead is blocked by multiple new tasks, emit multiple
+   edges; do not collapse into "any of these".
+
+The reason field must cite the concrete tie — name the candidate's
+needed surface and the new task that creates it. Forms:
+- "<candidate> requires <named module/schema/path>; <new-task>
+  creates that <module/schema/path>."
+- "<candidate>'s done_when references <named artifact>; <new-task>
+  produces that artifact."
+- "<candidate>'s body contains the directive '<verbatim directive
+  text>'; <new-task> matches that directive."
+
+If no reason of this concrete form can be written AND the candidate
+is not a cohort verifier AND no embedded directive applies, do not
+emit the edge — emit a `skip` decision row instead. Speculative
+reverse edges mis-sequence work and erode trust in the graph; but
+missing edges to cohort verifiers and to candidates with explicit
+embedded directives mis-sequence the cohort in the opposite
+direction. The per-candidate decision audit (section 7) is how this
+formula keeps both error modes visible.
+
+**5.6. HOLDING stub planning — create side (unplanned cross-WO
+blockers).** For each entry in `cross_wo_blockers` with
+`no_beads_known: true`, the cartographer plans ONE HOLDING stub. The
+HOLDING is the structural block that prevents this run's dependent
+new beads from dispatching before the blocker WO lands.
+
+Identify which subset of this run's NEW tasks actually need the
+blocker — apply the same concreteness bar used in step 4 (forward
+edges to cross-WO blockers): a new task is a HOLDING dependent if
+its body, `touches`, `done_when`, or `acceptance_refs` literally
+reference modules, schemas, contracts, or named artifacts that the
+blocker WO's documented scope produces. Blanket-attach is forbidden;
+the prior recipe's "every new task depends on the holder" pattern
+over-blocks the run and erases the priority signal value of the
+`hold:` label.
+
+Plan one entry per blocker WO in `holding_stubs_to_create`:
+
+```json
+{
+  "blocker_wo_id": "015-manual-override-system",
+  "draft_holding_id": "hold-015",
+  "title": "HOLDING: 015-manual-override-system (placeholder for <this-wo> cross-WO dep)",
+  "body": "<inline body — see emit step 7 for template>",
+  "dependent_draft_ids": ["task-3", "task-7"],
+  "hold_label": "hold:015-manual-override-system"
+}
+```
+
+If no NEW task concretely requires the blocker after this analysis,
+emit a `holding_stubs_to_create` entry with empty
+`dependent_draft_ids` and reason "no concrete dependent in this run;
+HOLDING created for downstream-run linkage only". The HOLDING still
+gets created — its priority-signal role for dogs survives even when
+this run has no concrete dependents.
+
+**5.7. HOLDING stub planning — release side (prior HOLDINGs target
+this WO).** For each entry in `beads_inventory.json:prior_holding_stubs`
+(open HOLDING stubs with `placeholder-blocker:${WORK_ORDER_ID}`),
+plan retarget edges + release.
+
+For each prior HOLDING:
+
+a. **Enumerate dependents.** The HOLDING's `dependents` list
+   carries open beads with depends_on edges to this HOLDING (every
+   such bead also carries `hold:${WORK_ORDER_ID}` label from its
+   own emit run).
+
+b. **Match each dependent to a specific NEW bead.** Run the same
+   category-d artifact match used in step 5.5: the dependent's
+   `done_when` and body name a concrete artifact (module path,
+   schema, contract surface) that one of this run's new tasks
+   produces. The dependent already lives in
+   `candidate_dependents.json`, so its decision row is the existing
+   `existing_to_new_decisions` row — no separate pass needed.
+
+c. **Classify the HOLDING:**
+   - **fully_releasable** — EVERY dependent matched cleanly to a
+     new task in step 5.5 with `decision: emit`. The HOLDING can
+     be closed at emit time after all retarget edges land.
+   - **partial** — at least one dependent has `decision: skip` in
+     5.5 (no clean named-artifact match). The HOLDING stays open
+     and goes in the mayor mail under PARTIAL HOLDING RELEASE for
+     manual resolution.
+
+d. Plan an entry in `holding_stubs_to_release`:
+
+```json
+{
+  "holding_bead_id": "app-hold-abc",
+  "title": "<HOLDING title>",
+  "placeholder_for_wo": "008-ai-enrichment",
+  "classification": "fully_releasable",
+  "retarget_edges": [
+    {"from_existing_bead_id": "app-008-task-3",
+     "to_new": "task-7",
+     "reason": "app-008-task-3's done_when requires packages/contracts/manual-overrides; task-7 creates that contract"}
+  ],
+  "unretargetable_dependents": []
+}
+```
+
+For `partial` entries, populate `unretargetable_dependents` with
+the dependent ids that couldn't match. The retarget edges that DID
+match still get applied at emit time (better partial coverage than
+none).
+
+The retarget edges duplicate entries that already appear in
+`existing_to_new` (same edge, same reason). This is by design —
+keeping them in both places makes the HOLDING's lifecycle visible
+without losing the audit trail of the per-candidate decision.
+
+**6. Cycle check.** Topological sort over (new tasks + new_to_new
+edges + new_to_existing edges + new_to_cross_wo edges +
+existing_to_new edges). If a cycle: examine the tightest edges;
+remove the most likely defensive one (prefer dropping
+existing_to_new edges first since they're the newest category and
+most likely speculative). Repeat until acyclic.
+
+**7. Write `$RUN_DIR/graph.json`:**
+
+```json
+{
+  "convoys": [
+    {
+      "draft_convoy_id": "convoy-1",
+      "title": "...",
+      "intent": "user-visible outcome",
+      "member_draft_ids": ["task-1", "task-2"],
+      "use_existing_convoy_id": null,
+      "cohort_label": null
+    }
+  ],
+  "edges": {
+    "new_to_new": [
+      {"from": "task-2", "to": "task-1"}
+    ],
+    "new_to_existing": [
+      {"from": "task-3", "to_existing_bead_id": "app-abc",
+       "reason": "blocked by in-flight API work"}
+    ],
+    "new_to_cross_wo": [
+      {"from": "task-1",
+       "to_existing_bead_id": "app-conv-000",
+       "blocker_wo_id": "000-cdk-foundation-and-persistence",
+       "reason": "Blocked by WO-000 (work-order annotation)"}
+    ],
+    "existing_to_new": [
+      {"from_existing_bead_id": "app-ddd", "to_new": "task-3",
+       "reason": "app-ddd's import-linter contract names apps.fargate.bar as a forbidden importer; task-3 creates that module"}
+    ]
+  },
+  "new_to_existing_decisions": [
+    {"candidate_id": "app-aaa", "decision": "emit",
+     "edges_emitted": ["task-5"],
+     "reason": "app-aaa creates packages/contracts/schemas/foo.json; task-5's body reads that schema"},
+    {"candidate_id": "app-bbb", "decision": "emit",
+     "edges_emitted": ["task-9"],
+     "new_task_is_verifier": true,
+     "reason": "task-9 is a behavioral gold-case fixture set grading app-bbb's Lambda output; verifier cannot run before subject exists"},
+    {"candidate_id": "app-ccc", "decision": "skip",
+     "reason": "app-ccc extends a parallel CDK stack; no new task in this run reads any surface app-ccc produces"}
+  ],
+  "existing_to_new_decisions": [
+    {"candidate_id": "app-ddd", "decision": "emit",
+     "edges_emitted": ["task-3"],
+     "reason": "app-ddd's import-linter contract names apps.fargate.bar as a forbidden importer; task-3 creates that module"},
+    {"candidate_id": "app-eee", "decision": "skip",
+     "is_cohort_verifier": true,
+     "reason": "verifier scope is provably narrower: body asserts only the X path; none of this run's tasks produce a surface app-eee observes"},
+    {"candidate_id": "app-fff", "decision": "skip",
+     "is_cohort_verifier": false,
+     "reason": "app-fff produces field Z that this run's tasks consume; that is a forward (c) tie, not a reverse (d) tie"}
+  ],
+  "soft_conflicts": [
+    {"task_draft_id": "task-4", "existing_bead_id": "app-def",
+     "reason": "both touch apps/graph-builder/profiles/tractor.py"}
+  ],
+  "holding_stubs_to_create": [
+    {"blocker_wo_id": "015-manual-override-system",
+     "draft_holding_id": "hold-015",
+     "title": "HOLDING: 015-manual-override-system (placeholder for 008-ai-enrichment cross-WO dep)",
+     "body": "Placeholder bead so beads from 008-ai-enrichment can depend on 015-manual-override-system before that WO is planned...",
+     "dependent_draft_ids": ["task-3", "task-7"],
+     "hold_label": "hold:015-manual-override-system"}
+  ],
+  "holding_stubs_to_release": [
+    {"holding_bead_id": "app-hold-abc",
+     "title": "HOLDING: 008-ai-enrichment (placeholder for 016-fleet-rollup cross-WO dep)",
+     "placeholder_for_wo": "016-fleet-rollup",
+     "classification": "fully_releasable",
+     "retarget_edges": [
+       {"from_existing_bead_id": "app-016-task-2",
+        "to_new": "task-5",
+        "reason": "app-016-task-2's done_when requires packages/contracts/ai-enrichment; task-5 creates that contract"}
+     ],
+     "unretargetable_dependents": []}
+  ],
+  "cycle_check": "passed"
+}
+```
+
+**Both `new_to_existing_decisions` and `existing_to_new_decisions`
+are REQUIRED and must each cover every candidate** in
+`candidate_dependents.json`. The `validate-plan` step (check `l`)
+verifies both arrays cover every candidate before emit runs.
+A candidate missing from either audit is a process failure: it
+means the cartographer batch-reasoned instead of iterating per
+candidate. Per-candidate decision rows are how the formula keeps
+both directions auditable.
+
+**Failure modes:**
+
+- Cycle cannot be broken without violating intent: write
+  `$RUN_DIR/needs_human.json`, mail the mayor with subject prefix
+  `[HUMAN REVIEW NEEDED]` (see "Human-review notifications" in the
+  formula description), block the step for human review with the helper,
+  and exit cleanly after `gc runtime drain-ack`.
+- `soft_conflicts` count > 5: flag it in the graph output. The
+  operator (reached via the mayor) may want serialized execution.
+**Mark this step complete.**
+
+```bash
+gc --rig "$RIG" bd close "$GC_BEAD_ID" --continue
+gc runtime drain-ack
+```
+
+This explicit close and drain acknowledgement are REQUIRED. gascity's formula engine does not
+auto-close step beads when a fresh-wake session exits; omitting the close
+leaves the step bead open and deadlocks downstream steps that `needs`
+this one. The `--continue` flag advances the molecule to the next
+eligible step. The `gc runtime drain-ack` call lets the controller archive
+this fresh session so the singleton Cartographer pool can spawn a new
+session for the next ready step.
+
+If you took a failure-mode branch above and exited early (wrote
+`failure.json` or `needs_human.json` and stopped), do NOT close and do
+NOT leave the step assigned to cartographer. Run the human-review step
+disposition helper from the formula description so automation stops
+dispatching this failed step until an operator explicitly resumes it.
+
+"""
+
+[[steps]]
+id = "reconcile"
+title = "Classify new tasks vs prior epochs; build review list for mayor"
+needs = ["graph"]
+description = """
+If this work order has been planned before, prior-epoch beads exist
+in the rig. This step is PURE CLASSIFICATION — no mutations, no
+closures, no convoy adoption. The cartographer is create-only on
+the bead store:
+
+- **Polecats** implement work and reassign to refinery (they do not
+  close work beads).
+- **Refinery** closes work beads after merge.
+- **Witness** recovers orphans.
+- **Mayor** makes priority/dispatch decisions, including deciding
+  whether prior-epoch beads from a re-plan are still worth running.
+
+The cartographer flags; the mayor decides. We never close, modify,
+or re-convoy a bead we did not create in this run.
+
+**1. Load state:**
+```bash
+WO_PATH_INPUT="{{work_order_path}}" . .gc/scripts/cartographer-load-state.sh
+cat "$RUN_DIR/graph.json"
+cat "$RUN_DIR/beads_inventory.json"
+```
+
+**2. If `prior_epoch_beads` is empty:** every new task is emit-fresh.
+Write a trivial reconcile.json (all `emit_new`, empty review list)
+and proceed.
+
+**3. For each new task in `graph.json`, classify against prior-epoch
+beads.**
+
+A "match" is determined by, in priority order:
+
+1. Identical title AND identical `done_when` (open OR closed prior)
+   → `skip_existing`. The work is already represented; do not emit
+   a duplicate. Record the existing bead id so step 6's edges can
+   point at it.
+2. Same `touches` AND semantically-equivalent `done_when` (open OR
+   closed prior) → `skip_existing`. Same as above.
+3. Same `touches` but materially-different `done_when` → `emit_new`,
+   AND add the prior bead to `obsolete_review` with reason
+   "likely superseded by new task '<new title>' — done_when differs".
+   Do NOT mark the prior bead in any way; the mayor decides whether
+   to close.
+4. No match → `emit_new`.
+
+**4. Sweep unmatched prior-epoch open beads.**
+
+For every prior-epoch bead that no new task matched:
+
+- `status=closed` → leave alone. Closed prior work is history.
+  Refinery already closed it post-merge.
+- `status=open` AND label `source:work-order:<this-id>` present →
+  add to `obsolete_review` with reason "no new task in epoch
+  ${EPOCH} represents this work — work order may have removed it".
+  The mayor decides whether to close.
+- `status=open` AND no `source:work-order` label → not
+  cartographer-created. Do NOT touch and do NOT flag. Human-created
+  beads are out of cartographer scope.
+
+**5. Edge remapping for `skip_existing` tasks.**
+
+A skipped task's edges from `graph.json` still apply — they just
+point at the existing prior-epoch bead's id rather than a yet-to-be-
+created bead. Build the remapping table.
+
+The edges from new beads to a `skip_existing` bead are wired
+normally in the emit step (`gc bd dep add <new> <existing>`). This mutates
+only the new bead's dep list, which is fine — we created it.
+
+**6. Write `$RUN_DIR/reconcile.json`:**
+
+```json
+{
+  "plan": [
+    {"draft_id": "task-1", "action": "emit_new"},
+    {"draft_id": "task-2", "action": "skip_existing",
+     "existing_bead_id": "app-old1",
+     "reason": "exact title + done_when match"}
+  ],
+  "obsolete_review": [
+    {"bead_id": "app-old2",
+     "title": "<prior title>",
+     "status": "open",
+     "reason": "no new task in epoch ${EPOCH} represents this work — work order may have removed it",
+     "recommendation": "review_for_closure"},
+    {"bead_id": "app-old3",
+     "title": "<prior title>",
+     "status": "open",
+     "reason": "likely superseded by new task 'task-3 (<title>)' — done_when differs",
+     "recommendation": "review_for_closure_after_task-3_lands",
+     "new_task_draft_id": "task-3"}
+  ],
+  "draft_id_to_bead_id": {
+    "task-2": "app-old1"
+  }
+}
+```
+
+**Failure modes:**
+
+- Prior-epoch bead has `source:work-order:<this-id>` label but no
+  `epoch:` label (malformed): flag in `obsolete_review` with
+  recommendation `needs_human_review` and proceed.
+- If `obsolete_review` is unusually long (>20 entries), it is a sign
+  the work order changed drastically. Add a top-level
+  `large_review: true` flag and continue — the mayor mail in the emit step
+  will surface it.
+**Mark this step complete.**
+
+```bash
+gc --rig "$RIG" bd close "$GC_BEAD_ID" --continue
+gc runtime drain-ack
+```
+
+This explicit close and drain acknowledgement are REQUIRED. gascity's formula engine does not
+auto-close step beads when a fresh-wake session exits; omitting the close
+leaves the step bead open and deadlocks downstream steps that `needs`
+this one. The `--continue` flag advances the molecule to the next
+eligible step. The `gc runtime drain-ack` call lets the controller archive
+this fresh session so the singleton Cartographer pool can spawn a new
+session for the next ready step.
+
+If you took a failure-mode branch above and exited early (wrote
+`failure.json` or `needs_human.json` and stopped), do NOT close and do
+NOT leave the step assigned to cartographer. Run the human-review step
+disposition helper from the formula description so automation stops
+dispatching this failed step until an operator explicitly resumes it.
+
+"""
+
+[[steps]]
+id = "validate-plan"
+title = "Validate the plan before emit (pre-mutation invariants)"
+needs = ["reconcile"]
+description = """
+Run plan-level invariant checks against the planning artifacts
+before the emit step's atomic transaction. Catching plan errors
+here is cheaper than aborting and re-running emit, and produces
+clearer failure messages (specific draft ids and check names rather
+than a rolled-back Dolt transaction stderr).
+
+Checks here read planning artifacts (`graph.json`, `tasks.json`,
+`reconcile.json`, `context.json`, `beads_inventory.json`,
+`candidate_dependents.json`, `unresolved_blocker_refs.json`) and, after
+those logical checks pass, build the concrete `$RUN_DIR/emit_plan.json`
+that the next step will pass to `bd create --graph`. This step must not
+run `bd create`, push integration branches, close HOLDINGs, or mutate
+the bead store. Building and validating the exact emit carrier here is
+the pre-mutation boundary; it prevents prose-level interpretation gaps
+between logical planning and the mutation artifact.
+
+**1. Load state:**
+```bash
+WO_PATH_INPUT="{{work_order_path}}" . .gc/scripts/cartographer-load-state.sh
+```
+
+**2. Run every check below. ALL must pass.**
+
+a. **Self-containment.** For each task body in `tasks.json`, grep for
+   forbidden phrases: "see the spec", "see section", "refer to",
+   "in specs/", "see specs/", "in the work order", "per the spec",
+   "as described in". Any hit → fail with the offending task id(s).
+   This catches the bead-body authorship discipline before bodies
+   land in the store.
+
+   ```bash
+   FORBIDDEN='(see the spec|see section|refer to|in specs/|see specs/|in the work order|per the spec|as described in)'
+   jq -r 'if type == "array" then .[] else .tasks[] end
+          | "\\(.id // .draft_id)\\t\\(.body)"' "$RUN_DIR/tasks.json" \\
+     | grep -iE "$FORBIDDEN" \\
+     | cut -f1 | sort -u > "$RUN_DIR/_self_containment_violations" || true
+   if [ -s "$RUN_DIR/_self_containment_violations" ]; then
+     echo "FAIL: self-containment — task(s): $(tr '\\n' ' ' < "$RUN_DIR/_self_containment_violations")"
+     # → fail
+   fi
+   ```
+
+c. **Acyclicity AND inversion check.** Topo-sort the planned edge set
+   (`new_to_new` + `new_to_existing` + `new_to_cross_wo` +
+   `existing_to_new` from `graph.json`) treating draft task ids and
+   referenced bead ids as nodes. Cycle → fail.
+
+   Inversion: every edge in `graph.json` has direction `<from> -> <to>`
+   meaning "from depends on to". Verify:
+   - No `new_to_existing` edge has its `to` pointing at a draft id
+     (would invert direction — draft beads can't yet be dependencies
+     of existing ones via that category).
+   - No `existing_to_new` edge has its `from` pointing at a draft id
+     (mirror image — `existing_to_new` is reverse-edge from an
+     existing bead onto a new one).
+
+d. **Label hygiene.** Every entry in `graph.json:emit_specs` (or the
+   equivalent draft spec carrier the cartographer used), and every
+   entry in `graph.json:holding_stubs_to_create`, must include enough
+   plan data for emit to place `source:work-order:${WORK_ORDER_ID}`
+   and `epoch:${EPOCH}` in the final node's `labels` array. HOLDING
+   stubs are output beads too; they omit routing metadata, not origin
+   labels. Missing or unprovable origin labels → fail with the
+   offending draft id(s).
+
+d2. **HOLDING edge/label coverage.** For every entry in
+   `graph.json:holding_stubs_to_create`, each `dependent_draft_ids[]`
+   value must satisfy both of these plan-level invariants:
+   - the dependent task will carry the matching
+     `hold:<blocker_wo_id>` label in its emitted node labels;
+   - `graph.json` contains or emit will derive a `from_key` →
+     `to_key` edge from the dependent draft id to
+     `entry.draft_holding_id`.
+
+   A task may not carry a `hold:*` label without a matching dependency
+   edge to the corresponding HOLDING, and a dependency edge to a
+   HOLDING may not omit the matching `hold:*` label on the dependent.
+   Missing coverage → fail with the dependent draft id and HOLDING
+   draft id.
+
+e. **Convoy coherence.** For each convoy in `graph.json:convoys`,
+   every member task in `tasks.json` should have a `done_when` that
+   contributes to the convoy's stated intent. Member purpose unclear
+   → fail. This is a judgment call — be specific in the failure
+   reason if you flag any.
+
+   **Integration-branch emit invariants are NOT checked against
+   `tasks.json` or `graph.json` here.** At this phase the final
+   `bd create --graph` node carrier does not exist yet. `metadata.owned`,
+   `metadata.target`, the literal `owned` label, `gc.routed_to`, and
+   convoy parent fields are assembled in the `emit` step when it writes
+   `$RUN_DIR/emit_plan.json`. Do not fail `validate-plan` solely because
+   these final emit-only fields are absent from `tasks.json` or
+   `graph.json`.
+
+   The root invariant at this phase is that the logical convoy plan is
+   complete enough for `emit` to assemble those fields:
+   - every `graph.json:convoys[]` entry has a stable
+     `draft_convoy_id` or `use_existing_convoy_id`;
+   - every convoy has at least one member in `members` or
+     `member_draft_ids`;
+   - every member draft id exists in `tasks.json`.
+
+   The final integration-branch fields are still mandatory, but they are
+   checked against `$RUN_DIR/emit_plan.json`, not against the logical
+   graph. `validate-plan` must build that emit carrier and run
+   `.gc/scripts/cartographer-emit-plan-preflight.sh` before writing
+   `validation_plan.json:status=ok`. `emit` must re-run the same helper
+   immediately before branch creation and `bd create --graph`. See
+   `runbooks/convoy-close-lifecycle-gap.md`.
+
+   **Convoy-membership linkage boundary.** `validate-plan` checks only
+   that every logical convoy member names an existing task draft. It
+   must not require `parent_key` or `parent_id` in `tasks.json` or
+   `graph.json`; those fields are emit-plan fields. The emit step must
+   translate each logical membership into exactly one of:
+   - `parent_key=<convoy.draft_convoy_id>` for Case B new convoys;
+   - `parent_id=<use_existing_convoy_id>` for Case A joined convoys.
+
+   The shared emit-plan preflight helper checks `$RUN_DIR/emit_plan.json`
+   for that structural parentage before any mutation. The post-emit
+   `validate-store` step then proves the bead store materialized the
+   parent linkage.
+
+f. **No orphans.** Every `issue_type=task` entry in
+   `graph.json:emit_specs` must satisfy at least one of:
+   - is a convoy member (appears in `graph.json:convoys[*].members`)
+   - has ≥1 edge in any of `edges.new_to_new`, `edges.new_to_existing`,
+     `edges.new_to_cross_wo`, `edges.existing_to_new`
+   - is explicitly marked `standalone: true` in the spec or task body
+
+   Pure orphans → fail with the offending draft id(s).
+
+g. **Cross-WO blocker coverage.** For each entry in
+   `beads_inventory.json:cross_wo_blockers` where `all_closed == false`
+   AND `no_beads_known == false`, at least one edge in
+   `graph.json:edges.new_to_cross_wo` must point at the entry's
+   `convoy_bead_id` (preferred) or any id in `task_bead_ids`. A
+   blocker with open beads but no edge → fail (Blocked-by annotation
+   not honored).
+
+   This check must never be interpreted as "do not emit because the
+   blocker WO is still open." Open blocker beads are valid dependency
+   targets. The correct plan is to emit this work order's non-duplicate
+   beads with explicit edges to those blocker beads so the controller
+   and polecats can process the DAG in order. If this check fails, the
+   graph step omitted required dependency edges; fix or recompute the
+   graph. The only acceptable reason to emit no task beads for the
+   target work order is duplicate coverage by already-existing current
+   WO beads, as classified by reconcile.
+
+h. **Unresolved blocker refs.** If
+   `$RUN_DIR/unresolved_blocker_refs.json` exists, copy its contents
+   into `validation_plan.json:warnings`. Do NOT fail — the operator
+   may need to plan the missing work order first; that's a warning,
+   not a blocker.
+
+l. **Per-candidate decision audit (both directions).** Every entry in
+   `candidate_dependents.json` MUST appear exactly once in BOTH
+   `graph.json:new_to_existing_decisions` (forward / category c) and
+   `graph.json:existing_to_new_decisions` (reverse / category d).
+   Missing in either → fail. This is the discipline check from steps
+   6.3 / 5.5 — the cartographer must have reasoned about each
+   candidate in both directions before emit.
+
+   ```bash
+   CANDIDATES=$(jq -r '.[].id' "$RUN_DIR/candidate_dependents.json" | sort -u)
+   FWD=$(jq -r '.new_to_existing_decisions[]?.candidate_id // (.edges.new_to_existing_decisions[]?.candidate_id)' \\
+           "$RUN_DIR/graph.json" 2>/dev/null | sort -u)
+   REV=$(jq -r '.existing_to_new_decisions[]?.candidate_id // (.edges.existing_to_new_decisions[]?.candidate_id)' \\
+           "$RUN_DIR/graph.json" 2>/dev/null | sort -u)
+   MISSING_FWD=$(comm -23 <(echo "$CANDIDATES") <(echo "$FWD"))
+   MISSING_REV=$(comm -23 <(echo "$CANDIDATES") <(echo "$REV"))
+   if [ -n "$MISSING_FWD" ] || [ -n "$MISSING_REV" ]; then
+     echo "FAIL: candidates missing — fwd: $MISSING_FWD; rev: $MISSING_REV"
+     # → fail
+   fi
+   ```
+
+   Additional per-direction checks:
+   - Reverse: every `existing_to_new_decisions` entry whose `decision`
+     is `skip` and whose `is_cohort_verifier` is `true` must carry a
+     reason that affirmatively explains why the verifier's scope is
+     narrower than this run's surface. A bare "no concrete tie"
+     reason for a cohort verifier → fail (the cohort-verifier default
+     per 5.5(c) is emit unless scope is provably narrower).
+   - Forward: every `new_to_existing_decisions` entry whose `decision`
+     is `skip` and whose `new_task_is_verifier` is `true` must carry
+     a reason explaining why the verifier new-task does not observe
+     the candidate's surface. A bare "no concrete tie" reason for a
+     verifier new-task → fail (the verifier-new-task default per
+     6.3(c) is emit forward edge).
+
+m. **Inline-WO blocker per-candidate audit coverage.** For each entry
+   in `beads_inventory.json:inline_wo_blockers` where
+   `all_closed == false` AND `no_beads_known == false`, at least one
+   bead from that WO (the entry's `convoy_bead_id` if non-null, or any
+   id in `task_bead_ids`) MUST appear as `candidate_id` in
+   `graph.json:new_to_existing_decisions` (any decision — `emit` or
+   `skip`; presence of an audit row is the requirement).
+
+   Inline-WO blockers are runtime gates the target spec references
+   in prose but does not list in the formal `Blocked by:` line (e.g.
+   "every category must have an SME-approved decision from WO-017
+   before authoring"). They do NOT auto-edge through
+   `new_to_cross_wo` (that path is reserved for formal blockers); the
+   per-candidate `new_to_existing` audit is their only safety net.
+   This check makes that discipline structurally required rather than
+   prompt-dependent.
+
+   `candidate_dependents.json` is built by step 4 with an explicit
+   relevance filter that includes every open bead from the inline-WO
+   set, so a missing audit row here means the cartographer actually
+   skipped reasoning about a bead it was guaranteed to see — not that
+   the bead was outside the candidate set.
+
+   ```bash
+   MISSING_INLINE=""
+   while IFS= read -r entry; do
+     [ -z "$entry" ] && continue
+     CONVOY=$(jq -r '.convoy_bead_id // empty' <<<"$entry")
+     TASKS=$(jq -r '.task_bead_ids[]? // empty' <<<"$entry")
+     WO=$(jq -r '.blocker_wo_id' <<<"$entry")
+     IDS=$(printf '%s\n%s\n' "$CONVOY" "$TASKS" | grep -v '^$' || true)
+     HIT=""
+     for id in $IDS; do
+       if jq --arg id "$id" -e '
+             (.new_to_existing_decisions[]?.candidate_id //
+              .edges.new_to_existing_decisions[]?.candidate_id) == $id
+           ' "$RUN_DIR/graph.json" >/dev/null 2>&1; then
+         HIT="$id"; break
+       fi
+     done
+     [ -z "$HIT" ] && MISSING_INLINE="${MISSING_INLINE}${WO} "
+   done < <(jq -c '.inline_wo_blockers[]?
+                     | select(.all_closed == false and .no_beads_known == false)' \\
+              "$RUN_DIR/beads_inventory.json")
+   if [ -n "$MISSING_INLINE" ]; then
+     echo "FAIL: inline-WO per-candidate audit missing — WO(s): $MISSING_INLINE"
+     # → fail
+   fi
+   ```
+
+n. **Downstream-blocks per-candidate audit coverage.** For each entry
+   in `beads_inventory.json:downstream_blocks` where
+   `all_closed == false` AND `no_beads_known == false`, at least one
+   bead from that WO (the entry's `convoy_bead_id` if non-null, or any
+   id in `task_bead_ids`) MUST appear as `candidate_id` in
+   `graph.json:existing_to_new_decisions` (any decision — `emit` or
+   `skip`; presence of an audit row is the requirement).
+
+   Downstream-blocks are WOs the target spec lists in its formal
+   `Blocks:` line. Their open beads are the canonical `existing_to_new`
+   edge candidates: downstream tasks have `done_when` clauses that may
+   depend on this WO's deliverables. The per-candidate `existing_to_new`
+   audit (step 5.5) is how we discover those edges. This check makes
+   the audit discipline structurally required rather than prompt-
+   dependent — mirrors check `m` for the reverse direction.
+
+   `candidate_dependents.json` is built by step 4 with an explicit
+   relevance filter that includes every open bead from the
+   downstream-blocks set, so a missing audit row here means the
+   cartographer skipped reasoning about a bead it was guaranteed to
+   see.
+
+   ```bash
+   MISSING_DOWNSTREAM=""
+   while IFS= read -r entry; do
+     [ -z "$entry" ] && continue
+     CONVOY=$(jq -r '.convoy_bead_id // empty' <<<"$entry")
+     TASKS=$(jq -r '.task_bead_ids[]? // empty' <<<"$entry")
+     WO=$(jq -r '.downstream_wo_id' <<<"$entry")
+     IDS=$(printf '%s\n%s\n' "$CONVOY" "$TASKS" | grep -v '^$' || true)
+     HIT=""
+     for id in $IDS; do
+       if jq --arg id "$id" -e '
+             (.existing_to_new_decisions[]?.candidate_id //
+              .edges.existing_to_new_decisions[]?.candidate_id) == $id
+           ' "$RUN_DIR/graph.json" >/dev/null 2>&1; then
+         HIT="$id"; break
+       fi
+     done
+     [ -z "$HIT" ] && MISSING_DOWNSTREAM="${MISSING_DOWNSTREAM}${WO} "
+   done < <(jq -c '.downstream_blocks[]?
+                     | select(.all_closed == false and .no_beads_known == false)' \\
+              "$RUN_DIR/beads_inventory.json")
+   if [ -n "$MISSING_DOWNSTREAM" ]; then
+     echo "FAIL: downstream-blocks per-candidate audit missing — WO(s): $MISSING_DOWNSTREAM"
+     # → fail
+   fi
+   ```
+
+z. **Concrete emit carrier preflight.** After checks a-n pass, build
+   `$RUN_DIR/emit_plan.json` using the exact schema and construction
+   rules documented in the `emit` step sections 3a-3d. Do not push any
+   branch and do not call `bd create --graph` from this step. Then run
+   the shared deterministic preflight helper:
+
+   ```bash
+   .gc/scripts/cartographer-emit-plan-preflight.sh \
+     "$RUN_DIR/emit_plan.json" \
+     "$RUN_DIR/graph.json" \
+     "$RUN_DIR/tasks.json" \
+     2> "$RUN_DIR/emit_plan_preflight.stderr" || {
+       cat "$RUN_DIR/emit_plan_preflight.stderr"
+       echo "FAIL: emit_plan preflight failed"
+       # → fail
+     }
+   ```
+
+   This helper is the source of truth for emit-only lifecycle fields:
+   convoy `owned` label, convoy `metadata.owned=true`, convoy/task
+   `metadata.target=integration/${WORK_ORDER_ID}`, task `gc.routed_to`,
+   convoy `parent_key`/`parent_id`, and HOLDING label/edge coherence.
+   If the helper fails, treat it as a `validate-plan` failure and block
+   the step for human review. Do not allow `validation_plan.json` to be
+   `status=ok` unless this concrete preflight passes.
+
+**3. On success,** write `$RUN_DIR/validation_plan.json`:
+
+```json
+{
+  "status": "ok",
+  "summary": "Pre-emit checks passed: N tasks, M convoys, E internal edges, X cross-WO edges, R reverse edges. K candidates audited.",
+  "warnings": ["..."]
+}
+```
+
+Then close the step bead with `--continue` so the molecule advances
+to `emit`:
+
+```bash
+gc --rig "$RIG" bd close "$GC_BEAD_ID" --continue
+gc runtime drain-ack
+```
+
+**4. On failure,** write `$RUN_DIR/validation_plan.json` with
+`status: "failed"`, the failed check id(s), and the offending draft
+ids. ALSO write `$RUN_DIR/failure.json` and mail the mayor with
+subject prefix `[HUMAN REVIEW NEEDED]` (see "Human-review
+notifications" in the formula description). Do NOT close the step
+bead. Run `.gc/scripts/cartographer-human-review-block.sh
+"validate-plan failed"` so the failed step is blocked, unassigned from
+cartographer, routed to `human-escalation`, and resumable only by an
+explicit operator action.
+
+CRITICAL: do NOT close the step bead and let emit run on a known-bad
+plan. Emit's `bd create --graph` transaction will roll back on the
+same error, which is wasteful — and worse, the rolled-back error
+mode is harder to diagnose than the specific check-id failure here.
+Keep the step in the blocked human-review state created by the helper
+and surface the failure to the operator.
+"""
+
+[[steps]]
+id = "emit"
+title = "Create beads and edges; mail mayor with summary and review list"
+needs = ["validate-plan"]
+description = """
+This is the ONLY step that mutates the bead store, and it mutates
+ONLY beads we create in this run. No prior-epoch bead is closed,
+modified, or re-convoyed. Closures belong to refinery (post-merge);
+priority calls on stale beads belong to the mayor.
+
+**Architecture.** Emit runs in two atomic transactions:
+
+1. `bd create --graph <plan.json>` — every new bead (convoys,
+   HOLDING stubs, task beads) PLUS every edge (new→new, new→existing,
+   new→cross-WO, new→HOLDING, existing→new, HOLDING retargets) in a
+   single Dolt transaction. Routing metadata (`gc.routed_to`) is
+   baked into each task bead's spec at creation. Convoy parentage is
+   baked via `parent_key` (in-plan convoys) or `parent_id` (Case A
+   joined cohort convoy).
+2. `bd batch < release.txt` — every fully-releasable HOLDING close
+   in a single transaction. Retarget edges already landed in step 1.
+
+Failure shapes are clean: either the whole transaction landed or it
+rolled back. On any failure, leave partial state, write
+`$RUN_DIR/failure.json`, mail the mayor, block the step for human
+review with the helper, run `gc runtime drain-ack`, and exit cleanly.
+
+**1. Load state + resolve sling target + rig path:**
+
+```bash
+WO_PATH_INPUT="{{work_order_path}}" . .gc/scripts/cartographer-load-state.sh
+cat "$RUN_DIR/context.json"
+cat "$RUN_DIR/tasks.json"
+cat "$RUN_DIR/graph.json"
+cat "$RUN_DIR/reconcile.json"
+cat "$RUN_DIR/beads_inventory.json"
+
+cartographer_emit_fail() {
+  reason="$1"
+  jq -n --arg reason "$reason" \
+        --arg step "emit" \
+        '{step: $step, phase: "preflight", reason: $reason}' \
+        > "$RUN_DIR/failure.json"
+  gc mail send gastown.mayor \
+    -s "[HUMAN REVIEW NEEDED] cartographer emit preflight failed for $WORK_ORDER_ID" \
+    -m "Emit preflight failed: $reason. See $RUN_DIR/failure.json and $RUN_DIR/emit_plan.json. Step bead $GC_BEAD_ID blocked for human review."
+  .gc/scripts/cartographer-human-review-block.sh "emit preflight failed: $reason"
+  gc runtime drain-ack
+  exit 0
+}
+
+# Resolve the rig's beads JSONL path once.
+RIG_PATH="$(gc rig status "$RIG" 2>/dev/null \\
+  | awk '/^  *Path:/{print $2; exit}')"
+[ -z "$RIG_PATH" ] && cartographer_emit_fail "could not resolve rig path for $RIG"
+RIG_BEADS_JSONL="$RIG_PATH/.beads/issues.jsonl"
+
+# Resolve the rig's default_sling_target from city.toml (gc config show
+# emits the resolved config as TOML; parse the [[rigs]] block).
+SLING_TARGET=$(gc config show 2>/dev/null | awk -v rig="$RIG" '
+  /^\\[\\[rigs\\]\\]/ { active = ""; next }
+  /^name *= *"/ { s = $0; sub(/^name *= *"/, "", s); sub(/".*/, "", s); active = s }
+  active == rig && /^default_sling_target *= *"/ {
+    s = $0; sub(/^default_sling_target *= *"/, "", s); sub(/".*/, "", s); print s; exit
+  }
+')
+[ -z "$SLING_TARGET" ] && cartographer_emit_fail "could not resolve default_sling_target for $RIG"
+```
+
+**2. Pre-flight: re-check existing-bead targets are still open.**
+
+The graph step's edges to existing beads (new_to_existing,
+new_to_cross_wo, existing_to_new, HOLDING retargets) were validated
+against a snapshot from step 4. Race condition: a target may have
+closed between then and now. Pre-validate all unique referenced
+existing-bead IDs in one query.
+
+```bash
+# Build set of all referenced existing-bead IDs from graph.json:
+jq -r '
+  ([.edges.new_to_existing[]?.to_existing_bead_id] +
+   [.edges.new_to_cross_wo[]?.to_existing_bead_id] +
+   [.edges.existing_to_new[]?.from_existing_bead_id] +
+   [.holding_stubs_to_release[]?.retarget_edges[]?.from_existing_bead_id] +
+   [.holding_stubs_to_release[]?.holding_bead_id]) |
+  map(select(. != null)) | unique | .[]
+' "$RUN_DIR/graph.json" | sort -u > "$RUN_DIR/_referenced_existing_ids.txt"
+
+# Pull fresh status for each. Single bd list call covers them all if
+# we filter by id list; lacking that, loop bd show (read-only, cheap).
+jq -n '{}' > "$RUN_DIR/_existing_status.json"
+while IFS= read -r ID; do
+  [ -z "$ID" ] && continue
+  STATUS=$(gc --rig "$RIG" bd show "$ID" --json 2>/dev/null \\
+    | jq -r '.[0].status // "missing"')
+  jq --arg id "$ID" --arg s "$STATUS" \\
+     '. + {($id): $s}' \\
+     "$RUN_DIR/_existing_status.json" > "$RUN_DIR/_existing_status.json.tmp"
+  mv "$RUN_DIR/_existing_status.json.tmp" "$RUN_DIR/_existing_status.json"
+done < "$RUN_DIR/_referenced_existing_ids.txt"
+```
+
+For each edge whose referenced existing bead is now `closed` or
+`missing`, log it to `$RUN_DIR/reverse_edge_failures.jsonl` and
+EXCLUDE it from the plan. Forward-direction targets (new→existing,
+new→cross-WO) that closed: same treatment — drop the edge and log.
+The new bead is still created without that dep, which is correct
+(closed deps wouldn't block dispatch anyway).
+
+For HOLDING retargets: if ANY retarget edge for a given HOLDING is
+dropped, that HOLDING's effective classification becomes `partial`
+(record in `$RUN_DIR/holding_release_effective.jsonl`) and its
+close in step 5 is skipped.
+
+**3. Load or build `$RUN_DIR/emit_plan.json`** — the input to
+`bd create --graph`.
+
+`validate-plan` should already have built this file and run the shared
+emit-plan preflight helper. If `$RUN_DIR/emit_plan.json` exists, use it
+as the mutation carrier; do not rebuild a divergent plan. If it is
+missing because this is an older in-flight step or a resumed legacy
+run, build it now using sections 3a-3d below before proceeding.
+
+Schema (validated by the gascity probe in the wo017-findings doc):
+
+```json
+{
+  "nodes": [
+    { "key": "<plan-local unique key>",
+      "title": "...",
+      "description": "<full self-contained body — see body composition below>",
+      "type": "task|convoy|...",
+      "priority": 2,
+      "labels": ["..."],
+      "metadata": {"gc.routed_to": "..."},   // task beads only; HOLDINGs and convoys OMIT this field
+      "parent_key": "<another node key>",     // optional: convoy membership (in-plan)
+      "parent_id": "<existing bead id>"       // optional: convoy membership (joined cohort)
+    }
+  ],
+  "edges": [
+    { "from_key": "...", "to_key": "..." },   // both in-plan
+    { "from_key": "...", "to_id": "..." },    // new → existing
+    { "from_id": "...", "to_key": "..." },    // existing → new (category-d / retarget)
+    { "type": "blocks" }                      // optional; default "blocks". For convoy parent use parent_key/parent_id on the node, NOT edges.
+  ]
+}
+```
+
+Construct the plan in this order:
+
+**3a. Convoy nodes (Case B only).** For each convoy in
+`graph.json:convoys` where `use_existing_convoy_id` is null:
+
+```json
+{
+  "key": "<convoy.draft_convoy_id>",
+  "title": "<convoy.title>",
+  "type": "convoy",
+  "priority": 2,
+  "labels": [
+    "owned",
+    "source:work-order:${WORK_ORDER_ID}",
+    "epoch:${EPOCH}",
+    "<convoy.cohort_label if non-null>"
+  ],
+  "metadata": {
+    "owned": "true",
+    "target": "integration/${WORK_ORDER_ID}"
+  }
+}
+```
+
+**Why the `owned` label AND `metadata.owned=true`:** the LABEL is what `gc convoy autoclose` checks to skip a convoy (the safety net is implemented at `cmd_convoy.go:879` as `hasLabel(item.bead.Labels, "owned")`). Without the LABEL, the autoclose hook (`hooks.go:51`, fires on every `bead.closed` event) will close the convoy as soon as its last child closes — pre-empting the refinery patrol's `next-iteration` auto-land step, which queries `gc bd list --type=convoy --status=open` and therefore can only act on convoys still open at scan time. The `metadata.owned=true` is the additional structured marker the refinery's `next-iteration` step reads to decide which open convoys are eligible for auto-land. Both fields are required; neither alone is sufficient.
+
+**Why `target=integration/${WORK_ORDER_ID}`:** per
+`runbooks/convoy-close-lifecycle-gap.md`, per-WO convoys must be
+integration-branch convoys so that (a) refinery patrol's
+`next-iteration` step auto-lands the integration branch to
+`${target_branch}` and closes the convoy bead with proper merge
+metadata after that lands, and (b) registration-file conflicts
+(`justfile`, `pyproject.toml`, `uv.lock`) get resolved ONCE inside
+the integration branch rather than N² times across sibling polecats.
+`${WORK_ORDER_ID}` is the work-order filename basename without `.md`
+(e.g. `013-lifecycle-operations`); the integration branch name
+follows `integration/<work-order-id-slug>` by convention.
+
+For Case A convoys (`use_existing_convoy_id` non-null): NO node is
+created — the existing convoy bead is referenced via `parent_id` on
+each member task node in step 3c. Record the join in
+`$RUN_DIR/_convoys_joined.json` for the emitted.json summary. The
+existing convoy's `metadata.target` (set by its originating
+cartographer run) governs the integration branch for joined cohort
+members; do NOT overwrite it here.
+
+**3b. HOLDING stub nodes.** For each entry in
+`graph.json:holding_stubs_to_create`:
+
+```json
+{
+  "key": "<entry.draft_holding_id>",
+  "title": "<entry.title>",
+  "description": "<entry.body>",
+  "type": "task",
+  "priority": 2,
+  "labels": [
+    "source:work-order:${WORK_ORDER_ID}",
+    "epoch:${EPOCH}",
+    "placeholder:cross-wo-blocker",
+    "placeholder-blocker:<entry.blocker_wo_id>",
+    "placeholder-for-wo:${WORK_ORDER_ID}"
+  ]
+}
+```
+
+CRITICAL: HOLDING stub nodes MUST include `source:work-order` and
+`epoch` labels because they are output beads from this cartographer
+run, and MUST OMIT the `metadata.gc.routed_to` field entirely. This is
+categorical: any code path that routes a HOLDING would let it leak
+into the controller's scale_check view. The graph plan's pre-flight in
+step 2 above does NOT touch HOLDINGs; the routing OMISSION here is the
+firewall.
+
+If `graph.json:holding_stubs_to_create` is empty, skip 3b.
+
+**3c. Task bead nodes.** For each `action=emit_new` entry in
+`reconcile.json:plan` (skip `action=skip_existing`):
+
+Compose the self-contained body. Include:
+- the task description from `tasks.json`
+- verbatim inlined excerpts from `context.json:key_excerpts` for
+  every entry in the task's `excerpt_refs`
+- the `done_when` criteria
+- relevant `constraints` from `context.json`
+- `touches` files
+- the work order's relevant Acceptance Criteria bullets
+  (`acceptance_refs`)
+
+The body MUST NOT contain "see specs/foo.md", "refer to the work
+order", or any external reference. Polecats will run on this body
+alone. (Note: validate-plan already enforced this on `tasks.json`
+content — if you stayed faithful to `tasks.json:body`, you're fine.)
+
+Build the labels:
+- `source:work-order:${WORK_ORDER_ID}`
+- `epoch:${EPOCH}`
+- For EACH HOLDING this task depends on (i.e. the task's `draft_id`
+  appears in any `graph.json:holding_stubs_to_create[].dependent_draft_ids`):
+  add `hold:<that holding's blocker_wo_id>`. This label is the
+  autonomous priority signal that dogs read across the rig.
+
+Build the parent reference:
+- If the task is a member of a Case B convoy: `"parent_key": "<convoy.draft_convoy_id>"`
+- If the task is a member of a Case A convoy (joined cohort):
+  `"parent_id": "<convoy.use_existing_convoy_id>"`
+- If standalone: omit both parent fields
+
+Bake routing AND merge target into metadata:
+- `"gc.routed_to": "$SLING_TARGET"` — required on every task node.
+  The controller's scale_check reads this field to decide which
+  agent to spawn for the bead.
+- `"target": "integration/${WORK_ORDER_ID}"` — required on every
+  task node. The polecat done sequence reads `metadata.target` and
+  passes it to refinery as the merge target. Without this, the
+  polecat fragment falls back to `main` and the integration-branch
+  flow breaks (see `runbooks/convoy-close-lifecycle-gap.md` Step 3).
+  For Case A joined-cohort tasks (where the parent convoy already
+  exists), keep `integration/${WORK_ORDER_ID}` here so each task
+  reflects its OWN work-order's integration branch — the existing
+  convoy's target governs the final integration→main merge, not
+  the per-task target.
+
+Result per task:
+
+```json
+{
+  "key": "<task.draft_id>",
+  "title": "<task.title>",
+  "description": "<self-contained body>",
+  "type": "task",
+  "priority": 2,
+  "labels": ["source:work-order:${WORK_ORDER_ID}", "epoch:${EPOCH}",
+             "hold:<blocker-wo>" ...],
+  "metadata": {
+    "gc.routed_to": "$SLING_TARGET",
+    "target": "integration/${WORK_ORDER_ID}"
+  },
+  "parent_key": "<convoy draft id>" OR "parent_id": "<existing convoy id>"
+}
+```
+
+**3d. Edges.**
+
+For each edge in `graph.json:edges.new_to_new` →
+  `{"from_key": "<edge.from>", "to_key": "<edge.to>"}`
+
+For each in `graph.json:edges.new_to_existing` (after pre-flight) →
+  `{"from_key": "<edge.from>", "to_id": "<edge.to_existing_bead_id>"}`
+
+For each in `graph.json:edges.new_to_cross_wo` (after pre-flight) →
+  `{"from_key": "<edge.from>", "to_id": "<edge.to_existing_bead_id>"}`
+
+For each `holding_stubs_to_create` entry, for each
+`dependent_draft_ids[i]` →
+  `{"from_key": "<dependent_draft_id>", "to_key": "<entry.draft_holding_id>"}`
+
+For each in `graph.json:edges.existing_to_new` (after pre-flight,
+category-d / reverse edges) →
+  `{"from_id": "<edge.from_existing_bead_id>", "to_key": "<edge.to_new>"}`
+
+For each `holding_stubs_to_release` entry, for each
+`retarget_edges[i]` (after pre-flight) →
+  `{"from_id": "<edge.from_existing_bead_id>", "to_key": "<edge.to_new>"}`
+
+Edge `type` defaults to `blocks`; omit unless overriding. Convoy
+membership is NOT an edge — it's `parent_key`/`parent_id` on the
+node spec.
+
+**CRITICAL — direction.** `from` depends on `to`. The graph.json
+convention `{"from": "task-2", "to": "task-1"}` means "task-2 depends
+on task-1." The bd plan uses the same convention: `from_key` /
+`from_id` is the dependent; `to_key` / `to_id` is the prerequisite.
+For category-d, the EXISTING bead is the dependent, so its id goes
+in `from_id`.
+
+Write the assembled plan to `$RUN_DIR/emit_plan.json` only when it was
+not already produced by `validate-plan`. Validate with
+`jq '.' "$RUN_DIR/emit_plan.json" > /dev/null` before running bd; a
+malformed plan = bd error with no useful line number.
+
+Then run the shared hard pre-flight helper against
+`$RUN_DIR/emit_plan.json` and fail the step before branch creation or
+`bd create --graph` if it reports any error:
+
+```bash
+.gc/scripts/cartographer-emit-plan-preflight.sh \
+  "$RUN_DIR/emit_plan.json" \
+  "$RUN_DIR/graph.json" \
+  "$RUN_DIR/tasks.json" \
+  2> "$RUN_DIR/emit_plan_preflight.stderr" || {
+    cat "$RUN_DIR/emit_plan_preflight.stderr"
+    cartographer_emit_fail "emit_plan preflight failed"
+  }
+```
+
+The helper is authoritative. The checks below document the same contract
+for operator review and debugging:
+
+```bash
+SOURCE_LABEL="source:work-order:${WORK_ORDER_ID}"
+EPOCH_LABEL="epoch:${EPOCH}"
+PLACEHOLDER_FOR_LABEL="placeholder-for-wo:${WORK_ORDER_ID}"
+
+jq -r --arg source "$SOURCE_LABEL" --arg epoch "$EPOCH_LABEL" \
+      --arg placeholder_for "$PLACEHOLDER_FOR_LABEL" '
+  .nodes[]?
+  | select((.labels // []) | index("placeholder:cross-wo-blocker"))
+  | select((((.labels // []) | index($source)) | not)
+           or (((.labels // []) | index($epoch)) | not)
+           or (((.labels // []) | index($placeholder_for)) | not)
+           or ((.metadata // {})["gc.routed_to"]? != null))
+  | .key
+' "$RUN_DIR/emit_plan.json" > "$RUN_DIR/_bad_holding_nodes.txt"
+[ ! -s "$RUN_DIR/_bad_holding_nodes.txt" ] || {
+  echo "FAIL: HOLDING nodes missing origin labels, placeholder-for label, or routing omitted incorrectly: $(tr '\n' ' ' < "$RUN_DIR/_bad_holding_nodes.txt")"
+  cartographer_emit_fail "HOLDING nodes missing origin labels, placeholder-for label, or routing omitted incorrectly"
+}
+
+jq -r '
+  .nodes[]?
+  | select((.type // .issue_type) == "task")
+  | select(((.labels // []) | index("placeholder:cross-wo-blocker")) | not)
+  | select(.parent_key? or .parent_id?)
+  | select((.parent_key? and .parent_id?) or ((.parent_key? // .parent_id?) == ""))
+  | .key
+' "$RUN_DIR/emit_plan.json" > "$RUN_DIR/_bad_parent_refs.txt"
+[ ! -s "$RUN_DIR/_bad_parent_refs.txt" ] || {
+  echo "FAIL: task nodes have invalid convoy parent references: $(tr '\n' ' ' < "$RUN_DIR/_bad_parent_refs.txt")"
+  cartographer_emit_fail "task nodes have invalid convoy parent references"
+}
+
+jq -c '
+  .convoys[]? as $convoy
+  | ($convoy.members // $convoy.member_draft_ids // [])[]?
+  | {
+      task_key: .,
+      parent_key: (if (($convoy.use_existing_convoy_id // null) == null)
+                   then $convoy.draft_convoy_id else null end),
+      parent_id: ($convoy.use_existing_convoy_id // null)
+    }
+' "$RUN_DIR/graph.json" > "$RUN_DIR/_expected_parent_refs.jsonl"
+
+while IFS= read -r EXPECTED; do
+  [ -z "$EXPECTED" ] && continue
+  TASK_KEY=$(jq -r '.task_key' <<<"$EXPECTED")
+  EXPECTED_PARENT_KEY=$(jq -r '.parent_key // empty' <<<"$EXPECTED")
+  EXPECTED_PARENT_ID=$(jq -r '.parent_id // empty' <<<"$EXPECTED")
+  if [ -n "$EXPECTED_PARENT_KEY" ]; then
+    jq -e --arg task "$TASK_KEY" --arg parent "$EXPECTED_PARENT_KEY" '
+      .nodes[]? | select(.key == $task) | .parent_key == $parent
+    ' "$RUN_DIR/emit_plan.json" >/dev/null || {
+      echo "FAIL: convoy member $TASK_KEY missing parent_key=$EXPECTED_PARENT_KEY in emit_plan"
+      cartographer_emit_fail "convoy member $TASK_KEY missing parent_key=$EXPECTED_PARENT_KEY in emit_plan"
+    }
+  elif [ -n "$EXPECTED_PARENT_ID" ]; then
+    jq -e --arg task "$TASK_KEY" --arg parent "$EXPECTED_PARENT_ID" '
+      .nodes[]? | select(.key == $task) | .parent_id == $parent
+    ' "$RUN_DIR/emit_plan.json" >/dev/null || {
+      echo "FAIL: convoy member $TASK_KEY missing parent_id=$EXPECTED_PARENT_ID in emit_plan"
+      cartographer_emit_fail "convoy member $TASK_KEY missing parent_id=$EXPECTED_PARENT_ID in emit_plan"
+    }
+  fi
+done < "$RUN_DIR/_expected_parent_refs.jsonl"
+
+jq -c '
+  .holding_stubs_to_create[]? as $holding
+  | $holding.dependent_draft_ids[]?
+  | {
+      task_key: .,
+      holding_key: $holding.draft_holding_id,
+      hold_label: ("hold:" + $holding.blocker_wo_id)
+    }
+' "$RUN_DIR/graph.json" > "$RUN_DIR/_expected_holding_links.jsonl"
+
+while IFS= read -r LINK; do
+  [ -z "$LINK" ] && continue
+  TASK_KEY=$(jq -r '.task_key' <<<"$LINK")
+  HOLDING_KEY=$(jq -r '.holding_key' <<<"$LINK")
+  HOLD_LABEL=$(jq -r '.hold_label' <<<"$LINK")
+  jq -e --arg task "$TASK_KEY" --arg label "$HOLD_LABEL" '
+    .nodes[]?
+    | select(.key == $task)
+    | ((.labels // []) | index($label))
+  ' "$RUN_DIR/emit_plan.json" >/dev/null || {
+    echo "FAIL: HOLDING dependent $TASK_KEY missing label $HOLD_LABEL in emit_plan"
+    cartographer_emit_fail "HOLDING dependent $TASK_KEY missing label $HOLD_LABEL in emit_plan"
+  }
+  jq -e --arg task "$TASK_KEY" --arg holding "$HOLDING_KEY" '
+    .edges[]? | select(.from_key == $task and .to_key == $holding)
+  ' "$RUN_DIR/emit_plan.json" >/dev/null || {
+    echo "FAIL: HOLDING dependent $TASK_KEY missing edge to $HOLDING_KEY in emit_plan"
+    cartographer_emit_fail "HOLDING dependent $TASK_KEY missing edge to $HOLDING_KEY in emit_plan"
+  }
+done < "$RUN_DIR/_expected_holding_links.jsonl"
+
+jq -r '
+  def labels: (.labels // []);
+  .nodes[]?
+  | select((.type // .issue_type) == "task")
+  | select((labels | index("placeholder:cross-wo-blocker")) | not)
+  | select([labels[]? | select(startswith("hold:"))] | length > 0)
+  | .key
+' "$RUN_DIR/emit_plan.json" > "$RUN_DIR/_held_task_keys.txt"
+
+for TASK_KEY in $(cat "$RUN_DIR/_held_task_keys.txt"); do
+  HAS_HOLD_EDGE=$(jq --arg task "$TASK_KEY" '
+    [.edges[]?
+     | select(.from_key == $task)
+     | select(.to_key as $to
+       | [.nodes[]?
+          | select(.key == $to)
+          | select((.labels // []) | index("placeholder:cross-wo-blocker"))]
+       | length > 0)]
+    | length
+  ' "$RUN_DIR/emit_plan.json")
+  if [ "$HAS_HOLD_EDGE" = "0" ]; then
+    echo "FAIL: held task $TASK_KEY has hold:* label but no edge to a HOLDING node"
+    cartographer_emit_fail "held task $TASK_KEY has hold:* label but no edge to a HOLDING node"
+  fi
+done
+```
+
+**3e. Create integration branches on origin (BEFORE bd transaction).**
+
+Each per-WO convoy emitted in 3a carries
+`metadata.target=integration/${WORK_ORDER_ID}`, and every task in 3c
+inherits that target. Downstream:
+- The polecat formula resolves `base_branch` from `metadata.target`
+  (via `internal/sling/sling.go::BeadMetadataTarget`) and runs
+  `git fetch origin {{base_branch}}` + `git checkout -B polecat/<bead>
+  origin/{{base_branch}}` — both fail if the branch doesn't exist on
+  origin.
+- The refinery formula's `rebase` step (`mol-refinery-patrol.toml:181-183`)
+  runs `git rebase origin/$TARGET` — fails with `fatal: invalid
+  upstream` if the branch doesn't exist on origin.
+
+The cartographer is the only actor with deterministic knowledge of
+the integration branch name AT EMIT TIME, and runs in its own git
+per-run worktree created by `init-run`, so this is the canonical place
+to create the branch on origin. Push
+BEFORE `bd create --graph` so the branch exists by the time the first
+task bead becomes claimable.
+
+```bash
+# Idempotent: skip if branch already exists (re-emit, sibling convoy
+# sharing the same WO target, prior partial run). Creates from current
+# origin/main tip. Multiple convoys in the same WO share one
+# integration branch — sort -u dedupes.
+git fetch --prune origin main
+
+INTEGRATION_TARGETS=$(jq -r --arg wo "$WORK_ORDER_ID" '
+  .convoys[]?
+  | select(.use_existing_convoy_id == null)
+  | "integration/" + $wo
+' "$RUN_DIR/graph.json" | sort -u)
+
+for TARGET in $INTEGRATION_TARGETS; do
+  if git ls-remote --exit-code origin "refs/heads/$TARGET" >/dev/null 2>&1; then
+    echo "integration branch already exists on origin: $TARGET"
+    continue
+  fi
+  if ! git push origin "origin/main:refs/heads/$TARGET"; then
+    echo "FATAL: failed to create integration branch $TARGET on origin" >&2
+    jq -n --arg target "$TARGET" \\
+          --arg wo "$WORK_ORDER_ID" \\
+          '{step: "emit", phase: "integration_branch_create", target: $target, work_order_id: $wo}' \\
+          > "$RUN_DIR/failure.json"
+    gc mail send gastown.mayor \\
+      -s "[HUMAN REVIEW NEEDED] cartographer integration-branch push failed for $WORK_ORDER_ID" \\
+      -m "Could not create $TARGET on origin from origin/main. See $RUN_DIR/failure.json. Step bead $GC_BEAD_ID blocked for human review — fix the push issue (auth, network, permissions), then resume from this step. Re-running is idempotent."
+    .gc/scripts/cartographer-human-review-block.sh "integration branch push failed"
+    gc runtime drain-ack
+    exit 0
+  fi
+  echo "created integration branch on origin: $TARGET"
+done
+```
+
+If `INTEGRATION_TARGETS` is empty (e.g., WO emits only joined-cohort
+convoys via `use_existing_convoy_id`), the loop is a no-op — joined
+convoys already have their integration branch from the originating WO.
+
+**4. Execute `bd create --graph`.**
+
+```bash
+gc --rig "$RIG" bd create --graph "$RUN_DIR/emit_plan.json" --json \\
+  > "$RUN_DIR/emit_mapping.json" 2> "$RUN_DIR/emit_create.stderr"
+CREATE_EXIT=$?
+if [ "$CREATE_EXIT" != 0 ]; then
+  # The transaction rolled back. NOTHING was created. Write a
+  # failure record and block this step for human review.
+  jq -n --arg exit "$CREATE_EXIT" \\
+        --rawfile stderr "$RUN_DIR/emit_create.stderr" \\
+        '{step: "emit", phase: "create_graph", script_exit: $exit, stderr: $stderr}' \\
+        > "$RUN_DIR/failure.json"
+
+  gc mail send gastown.mayor \\
+    -s "[HUMAN REVIEW NEEDED] cartographer emit (bd create --graph) failed for $WORK_ORDER_ID" \\
+    -m "Plan transaction rolled back, no beads created. See $RUN_DIR/failure.json + $RUN_DIR/emit_plan.json. Step bead $GC_BEAD_ID blocked for human review."
+  .gc/scripts/cartographer-human-review-block.sh "emit create-graph failed"
+  gc runtime drain-ack
+  exit 0
+fi
+```
+
+`emit_mapping.json` has shape `{"ids": {"<key>": "<bead-id>", ...},
+"schema_version": 1}`. Use the `.ids` map to resolve every plan-local
+key to its real bead id for emitted.json and the batch script.
+
+**5. Build `$RUN_DIR/emit_batch.txt`** — the HOLDING-close commands.
+
+For each entry in `graph.json:holding_stubs_to_release`:
+- Look up its effective classification in
+  `holding_release_effective.jsonl` (written by step 2).
+- If classification is `fully_releasable`: emit a line
+  `close <holding_bead_id> ${WORK_ORDER_ID} landed (cartographer epoch ${EPOCH})`
+- If `partial`: skip (leave the HOLDING open; mayor mail surfaces it).
+
+If no fully-releasable HOLDINGs exist, skip step 6 entirely.
+
+```bash
+> "$RUN_DIR/emit_batch.txt"
+while IFS= read -r entry; do
+  [ -z "$entry" ] && continue
+  HOLDING=$(echo "$entry" | jq -r '.holding_bead_id')
+  CLASSIFICATION=$(echo "$entry" | jq -r '.effective_classification')
+  [ "$CLASSIFICATION" = "fully_releasable" ] || continue
+  echo "close $HOLDING ${WORK_ORDER_ID} landed (cartographer epoch ${EPOCH})" \\
+    >> "$RUN_DIR/emit_batch.txt"
+done < "$RUN_DIR/holding_release_effective.jsonl"
+```
+
+**6. Execute `bd batch`.**
+
+```bash
+if [ -s "$RUN_DIR/emit_batch.txt" ]; then
+  gc --rig "$RIG" bd batch -f "$RUN_DIR/emit_batch.txt" --json \\
+    > "$RUN_DIR/emit_batch_result.json" 2> "$RUN_DIR/emit_batch.stderr"
+  BATCH_EXIT=$?
+  if [ "$BATCH_EXIT" != 0 ]; then
+    # Batch rolled back. New beads from step 4 are still committed —
+    # they're real beads with all edges wired. The HOLDINGs simply
+    # didn't close. Surface as a soft failure (mayor mail) but
+    # continue closing the step bead.
+    jq -n --arg exit "$BATCH_EXIT" \\
+          --rawfile stderr "$RUN_DIR/emit_batch.stderr" \\
+          '{phase: "batch_close", script_exit: $exit, stderr: $stderr}' \\
+          > "$RUN_DIR/emit_batch_failure.json"
+    # Don't exit; record the failure for the mayor mail and proceed.
+  fi
+fi
+```
+
+**7. Do NOT modify prior-epoch work beads.** Disposition of
+prior-epoch open beads is the mayor's call (see
+`reconcile.json:obsolete_review`). The cartographer's job for
+non-HOLDING existing beads ends with creating new beads, wiring
+edges, and flagging review candidates. Closing prior-epoch work
+beads belongs to refinery (post-merge); priority calls belong to
+the mayor. The HOLDING-close exception in step 6 applies only to
+beads carrying `placeholder:cross-wo-blocker` that the cartographer
+itself manages.
+
+**8. Write the run summary** to `$RUN_DIR/emitted.json`.
+
+Resolve every plan-local key to its real bead id via
+`$RUN_DIR/emit_mapping.json:ids`. For Case A joined cohort convoys,
+the id is `convoy.use_existing_convoy_id` (not in `ids`). HOLDINGs
+closed in step 6 are the entries in `holding_release_effective.jsonl`
+with classification `fully_releasable`; partial entries stayed open.
+
+```json
+{
+  "routing_target": "{{rig_name}}/gastown.polecat",
+  "convoys_created": [
+    {"id": "...", "title": "...", "cohort_label": "land-together:001-002-003"}
+  ],
+  "convoys_joined": [
+    {"id": "app-conv-cohort-123", "cohort_label": "land-together:001-002-003"}
+  ],
+  "key_to_id_map": {"task-1": "app-task-abc", "convoy-1": "app-convoy-abc"},
+  "beads_emitted": [
+    {"id": "...", "title": "...", "key": "task-1", "type": "task",
+     "parent_key": "convoy-1", "parent_id": null,
+     "hold_labels": ["hold:015-manual-override-system"]}
+  ],
+  "beads_skipped_existing": [{"existing_id": "...", "matched_draft_id": "task-2"}],
+  "stranded_cohort_members_count": 1,
+  "obsolete_review_count": 3,
+  "edges_added": {
+    "new_to_new": 0,
+    "new_to_existing": 0,
+    "new_to_cross_wo": 0,
+    "existing_to_new": 0,
+    "new_to_holding": 0,
+    "holding_release_retarget": 0
+  },
+  "holding_stubs_created": [
+    {"id": "app-hold-abc", "blocker_wo_id": "015-manual-override-system",
+     "key": "hold-015", "hold_label": "hold:015-manual-override-system",
+     "dependent_bead_ids": ["app-task-3", "app-task-7"],
+     "dependent_bead_count": 2}
+  ],
+  "holding_stubs_released": [
+    {"id": "app-hold-old", "placeholder_for_wo": "008-ai-enrichment",
+     "retarget_edges": 3}
+  ],
+  "holding_stubs_partial": [
+    {"id": "app-hold-stale", "placeholder_for_wo": "012-something",
+     "unretargetable_dependents": ["app-012-task-4"],
+     "reason": "pre-flight dropped retarget edge — dependent's blocker bead closed between graph and emit"}
+  ],
+  "pre_flight_drops": [
+    {"category": "existing_to_new", "from": "app-abc", "to_key": "task-5",
+     "reason": "app-abc status=closed at emit time (was open during graph step)"}
+  ],
+  "batch_close_failure": null
+}
+```
+
+`routing_target` is the resolved `$SLING_TARGET`; bake it in for
+operator traceability. `key_to_id_map` is the full mapping returned by
+`bd create --graph`. Every entry of `beads_emitted` has its
+`gc.routed_to` metadata pointing here (set atomically at create time
+inside the `bd create --graph` transaction), and also carries the
+plan-side `key`, `type`, `parent_key`/`parent_id` fields and any
+`hold_labels` so `validate-store` can prove parent materialization and
+HOLDING dependency materialization from stable evidence.
+
+`edges_added` counts come from the JSON arrays in `graph.json:edges.*`
+plus the HOLDING-derived edge counts, MINUS any entries listed in
+`pre_flight_drops`.
+
+`pre_flight_drops` mirrors the entries written to
+`$RUN_DIR/reverse_edge_failures.jsonl` during step 2's pre-flight
+check. The category tells the mayor which edge class was affected
+(forward edges that closed are equally bad — the new bead is still
+created but loses a dep).
+
+`batch_close_failure` is the contents of `$RUN_DIR/emit_batch_failure.json`
+if step 6 failed (HOLDINGs didn't close — soft failure, requires
+operator to close them manually via `bd close <id> --reason "..."`).
+Null if step 6 succeeded or was empty.
+
+Immediately after writing `emitted.json`, and BEFORE mailing the
+mayor or closing this step, prove the emission-time routing contract
+from a fresh bead-store query. This check runs before normal
+automation has time to move `gc.routed_to` from polecat to refinery;
+later `validate-store` checks lifecycle progression instead of
+requiring the mutable route field to remain at its initial value.
+
+```bash
+gc --rig "$RIG" bd list --all \\
+  --label="source:work-order:${WORK_ORDER_ID}" \\
+  --label="epoch:${EPOCH}" --json \\
+  > "$RUN_DIR/emission_query.json"
+
+CARTOGRAPHER_ROUTING_MODE=emission \\
+CARTOGRAPHER_ROUTING_QUERY="$RUN_DIR/emission_query.json" \\
+CARTOGRAPHER_ROUTING_OUTPUT="$RUN_DIR/emission_routing_validation.json" \\
+  .gc/scripts/cartographer-validate-emitted-routing.sh || {
+    gc mail send gastown.mayor \\
+      -s "[HUMAN REVIEW NEEDED] cartographer emit routing validation failed for $WORK_ORDER_ID" \\
+      -m "bd create --graph landed, but at least one emitted task bead was not immediately routed to $(jq -r '.routing_target' "$RUN_DIR/emitted.json"). See $RUN_DIR/emission_routing_validation.json and $RUN_DIR/emitted.json. Step bead $GC_BEAD_ID blocked for human review."
+    .gc/scripts/cartographer-human-review-block.sh "emit routing validation failed"
+    gc runtime drain-ack
+    exit 0
+  }
+
+TMP_EMITTED=$(mktemp)
+jq --slurpfile routing "$RUN_DIR/emission_routing_validation.json" \\
+   '. + {routing_verification_at_emit: $routing[0]}' \\
+   "$RUN_DIR/emitted.json" > "$TMP_EMITTED" \\
+  && mv "$TMP_EMITTED" "$RUN_DIR/emitted.json"
+```
+
+**9. Mail the mayor.** This is the wake signal — new ready beads
+have landed in the rig store and the obsolete review list (if any)
+needs the mayor's priority call.
+
+```bash
+SUMMARY_MSG=$(cat <<EOF
+Cartographer epoch ${EPOCH} for work order ${WORK_ORDER_ID}
+landed in rig ${RIG}.
+
+NEW BEADS READY FOR DISPATCH
+- Convoys created: $(jq -r '.convoys_created | length' "$RUN_DIR/emitted.json")
+- Convoys joined (cohort continuity): $(jq -r '.convoys_joined | length' "$RUN_DIR/emitted.json")
+- Task beads emitted: $(jq -r '.beads_emitted | length' "$RUN_DIR/emitted.json")
+- Skipped (already represented): $(jq -r '.beads_skipped_existing | length' "$RUN_DIR/emitted.json")
+
+EDGES ADDED
+- new_to_new:       $(jq -r '.edges_added.new_to_new // 0' "$RUN_DIR/emitted.json")
+- new_to_existing:  $(jq -r '.edges_added.new_to_existing // 0' "$RUN_DIR/emitted.json")
+- new_to_cross_wo:  $(jq -r '.edges_added.new_to_cross_wo // 0' "$RUN_DIR/emitted.json")
+- existing_to_new:  $(jq -r '.edges_added.existing_to_new // 0' "$RUN_DIR/emitted.json")
+
+$(PFD=$(jq -r '.pre_flight_drops // [] | length' "$RUN_DIR/emitted.json")
+if [ "$PFD" -gt 0 ]; then
+  echo "PRE-FLIGHT EDGE DROPS (${PFD}) — existing-bead targets closed between graph and emit:"
+  jq -r '.pre_flight_drops[]? | "  - [\\(.category)] \\(.from // .to_id) → \\(.to_key // .from_key // ""): \\(.reason)"' "$RUN_DIR/emitted.json"
+  echo
+  echo "Each drop is an edge the graph step planned but couldn't apply"
+  echo "because the existing bead it referenced is no longer open. The"
+  echo "cartographer omitted those edges from the bd create --graph plan"
+  echo "rather than abort. Operator may want to: (a) verify the dep claim"
+  echo "is still accurate now, (b) if yes apply via gc bd dep add <from>"
+  echo "<to>, (c) if the target closing means the dep is satisfied, no"
+  echo "action needed."
+fi)
+
+$(BCF=$(jq -r '.batch_close_failure // null' "$RUN_DIR/emitted.json")
+if [ "$BCF" != "null" ] && [ -n "$BCF" ]; then
+  echo "BATCH CLOSE FAILURE — HOLDINGs did NOT close:"
+  echo "$BCF" | jq -r '. | "  stderr: \\(.stderr)"'
+  echo
+  echo "The bd create --graph transaction in step 4 succeeded — all new"
+  echo "beads + retarget edges landed. The bd batch transaction in step 6"
+  echo "rolled back. The HOLDINGs that should have closed are still open,"
+  echo "but their dependents now have BOTH old (-> HOLDING) and new"
+  echo "(-> real bead) deps — over-blocked, not under-blocked. Operator"
+  echo "may close the HOLDINGs manually via:"
+  echo "    gc --rig $RIG bd close <id> --reason '${WORK_ORDER_ID} landed (cartographer epoch ${EPOCH})'"
+fi)
+
+REVERSE EDGES (existing_to_new) — for context:
+
+The cartographer added depends_on edges from existing open beads TO
+new beads emitted in this run, where the existing bead's done_when
+is genuinely blocked by what a new bead creates. This is the
+mechanism that keeps the rig's dependency graph accurate when new
+runs produce upstream prerequisites for already-planned work.
+Convoy membership does not affect this — reverse edges cross convoy
+boundaries when the dependency does. See graph.json:edges.existing_to_new
+for the reason text on each.
+
+STRANDED COHORT MEMBERS ($(jq -r '.stranded_cohort_members | length' "$RUN_DIR/beads_inventory.json"))
+
+If non-zero: other WOs in this work order's land-together set have
+existing beads in per-WO convoys that pre-date the cohort convoy.
+The cartographer did NOT move them — manual migration is the only
+safe path. Each entry below shows a WO that may want its beads
+migrated into the cohort convoy:
+
+$(jq -r '.stranded_cohort_members[] | "  - \\(.wo_id): convoy \\(.convoy_bead_id) (\\(.task_bead_ids | length) task beads)"' "$RUN_DIR/beads_inventory.json")
+
+OBSOLETE-REVIEW CANDIDATES ($(jq -r '.obsolete_review | length' "$RUN_DIR/reconcile.json"))
+
+Prior-epoch open beads that may no longer be needed after this
+re-plan. The cartographer did NOT close them — that is your
+priority call. Each entry has a reason and a recommendation.
+
+See: $RUN_DIR/reconcile.json (key: obsolete_review)
+
+Per-bead reasons:
+$(jq -r '.obsolete_review[] | "  - \\(.bead_id): \\(.reason) [recommend: \\(.recommendation)]"' "$RUN_DIR/reconcile.json")
+
+HOLDING STUBS CREATED ($(jq -r '.holding_stubs_created | length' "$RUN_DIR/emitted.json"))
+
+For unplanned cross-WO blockers (work orders this run depends on
+that have no beads in the rig yet), the cartographer created a
+HOLDING stub per blocker WO. Affected new beads carry a
+`hold:<blocker-wo>` label — dogs read this label across the rig to
+prioritize which work orders to plan next. No operator action is
+required; this is informational.
+
+$(jq -r '.holding_stubs_created[]? | "  - \\(.id): blocker=\\(.blocker_wo_id), dependents=\\(.dependent_bead_count)"' "$RUN_DIR/emitted.json")
+
+HOLDING STUBS RELEASED ($(jq -r '.holding_stubs_released | length' "$RUN_DIR/emitted.json"))
+
+Prior cartographer runs created HOLDING stubs naming ${WORK_ORDER_ID}
+as their blocker. This run lands the real beads, so those HOLDINGs'
+dependents have been retargeted to specific new beads via category-d
+edges and the HOLDINGs themselves have been closed. The original
+HOLDING dep edges remain on the dependents but point at closed beads
+(no-op). Routing is sticky, so the controller's scale_check picks up
+newly-unblocked dependents on its next tick — no re-sling needed.
+
+$(jq -r '.holding_stubs_released[]? | "  - \\(.id): was placeholder-for-wo \\(.placeholder_for_wo), \\(.retarget_edges) retarget edge(s)"' "$RUN_DIR/emitted.json")
+
+PARTIAL HOLDING RELEASE ($(jq -r '.holding_stubs_partial | length' "$RUN_DIR/emitted.json"))
+
+These prior HOLDINGs target ${WORK_ORDER_ID} but at least one of
+their dependents could not be cleanly retargeted to a specific new
+bead in this run (no named-artifact match). The HOLDING was LEFT
+OPEN. Operator action recommended:
+
+1. Inspect each unretargetable dependent's `done_when` and decide
+   whether one of this run's new beads is the real prerequisite
+   anyway (the cartographer's bar is strict; you may have more
+   context).
+2. If yes: `gc --rig "$RIG" bd dep add <dependent> <new-bead>`,
+   then `gc --rig "$RIG" bd close <holding-id> --reason "..."`.
+3. If no: leave the HOLDING open; dependents stay blocked until
+   the next plan run produces a real prereq.
+
+$(jq -r '.holding_stubs_partial[]? | "  - \\(.id): placeholder-for-wo \\(.placeholder_for_wo). Unretargetable: \\(.unretargetable_dependents | join(\", \")). Reason: \\(.reason)"' "$RUN_DIR/emitted.json")
+
+ROUTING
+
+All emitted task beads carry `metadata.gc.routed_to` =
+$(jq -r '.routing_target // "?"' "$RUN_DIR/emitted.json"). The
+controller's scale_check picks them up on its next tick.
+
+UNRESOLVED BLOCKER REFS ($(jq -r '.unresolved_blocker_refs | length' "$RUN_DIR/beads_inventory.json"))
+
+These `Blocked by:` annotations from ${WORK_ORDER_ID}'s work order file
+could not be matched to any file under specs/agent-work-orders/. The
+cartographer treated them as soft warnings and emitted no cross-WO
+edges for them. Investigate each ref — either fix the work order's
+annotation, or, if the referenced WO genuinely exists under a different
+filename, manually create a HOLDING stub for it (add a node to a new
+`bd create --graph` plan with the placeholder labels documented in
+step 3b).
+
+Unresolved refs:
+$(jq -r '.unresolved_blocker_refs[]? | "  - " + .' "$RUN_DIR/beads_inventory.json")
+
+Artifacts for this run: $RUN_DIR/
+EOF
+)
+
+gc mail send gastown.mayor \\
+  -s "CARTOGRAPHER: ${WORK_ORDER_ID} epoch ${EPOCH} landed (${RIG})" \\
+  -m "$SUMMARY_MSG"
+```
+
+If the run had zero `obsolete_review` entries, the mail still goes
+out — the mayor needs to know new beads are ready for dispatch. The
+`bd hook` machinery will surface ready beads regardless, but the
+mail is the explicit, durable record of this run.
+
+**Failure modes:**
+
+- **`bd create --graph` (step 4) failure** — the whole transaction
+  rolled back; NO beads created. Step 4 already writes
+  `$RUN_DIR/failure.json`, mails the mayor with `[HUMAN REVIEW
+  NEEDED]`, blocks the step for human review, and exits after
+  `gc runtime drain-ack`. Operator inspects `emit_plan.json` +
+  `emit_create.stderr`, fixes the plan, and explicitly resumes the
+  step with `.gc/scripts/cartographer-human-review-resume.sh`.
+- **`bd batch` (step 6) failure** — the create transaction
+  succeeded; the HOLDING-close transaction rolled back. New beads
+  are real with all edges wired and routing. HOLDINGs that should
+  have closed are still open; dependents are over-blocked but not
+  under-blocked (safe). Recorded in `emitted.json:batch_close_failure`
+  and surfaced in mayor mail; operator can manually close the
+  HOLDINGs. Step bead still closes — emit's primary contract
+  (atomic creation + routing) succeeded.
+- **Pre-flight drops (step 2)** — edges to existing beads whose
+  status changed since the graph step are silently dropped from
+  the plan and logged to `pre_flight_drops`. Not a fatal failure;
+  the affected edges (and any HOLDINGs whose retargets got dropped)
+  are surfaced in mayor mail.
+**Mark this step complete.**
+
+```bash
+gc --rig "$RIG" bd close "$GC_BEAD_ID" --continue
+gc runtime drain-ack
+```
+
+This explicit close and drain acknowledgement are REQUIRED. gascity's formula engine does not
+auto-close step beads when a fresh-wake session exits; omitting the close
+leaves the step bead open and deadlocks downstream steps that `needs`
+this one. The `--continue` flag advances the molecule to the next
+eligible step. The `gc runtime drain-ack` call lets the controller archive
+this fresh session so the singleton Cartographer pool can spawn a new
+session for the next ready step.
+
+If you took a failure-mode branch above and exited early (wrote
+`failure.json` or `needs_human.json` and stopped), do NOT close and do
+NOT leave the step assigned to cartographer. Run the human-review step
+disposition helper from the formula description so automation stops
+dispatching this failed step until an operator explicitly resumes it.
+
+"""
+
+[[steps]]
+id = "validate-store"
+title = "Validate the emitted bead store (post-mutation invariants)"
+needs = ["emit"]
+description = """
+Read back every bead just emitted and verify the invariants that
+require querying the live bead store. Plan-level invariants (a, c,
+d, e, f, g, h, l) were already enforced pre-emit by `validate-plan`
+and won't be re-checked here — if you suspect they regressed, see
+`$RUN_DIR/validation_plan.json` and `graph.json`.
+
+On any failure, leave the emitted beads in place, mail the mayor
+with subject prefix `[HUMAN REVIEW NEEDED]` (see "Human-review
+notifications" in the formula description), and write
+`$RUN_DIR/validation_store.json` with `status=failed`.
+
+**1. Load state and emit summary:**
+```bash
+WO_PATH_INPUT="{{work_order_path}}" . .gc/scripts/cartographer-load-state.sh
+cat "$RUN_DIR/emitted.json"
+```
+
+**2. Re-query the emitted set.** Pass `--all` so the validation
+covers everything we created (including any beads marked as not-open
+at creation time — rare, but possible if the runtime sets a non-open
+status by default for some bead types):
+
+```bash
+gc --rig "$RIG" bd list --all \\
+  --label="source:work-order:${WORK_ORDER_ID}" \\
+  --label="epoch:${EPOCH}" --json \\
+  > "$RUN_DIR/validation_query.json"
+```
+
+**3. Run every check below. ALL must pass.**
+
+a. **Convoy-membership linkage materialized.** For each task bead
+   in `emit_plan.json` whose draft referenced a convoy via
+   `parent_key` or `parent_id`, the emitted bead MUST
+   carry the equivalent parent linkage in the bead store. Resolve
+   `parent_key` to the just-emitted convoy bead id via
+   `emitted.json:key_to_id_map` (or equivalent), then accept either
+   `parent == <convoy id>`, `parent_id == <convoy id>`, or a
+   `dependencies[]` row with `type == "parent-child"` and
+   `depends_on_id == <convoy id>`.
+
+   ```bash
+   jq -c '
+     .nodes[]?
+     | select((.type // .issue_type) == "task")
+     | select(((.labels // []) | index("placeholder:cross-wo-blocker")) | not)
+     | select(.parent_key? or .parent_id?)
+   ' "$RUN_DIR/emit_plan.json" > "$RUN_DIR/_planned_parented_tasks.jsonl"
+
+   while IFS= read -r NODE; do
+     [ -z "$NODE" ] && continue
+     TASK_KEY=$(jq -r '.key' <<<"$NODE")
+     TASK_ID=$(jq -r --arg k "$TASK_KEY" '.key_to_id_map[$k] // empty' "$RUN_DIR/emitted.json")
+     PLAN_PARENT=$(jq -r '.parent_key // .parent_id // empty' <<<"$NODE")
+     [ -z "$PLAN_PARENT" ] && continue   # standalone task — no parent expected
+     EXPECTED_CONVOY_ID=$(jq -r --arg pk "$PLAN_PARENT" '.key_to_id_map[$pk] // $pk' "$RUN_DIR/emitted.json")
+     ACTUAL_PARENT=$(jq -r --arg id "$TASK_ID" '.[] | select(.id==$id) | .parent // .parent_id // ""' "$RUN_DIR/validation_query.json")
+     HAS_PARENT_CHILD=$(jq -r --arg id "$TASK_ID" --arg parent "$EXPECTED_CONVOY_ID" '
+       [.[] | select(.id==$id)
+        | .dependencies[]?
+        | select(.type == "parent-child" and .depends_on_id == $parent)]
+       | length
+     ' "$RUN_DIR/validation_query.json")
+     [ "$ACTUAL_PARENT" = "$EXPECTED_CONVOY_ID" ] || [ "$HAS_PARENT_CHILD" != "0" ] || echo "FAIL: $TASK_ID expected parent/parent-child=$EXPECTED_CONVOY_ID got parent='$ACTUAL_PARENT'"
+   done < "$RUN_DIR/_planned_parented_tasks.jsonl"
+   ```
+
+   Any FAIL output → fail the step.
+
+   Rationale: convoy membership is structural, not label-based. The
+   current `bd list --json` surface exposes the computed parent as
+   `parent` and retains the underlying `parent-child` dependency row;
+   older or wrapper surfaces may expose `parent_id`. The pre-emit
+   `validate-plan` step already checks the plan-level invariant; this
+   post-emit re-check catches any failure where `bd create --graph`
+   produced a bead missing the structural convoy linkage despite the
+   plan being correct.
+
+b. **Resolvable dependencies.** For each `depends_on` edge, the
+   target bead must exist. If pre-existing, it must be open (or be
+   a convoy bead). A closed-and-irrelevant target → fail.
+
+i. **No improper mutations.** The cartographer must not have closed
+   or modified any prior-epoch or existing open work bead, AND must
+   not have mutated any existing convoy bead (including a cohort
+   convoy joined this run). EXCEPTIONS:
+   - Dependency-list ADDITIONS pointing at beads emitted in THIS run
+     are allowed (category-d / `existing_to_new` edges).
+   - HOLDING stubs (label `placeholder:cross-wo-blocker`) whose
+     `placeholder-blocker:` matches this run's `${WORK_ORDER_ID}`
+     MAY have status transitioned from `open` to `closed`, but ONLY
+     if their id appears in `emitted.json:holding_stubs_released`.
+     Any other field (body, title, labels, convoy) must remain
+     unchanged. A HOLDING close not recorded in
+     `holding_stubs_released` → fail.
+
+   For prior-epoch task beads — compare against fresh query:
+
+   ```bash
+   gc --rig "$RIG" bd list --all \\
+     --label="source:work-order:${WORK_ORDER_ID}" --json \\
+     | jq '[.[] | select(.labels | index("epoch:'"${EPOCH}"'") | not)]' \\
+     > "$RUN_DIR/prior_epoch_now.json"
+   ```
+
+   For each prior-epoch bead in the original inventory, status,
+   labels, and convoy membership in the fresh query must match.
+   Any divergence (status changed, label added/removed, convoy
+   changed, body changed, title changed) → fail.
+
+   **Dependency-list envelope.** The bead's `depends_on` list MAY
+   contain new entries pointing at beads emitted by THIS run
+   (validate by cross-referencing each entry against
+   `emitted.json:beads_emitted`). It MUST NOT have lost any
+   dependency that was present in the prior inventory. It MUST NOT
+   contain new entries pointing at beads that are NOT in this run's
+   emission set. Any of those three conditions → fail.
+
+   The same envelope applies to every existing open bead listed in
+   `beads_inventory.json:candidate_dependents` regardless of whether
+   it was a prior-epoch bead — body/title/labels/status/convoy must
+   be unchanged; only depends_on additions to this run's new beads
+   are permitted. HOLDING stubs are explicitly excluded from
+   `candidate_dependents` (see the script), so this envelope does
+   not apply to them; the HOLDING-close exception lives in the
+   prior_holding_stubs envelope below.
+
+   **HOLDING envelope.** For each entry in
+   `beads_inventory.json:prior_holding_stubs`, the bead may be in
+   one of two states post-emit:
+   - `status=open` and unchanged: cartographer chose `partial`
+     classification or skipped the release. Must appear in
+     `emitted.json:holding_stubs_partial`.
+   - `status=closed`: cartographer closed it. Must appear in
+     `emitted.json:holding_stubs_released`. Body, title, labels,
+     and convoy must be unchanged.
+   Any other divergence (status flipped without the matching record,
+   labels added, body edited) → fail.
+
+   For a joined cohort convoy — compare against the original record:
+
+   ```bash
+   JOINED_ID=$(jq -r '.convoys_joined[0].id // empty' "$RUN_DIR/emitted.json")
+   if [ -n "$JOINED_ID" ]; then
+     gc --rig "$RIG" bd show "$JOINED_ID" --json \\
+       > "$RUN_DIR/joined_convoy_now.json"
+   fi
+   ```
+
+   The joined convoy bead's title, labels, and own status must be
+   unchanged from `beads_inventory.json:cohort_convoy.json`. Its
+   member list will have grown (new beads point at it via
+   `--convoy=<id>` at creation) — that growth is expected and is
+   not a mutation of the convoy bead itself. Any other divergence
+   → fail.
+
+j. **Cohort coherence.** If `inventory.json:cohort_label` is set,
+   exactly one cohort convoy must now carry that label. Verify:
+
+   ```bash
+   COHORT_LABEL=$(jq -r '.cohort_label // empty' "$RUN_DIR/inventory.json")
+   if [ -n "$COHORT_LABEL" ]; then
+     COUNT=$(gc --rig "$RIG" bd list --all --type=convoy \\
+               --label="$COHORT_LABEL" --json | jq 'length')
+     # COUNT must be exactly 1.
+   fi
+   ```
+
+   Count of 0 → fail (cohort convoy missing; planning broken).
+   Count of 1 → pass.
+   Count > 1 → fail (duplicate cohort convoys; should have been
+   caught by step 4's `unresolved_cohort_dup` and joined to the
+   earliest one).
+
+   Additionally, every new task bead created this run must carry
+   the cohort convoy's id as its `--convoy` parent. If any new
+   bead is in a non-cohort convoy or no convoy → fail.
+
+k. **Mayor notification sent.** Confirm that the mayor mail from
+   emit was sent successfully, regardless of whether the mayor has
+   already read or archived it:
+
+   ```bash
+   SUBJECT_PREFIX="CARTOGRAPHER: ${WORK_ORDER_ID} epoch ${EPOCH}"
+   (
+     cd "$CITY_ROOT"
+     gc bd list --all --include-infra \\
+       --type=message --assignee=gastown.mayor \\
+       --title "$SUBJECT_PREFIX" --limit 0 --json
+   ) > "$RUN_DIR/mayor_notification_query.json"
+   MAIL_COUNT=$(
+     jq --arg subject_prefix "$SUBJECT_PREFIX" \\
+        '[.[]? | select((.title // "") | startswith($subject_prefix))] | length' \\
+        "$RUN_DIR/mayor_notification_query.json"
+   )
+   [ "$MAIL_COUNT" -ge 1 ] || echo "FAIL: mayor notification mail not found for ${WORK_ORDER_ID} epoch ${EPOCH}"
+   ```
+
+   Result must be ≥ 1. This deliberately queries message beads, not
+   `gc mail inbox`, because `inbox` lists only unread mail. If 0 →
+   fail (the mayor never learned about the new beads or the obsolete
+   review list). Run the query from `$CITY_ROOT`; the cartographer's
+   per-run worktree is inside the city but belongs to the rig source
+   tree, and `bd list` must use the city context for city mail beads.
+
+m. **HOLDING created-bead invariants.** Every HOLDING stub in
+   `emitted.json:holding_stubs_created` must carry the origin labels,
+   carry the placeholder labels, have empty/absent `gc.routed_to`
+   metadata, and be the dependency target for each emitted dependent
+   listed in `dependent_bead_ids`.
+
+   ```bash
+   for HOLDING in $(jq -r '.holding_stubs_created[].id' "$RUN_DIR/emitted.json"); do
+     RECORD=$(jq -c --arg id "$HOLDING" '.[] | select(.id == $id)' "$RUN_DIR/validation_query.json")
+     if [ -z "$RECORD" ]; then
+       echo "FAIL: HOLDING $HOLDING missing from validation_query.json"
+       # → fail
+       continue
+     fi
+
+     ROUTED=$(printf '%s\n' "$RECORD" | jq -r '.metadata["gc.routed_to"] // empty' 2>/dev/null)
+     if [ -n "$ROUTED" ]; then
+       echo "FAIL: HOLDING $HOLDING has routed_to=$ROUTED (must be empty)"
+       # → fail
+     fi
+
+     for LABEL in "source:work-order:${WORK_ORDER_ID}" "epoch:${EPOCH}" \\
+                  "placeholder:cross-wo-blocker" "placeholder-for-wo:${WORK_ORDER_ID}"; do
+       if ! printf '%s\n' "$RECORD" | jq -e --arg label "$LABEL" '(.labels // []) | index($label)' >/dev/null; then
+         echo "FAIL: HOLDING $HOLDING missing label $LABEL"
+         # → fail
+       fi
+     done
+
+     BLOCKER_LABEL=$(printf '%s\n' "$RECORD" | jq -r '.labels[]? | select(startswith("placeholder-blocker:"))' | head -n 1)
+     [ -n "$BLOCKER_LABEL" ] || echo "FAIL: HOLDING $HOLDING missing placeholder-blocker label"
+
+     jq -r --arg holding "$HOLDING" '.holding_stubs_created[] | select(.id==$holding) | .dependent_bead_ids[]?' "$RUN_DIR/emitted.json" |
+     while IFS= read -r DEPENDENT; do
+       [ -z "$DEPENDENT" ] && continue
+       if ! jq -e --arg id "$DEPENDENT" --arg holding "$HOLDING" '
+             .[] | select(.id == $id)
+             | ([.dependencies[]?.depends_on_id, .depends_on[]?] | map(select(. == $holding)) | length) > 0
+           ' "$RUN_DIR/validation_query.json" >/dev/null; then
+         echo "FAIL: dependent $DEPENDENT is missing depends_on edge to HOLDING $HOLDING"
+         # → fail
+       fi
+     done
+   done
+   ```
+
+   Any HOLDING with routing metadata, missing origin/placeholder
+   labels, or missing dependent edge → fail. This is the categorical
+   defense against the bd-persistence bug accidentally leaking
+   scale_check visibility onto a permanent placeholder, and it proves
+   held downstream work is actually wedged on the placeholder until the
+   blocker work order lands.
+
+n. **Routing coverage and downstream progression.** Every bead in
+   `emitted.json:beads_emitted` must either still have
+   `gc.routed_to` set to `emitted.json:routing_target`, or have
+   already progressed into a valid downstream lifecycle state
+   (claimed by polecat, handed to refinery, or closed). Do not require
+   `gc.routed_to` to remain pointed at polecat after automation has
+   claimed the bead; polecat is expected to reroute completed branch
+   work to refinery.
+
+   ```bash
+   CARTOGRAPHER_ROUTING_MODE=lifecycle \\
+   CARTOGRAPHER_ROUTING_QUERY="$RUN_DIR/validation_query.json" \\
+   CARTOGRAPHER_ROUTING_OUTPUT="$RUN_DIR/validation_store_routing.json" \\
+     .gc/scripts/cartographer-validate-emitted-routing.sh || \\
+       jq -r '.failures[]? | "FAIL: " + .bead_id + " " + .detail' \\
+         "$RUN_DIR/validation_store_routing.json"
+   ```
+
+   A missing initial route with no downstream handoff evidence means
+   the rig will starve the affected beads — the controller's
+   scale_check cannot see them. A route that has legitimately moved
+   from polecat to refinery is success, not validation drift.
+
+**4. On success,** write `$RUN_DIR/validation_store.json`:
+
+```json
+{
+  "status": "ok",
+  "summary": "Store checks passed: dependencies resolvable, no improper mutations, cohort coherent, mayor notified, HOLDING routing clean, sling coverage complete.",
+  "warnings": ["..."]
+}
+```
+
+The mayor mail was already sent in step `emit`. Exit the formula
+cleanly.
+
+```bash
+gc --rig "$RIG" bd close "$GC_BEAD_ID" --continue
+gc runtime drain-ack
+```
+
+**5. On failure,** write `$RUN_DIR/validation_store.json` with
+`status: "failed"`, the failed check id(s), and the offending bead
+ids. Mail the mayor with subject prefix `[HUMAN REVIEW NEEDED]`
+(see "Human-review notifications" in the formula description) and
+the failure detail. Do NOT roll back or close anything — block this
+validation step for human review and leave the partial graph for
+human inspection.
+
+```bash
+.gc/scripts/cartographer-human-review-block.sh "validate-store failed"
+gc runtime drain-ack
+exit 0
+```
+
+This explicit close and drain acknowledgement are REQUIRED. gascity's formula engine does not
+auto-close step beads when a fresh-wake session exits; omitting the close
+leaves the step bead open and deadlocks downstream steps that `needs`
+this one. The `--continue` flag advances the molecule to the next
+eligible step. The `gc runtime drain-ack` call lets the controller archive
+this fresh session so the singleton Cartographer pool can spawn a new
+session for the next ready step.
+
+If you took a failure-mode branch above and exited early (wrote
+`failure.json` or `needs_human.json` and stopped), do NOT close and do
+NOT leave the step assigned to cartographer. Run the human-review step
+disposition helper from the formula description so automation stops
+dispatching this failed step until an operator explicitly resumes it.
+
+"""

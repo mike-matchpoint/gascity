@@ -1,0 +1,570 @@
+description = """
+Landing-arbiter decision checklist. This formula is retained during the typed
+selector migration as the step reference for existing prompts and legacy
+sessions; it is no longer poured as a wake token by
+`orders/landing-arbiter-watch.toml`.
+
+The canonical work item is the pending landing-failure bug selected by the
+landing-arbiter agent's typed work_selector. Formula steps are NOT materialized
+as child beads; read each step's description and work through them in order.
+
+The arbiter writes all durable state to the landing-failure bug
+bead (`metadata` for structured fields, `description` for narrative
+synthesis). There is no filesystem run dir.
+
+The first step (`recover-stranded-claims`) handles crash-recovery; the second
+step (`claim-next-failure`) claims the canonical bug through `gc work claim`.
+"""
+formula = "mol-landing-arbiter-patrol"
+version = 1
+contract = "graph.v2"
+
+[vars]
+[vars.rig_name]
+description = "The rig this patrol pass belongs to (matches city.toml rig name)"
+required = true
+
+[vars.binding_prefix]
+description = "Agent name prefix used when constructing pool routes (e.g. 'gastown.')"
+default = "gastown."
+
+[vars.iteration_cap]
+description = "Maximum bugs decided per wake before quiescing (patrol-loop-discipline)"
+default = "8"
+
+[[steps]]
+id = "validate-identity"
+title = "Validate canonical agent identity"
+description = """
+**Fail fast if `$GC_AGENT` is not set.**
+
+The arbiter uses `$GC_AGENT` (not `$GC_ALIAS`) as its canonical mailbox
+identity. The session harness guarantees `$GC_AGENT` is populated for
+every live session — it falls back to the session name when the alias
+is empty.
+
+```bash
+if [ -z "${GC_AGENT:-}" ]; then
+    echo "GC_AGENT is empty — session harness did not inject the canonical identity."
+    echo "Refusing to self-poll with an empty filter; escalating before proceeding."
+    gc mail send mayor/ -s "ESCALATION: landing-arbiter started with empty GC_AGENT [HIGH]" \\
+        -m "Session has no canonical agent identity. Investigate session harness."
+    gc runtime drain-ack
+    exit 1
+fi
+```
+
+Close this step only when `$GC_AGENT` is confirmed non-empty.
+"""
+
+[[steps]]
+id = "check-inbox"
+title = "Read mail before draining the queue"
+needs = ["validate-identity"]
+description = """
+```bash
+gc mail inbox
+```
+
+Archive anything you handle. Note any priority overrides, hold
+requests, or human-supplied decisions on bugs you would otherwise
+auto-decide.
+
+Close this step and proceed.
+"""
+
+[[steps]]
+id = "recover-stranded-claims"
+title = "Reclaim or release in-progress bugs from a dead prior session"
+needs = ["check-inbox"]
+description = """
+**Belt-and-suspenders crash recovery.** When a prior session died
+(hard kill, OOM, panic) the controller's reconciler eventually marks
+the session bead orphaned and unclaims its work, but there is a brief
+window where bugs assigned to the dead session linger with
+`decision_state=in_progress`. This step catches that case before the
+normal queue scan.
+
+```bash
+LIVE_ASSIGNEES=$(gc session list --state all --json 2>/dev/null | jq -r '
+  .sessions[]
+  | select(.State != "closed" and .State != "stopped" and .State != "gc_swept")
+  | .ID, .Template, .Title, .Alias, .SessionName
+  | select(. != null and . != "")
+' | sort -u)
+
+STRANDED=$(gc --rig "{{rig_name}}" bd list --type=bug --status=in_progress,open \\
+  --metadata-field gc.kind=owned_convoy_landing_failure \\
+  --metadata-field decision_state=in_progress \\
+  --metadata-field gc.routed_to="{{rig_name}}/codegen-support.landing-arbiter" \\
+  --json | jq -r --arg live "$LIVE_ASSIGNEES" '
+    ($live | split("\n")) as $alive
+    | .[]
+    | select((.assignee // "") != "")
+    | select(([.assignee] - $alive) | length == 1)
+    | .id
+  ')
+```
+
+For each stranded bug id:
+
+1. Read the bug's metadata + description to determine prior progress.
+2. If the prior session got far enough that a partial decision is on
+   the bug (`landing_decision` set, repair beads emitted but convoy
+   not yet updated), **resume**: finish the missing convoy/bug
+   updates, then close the bug. Do not re-decide.
+3. Otherwise **release** so the normal `claim-next-failure` step
+   picks it up fresh:
+   ```bash
+   gc --rig "{{rig_name}}" bd update "$BUG" \\
+     --status=open \\
+     --assignee="" \\
+     --set-metadata decision_state=pending
+   ```
+
+Most ticks this step finds nothing and closes immediately.
+
+Close this step when all stranded bugs have been resumed or released.
+"""
+
+[[steps]]
+id = "claim-next-failure"
+title = "Find and claim the next pending landing-failure bug"
+needs = ["recover-stranded-claims"]
+description = """
+**This step is the actual queue filter.** It runs in a loop: claim one
+bug, decide it (steps 4–7), then `next-iteration` re-enters here. The
+iteration cap (formula var `iteration_cap` = {{iteration_cap}}) bounds
+how many bugs you decide per wake.
+
+```bash
+CLAIM_ERR="${TMPDIR:-/tmp}/landing-arbiter-claim.$$.err"
+if ! CLAIM_JSON=$(gc --rig "{{rig_name}}" work claim \\
+  --status=in_progress \\
+  --set-metadata decision_state=in_progress \\
+  --json 2>"$CLAIM_ERR"); then
+  if grep -qi "no matching work" "$CLAIM_ERR"; then
+    rm -f "$CLAIM_ERR"
+    echo "No pending landing-failure bugs; quiescing."
+    gc runtime drain-ack
+    exit 0
+  fi
+  echo "Landing Arbiter typed claim failed:" >&2
+  cat "$CLAIM_ERR" >&2
+  rm -f "$CLAIM_ERR"
+  gc runtime drain-ack
+  exit 1
+fi
+rm -f "$CLAIM_ERR"
+
+BUG=$(printf '%s' "$CLAIM_JSON" | jq -r '.id // empty')
+```
+
+Read the bug's full state into working memory:
+
+```bash
+gc --rig "{{rig_name}}" bd show "$BUG" --json > /tmp/landing-arbiter-bug.json
+
+jq -e --arg me "$GC_AGENT" '
+  .[0].assignee == $me and
+  .[0].status == "in_progress" and
+  .[0].metadata.decision_state == "in_progress"
+' /tmp/landing-arbiter-bug.json >/dev/null || {
+  echo "Landing-failure bug claim verification failed for $BUG"
+  jq '.[0] | {id, status, assignee, metadata}' /tmp/landing-arbiter-bug.json
+  gc runtime drain-ack
+  exit 1
+}
+```
+
+Extract the key fields for downstream steps (do NOT re-collect git
+evidence — refinery already populated everything on the bug):
+
+```bash
+SOURCE_CONVOY=$(jq -r '.[0].metadata.source_convoy' /tmp/landing-arbiter-bug.json)
+SOURCE_BRANCH=$(jq -r '.[0].metadata.source_branch' /tmp/landing-arbiter-bug.json)
+TARGET_BRANCH=$(jq -r '.[0].metadata.target_branch' /tmp/landing-arbiter-bug.json)
+REFINERY_FAILURE_CLASS=$(jq -r '.[0].metadata.failure_class // empty' /tmp/landing-arbiter-bug.json)
+MERGE_BASE=$(jq -r '.[0].metadata.merge_base // empty' /tmp/landing-arbiter-bug.json)
+TARGET_SHA=$(jq -r '.[0].metadata.target_sha // empty' /tmp/landing-arbiter-bug.json)
+INTEGRATION_SHA=$(jq -r '.[0].metadata.integration_sha // empty' /tmp/landing-arbiter-bug.json)
+EVIDENCE_COMPLETE=$(jq -r '.[0].metadata.evidence_complete // "false"' /tmp/landing-arbiter-bug.json)
+```
+
+If `evidence_complete=false`, the bug carries
+`evidence_gaps=<csv>` naming what could not be collected. Either
+supplement what you can from the source tree (and update the bug)
+or route this bug to human and continue the loop.
+
+Close this step. Carry `$BUG`, `$SOURCE_CONVOY`, `$SOURCE_BRANCH`,
+`$TARGET_BRANCH` forward.
+"""
+
+[[steps]]
+id = "gather-architectural-context"
+title = "Read work order, AGENTS.md, ADRs to understand intent"
+needs = ["claim-next-failure"]
+description = """
+**Refinery already collected the git evidence. Your job here is intent.**
+Long-term architectural decision over band-aid patch.
+
+**1. Derive the work-order path from `$SOURCE_BRANCH`.**
+
+`integration/<n>-<slug>` →
+`specs/agent-work-orders/WO-<n>-<slug>.md`.
+
+```bash
+WO_FILE=$(echo "$SOURCE_BRANCH" | sed -E 's#^integration/#specs/agent-work-orders/WO-#').md
+# Fallback: glob if the exact slug doesn't match
+if [ ! -f "$WO_FILE" ]; then
+  WO_NUM=$(echo "$SOURCE_BRANCH" | sed -E 's#^integration/0*([0-9]+).*#\\1#')
+  WO_FILE=$(find specs/agent-work-orders -name "WO-0*${WO_NUM}-*.md" 2>/dev/null | head -1)
+fi
+```
+
+Read the file in full if it exists.
+
+**2. Identify directories of conflict paths and walk up for AGENTS.md.**
+
+```bash
+CONFLICT_PATHS=$(jq -r '.[0].metadata.conflict_paths // ""' /tmp/landing-arbiter-bug.json | tr ',' '\\n')
+AGENTS_MD_FOUND=()
+for p in $CONFLICT_PATHS; do
+  d=$(dirname "$p")
+  while [ "$d" != "." ] && [ "$d" != "/" ]; do
+    if [ -f "$d/AGENTS.md" ]; then
+      AGENTS_MD_FOUND+=("$d/AGENTS.md")
+    fi
+    d=$(dirname "$d")
+  done
+  # Also check repo root.
+  [ -f "./AGENTS.md" ] && AGENTS_MD_FOUND+=("./AGENTS.md")
+done
+AGENTS_MD_PATHS=$(printf '%s\\n' "${AGENTS_MD_FOUND[@]}" | sort -u | paste -sd, -)
+```
+
+Read each unique AGENTS.md.
+
+**3. Find ADRs touching the same surface.**
+
+```bash
+for adr_dir in docs/adr docs/decisions; do
+  [ -d "$adr_dir" ] || continue
+  grep -lE "$(echo "$CONFLICT_PATHS" | tr '\\n' '|' | sed 's/|$//')" "$adr_dir"/*.md 2>/dev/null
+done
+```
+
+Read any matches.
+
+**4. Recent commit history on conflict paths.**
+
+For each conflict path:
+
+```bash
+git log --oneline -10 "${MERGE_BASE}..${TARGET_SHA}" -- "$p"
+git log --oneline -10 "${MERGE_BASE}..${INTEGRATION_SHA}" -- "$p"
+```
+
+**5. Synthesize intent and record on the bug.**
+
+Write the synthesis as `description` (replace, don't append-noise):
+
+```bash
+SYNTHESIS=$(cat <<EOF
+## Architectural intent synthesis
+
+<one-paragraph synthesis: what the work order intends, what main's
+concurrent work introduced, what AGENTS.md / ADRs require, and the
+shape the merged result should take>
+
+## Sources read
+
+- Work order: <path or "none found">
+- AGENTS.md: <paths or "none found">
+- ADRs: <paths or "none">
+- Recent commits inspected: <SHAs or "none">
+EOF
+)
+
+gc --rig "{{rig_name}}" bd update "$BUG" \\
+  --description "$SYNTHESIS" \\
+  --set-metadata work_order_path="$WO_FILE" \\
+  --set-metadata agents_md_paths="$AGENTS_MD_PATHS"
+```
+
+**Bound payload size.** Summarize, don't copy file contents.
+
+Close this step.
+"""
+
+[[steps]]
+id = "classify"
+title = "Reason over evidence + context; record failure_class"
+needs = ["gather-architectural-context"]
+description = """
+Classify the failure from the taxonomy. The class is **audit
+vocabulary** — your decision (next step) is driven by the four
+buckets in the prompt, not by a class→decision lookup.
+
+Conflict-class candidates (refinery's auto-resolver rejected a hunk):
+`semantic_add_add`, `semantic_modify_modify`, `deletion_vs_keep`,
+`contract_surface_conflict`, `rename_ambiguous`, `regenerate_failure`,
+`test_failure_post_auto_resolve`.
+
+Whole-branch candidates: `stale_integration_branch`, `mixed`,
+`hook_rejected`.
+
+Non-conflict landing-failure candidates: `push_race`, `ff_not_possible`,
+`missing_branch`, `toctou_stale_evidence`.
+
+Out-of-scope (route to human, not arbiter): `abandoned_convoy`.
+
+```bash
+FAILURE_CLASS="<one-of-the-above>"
+CONFIDENCE="<high|medium|low>"
+
+gc --rig "{{rig_name}}" bd update "$BUG" \\
+  --set-metadata failure_class="$FAILURE_CLASS" \\
+  --set-metadata confidence="$CONFIDENCE"
+```
+
+If your classification differs from refinery's hint, that is fine —
+refinery's class is a first pass; your synthesis incorporates intent
+which refinery did not have.
+
+Close this step.
+"""
+
+[[steps]]
+id = "decide"
+title = "Pick one of four decisions using the prompt's criteria"
+needs = ["classify"]
+description = """
+Read the prompt's "The four decisions — criteria" section. Pick
+exactly one:
+
+- `continue_rebase` (Retry bucket)
+- `merge_commit` (Strategy bucket)
+- `repair_beads` (Repair bucket)
+- `human` (Human bucket)
+
+Write the decision to the bug:
+
+```bash
+LANDING_DECISION="<one-of-the-four>"
+gc --rig "{{rig_name}}" bd update "$BUG" \\
+  --set-metadata landing_decision="$LANDING_DECISION"
+```
+
+Append decision rationale to the bug's description (the architectural
+synthesis from `gather-architectural-context` is the basis; this is
+the explicit "and therefore X" line):
+
+```bash
+gc --rig "{{rig_name}}" bd update "$BUG" \\
+  --notes "Decision: $LANDING_DECISION. Rationale: <one paragraph tying synthesis to criteria>."
+```
+
+Close this step.
+"""
+
+[[steps]]
+id = "emit"
+title = "Write convoy metadata or create repair beads"
+needs = ["decide"]
+description = """
+Branch on `$LANDING_DECISION`.
+
+### `repair_beads`
+
+For each independent code decision, create one repair bead:
+
+```bash
+REPAIR_METADATA=$(jq -nc \\
+  --arg routed_to "{{rig_name}}/{{binding_prefix}}polecat" \\
+  --arg target_branch "$SOURCE_BRANCH" \\
+  --arg source_convoy "$SOURCE_CONVOY" \\
+  --arg source_bug "$BUG" \\
+  '{
+    "gc.routed_to": $routed_to,
+    "target_branch": $target_branch,
+    "target": $target_branch,
+    "source_convoy": $source_convoy,
+    "source_landing_failure_bug": $source_bug,
+    "repair_kind": "integration-branch-repair"
+  }')
+
+REPAIR_ID=$(gc --rig "{{rig_name}}" bd create \\
+  --type=task \\
+  --priority=1 \\
+  --parent="$SOURCE_CONVOY" \\
+  --title="<concise title>" \\
+  --labels="owned-convoy-landing-repair,source:work-order:<wo-id>" \\
+  --metadata "$REPAIR_METADATA" \\
+  --description "$(cat <<'EOF'
+## Root cause
+
+<one paragraph>
+
+## Files to touch
+
+<list>
+
+## Acceptance criteria
+
+<list>
+
+## Validation commands
+
+<list>
+EOF
+)" --json | jq -r '.id')
+echo "$REPAIR_ID"
+```
+
+Collect IDs into `$REPAIR_IDS` (comma-separated). Update the convoy:
+
+```bash
+gc --rig "{{rig_name}}" bd update "$SOURCE_CONVOY" \\
+  --status=open \\
+  --assignee="" \\
+  --unset-metadata gc.routed_to \\
+  --set-metadata landing_state=repair_pending \\
+  --set-metadata merge_result=blocked \\
+  --set-metadata landing_failure_id="$BUG" \\
+  --set-metadata repair_beads="$REPAIR_IDS"
+```
+
+Close the bug:
+
+```bash
+gc --rig "{{rig_name}}" bd update "$BUG" \\
+  --set-metadata decision_state=resolved
+gc --rig "{{rig_name}}" bd close "$BUG" --reason "decision: repair_beads; emitted $REPAIR_IDS"
+```
+
+### `continue_rebase` or `merge_commit`
+
+Reassign the convoy back to refinery with the strategy:
+
+```bash
+REFINERY="{{rig_name}}/{{binding_prefix}}refinery"
+gc --rig "{{rig_name}}" bd update "$SOURCE_CONVOY" \\
+  --status=open \\
+  --assignee="$REFINERY" \\
+  --set-metadata gc.routed_to="$REFINERY" \\
+  --set-metadata landing_state=queued \\
+  --set-metadata landing_strategy="$LANDING_DECISION" \\
+  --set-metadata landing_failure_id="$BUG"
+```
+
+Close the bug:
+
+```bash
+gc --rig "{{rig_name}}" bd update "$BUG" \\
+  --set-metadata decision_state=resolved
+gc --rig "{{rig_name}}" bd close "$BUG" --reason "decision: $LANDING_DECISION; convoy reassigned to refinery"
+```
+
+### `human`
+
+Leave the bug open, route to human:
+
+```bash
+gc --rig "{{rig_name}}" bd update "$BUG" \\
+  --status=open \\
+  --assignee="" \\
+  --set-metadata decision_state=human_review \\
+  --set-metadata "gc.routed_to=human-escalation"
+```
+
+Convoy stays in `landing_state=blocked` with the bug as its open
+child — no convoy update needed.
+
+### Post-emit verification
+
+After any decision, verify the bug ended in the expected state:
+
+```bash
+gc --rig "{{rig_name}}" bd show "$BUG" --json | jq -e --arg d "$LANDING_DECISION" '
+  .[0].metadata.landing_decision == $d and
+  (
+    ($d == "human" and .[0].status == "open" and .[0].metadata.decision_state == "human_review") or
+    ($d != "human" and .[0].status == "closed" and .[0].metadata.decision_state == "resolved")
+  )
+' >/dev/null || {
+  echo "EMIT VERIFICATION FAILED for $BUG"
+  gc --rig "{{rig_name}}" bd show "$BUG" --json | jq '.[0] | {id, status, metadata}'
+  exit 1
+}
+```
+
+Close this step.
+"""
+
+[[steps]]
+id = "notify"
+title = "Mail mayor only for human escalation or unusual risk"
+needs = ["emit"]
+description = """
+For `human` decisions:
+
+```bash
+gc mail send mayor/ -s "ESCALATION: landing-arbiter routed $BUG to human" \\
+  -m "Bug: $BUG
+Convoy: $SOURCE_CONVOY
+Source branch: $SOURCE_BRANCH
+Target: $TARGET_BRANCH
+Failure class: $FAILURE_CLASS
+
+Decision is 'human' because: <one paragraph>.
+
+Architectural synthesis is on the bug's description; git evidence
+(SHAs, conflict excerpts) is in metadata."
+```
+
+For `continue_rebase`, `merge_commit`, `repair_beads`: no notification
+needed. The bug close + convoy update are the durable signal.
+
+If you observe unusual risk during decide (e.g., conflict spans
+unfamiliar ownership surfaces, multiple ADRs disagree), send a low-
+priority informational mail to mayor regardless of decision.
+
+Close this step.
+"""
+
+[[steps]]
+id = "next-iteration"
+title = "Re-scan the queue; loop or quiesce"
+needs = ["notify"]
+description = """
+**1. Iteration-cap check.** If you have decided more than {{iteration_cap}}
+bugs this wake, quiesce -- see step 4.
+
+**2. Re-scan the queue.**
+
+```bash
+NEXT=$(gc --rig "{{rig_name}}" bd list --type=bug --status=open \\
+  --metadata-field gc.kind=owned_convoy_landing_failure \\
+  --metadata-field decision_state=pending \\
+  --metadata-field gc.routed_to="{{rig_name}}/codegen-support.landing-arbiter" \\
+  --json | jq -r 'sort_by(.priority // 5) | .[0].id // empty')
+```
+
+If `$NEXT` is non-empty AND iteration cap is not exceeded: loop back to
+`claim-next-failure` and claim through `gc work claim` again. Do NOT pour a
+new patrol wisp.
+
+**3. Otherwise quiesce.** The controller will spawn a fresh session only if the
+typed selector still finds pending demand. No patrol wisp is needed.
+
+**4. End the turn.**
+
+```bash
+gc runtime drain-ack
+exit
+```
+
+The reconciler will only restart this agent if the scale_check finds
+more pending bugs. Idle quiesce is the correct steady-state.
+"""

@@ -1,0 +1,32 @@
+# Sweep BLOCKED beads whose `metadata.blocked_by_bug` references have
+# all closed, flipping them back to `open` so the normal dispatch path
+# can re-route the work.
+#
+# Closes the gap where the polecat scope-out flow has no event-driven
+# re-route on blocker closure. The only existing close-event watcher is
+# the landing-arbiter primitive (`refinery-landing-failure-arbiter` +
+# `orders/landing-arbiter-watch.toml`), which is scoped to owned-convoy
+# landing failures. Scope-out bugs filed by `polecat-bug-filing` (e.g.
+# app-7nf8, app-etgz blocking app-wkox.1) had no equivalent re-route; this
+# order fills that gap.
+#
+# Cheap when idle. One `bd list --status=blocked --has-metadata-key
+# blocked_by_bug` per rig — returns empty in the common case. Per-bead
+# work is a small fixed number of `bd show` calls (one per blocker ID).
+#
+# Safety invariants — enforced in the script:
+#   - Fail-closed: if ANY referenced blocker is not status=closed, leave
+#     the bead BLOCKED. Don't guess on missing/anomalous blockers.
+#   - Preserve assignee: don't steal from a live polecat session. If
+#     assignee is dead, the witness's `recover-orphaned-beads` step
+#     handles salvage on its own cadence.
+#   - Preserve metadata: keep `blocked_by_bug` as archaeology; only
+#     stamp `unblocked_at` + `unblocked_by` for audit.
+#   - Don't touch BLOCKED beads without `blocked_by_bug` set — they're
+#     blocked for other reasons and need human judgment.
+[order]
+description = "Unblock beads whose blocker bugs have all closed"
+exec = "bash $PACK_DIR/assets/scripts/blocker-unblock-sweep.sh"
+trigger = "cooldown"
+interval = "60s"
+timeout = "30s"

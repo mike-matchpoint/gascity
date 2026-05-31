@@ -1,0 +1,12 @@
+[pack]
+name = "codegen-support"
+schema = 2
+
+# Code-generation city primitive.
+#
+# This pack intentionally remains a standalone support pack. Code-generation
+# cities compose it with the base gastown pack at both city and rig scope so
+# existing gastown agent identities stay stable (`gastown.polecat`,
+# `gastown.refinery`, etc.) while this pack contributes cartographer,
+# debugger, landing-arbiter, formulas, orders, helper scripts, and prompt
+# fragments.

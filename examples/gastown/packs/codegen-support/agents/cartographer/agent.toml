@@ -1,0 +1,88 @@
+# Rig-scoped ephemeral planning agent.
+# Spawned on demand by slinging the spec-cartographer formula (manually
+# by the mayor, or automatically by the spec-cartographer-watch order).
+# Lives long enough to run the formula, then exits.
+scope = "rig"
+provider = "codex"
+wake_mode = "fresh"
+idle_timeout = "1h"
+nudge = "Check your hook for a spec-cartographer molecule, then execute it."
+
+# Shared launcher worktree across all cartographer sessions for this rig.
+#
+# The formula's init-run step creates a unique detached git worktree per
+# molecule/run from current origin/main, then records a locator under this
+# launcher worktree's .cartographer-runs/<wo-id>/<epoch>/state.env. Fresh
+# step sessions start here, source cartographer-load-state.sh, and then move
+# into the per-run worktree for all spec reads and artifact writes.
+#
+# The launcher is still shared because it is the stable rendezvous point
+# for fresh-wake state lookup and helper-script delivery. It is not the
+# source-of-truth checkout for planning after init-run.
+work_dir = ".gc/worktrees/{{.Rig}}/cartographer"
+# pre_start runs before every session spawn.
+# 1. worktree-setup.sh ensures the launcher worktree exists.
+# 2. sync-worktree-scripts.sh mirrors city-maintained shell scripts
+#    (e.g. cartographer-inventory.sh) into the launcher's .gc/scripts/.
+#    This directory is untracked by the rig repo, so git pull alone
+#    will not propagate edits made to <city>/scripts/. Without this
+#    sync, the formula's step 4 (inventory_beads) silently runs an
+#    older copy of cartographer-inventory.sh and any bug fix made at
+#    the city level never takes effect.
+pre_start = [
+  "{{.ConfigDir}}/../gastown/assets/scripts/worktree-setup.sh {{.RigRoot}} {{.WorkDir}} {{.AgentBase}} --sync",
+  "{{.ConfigDir}}/assets/scripts/sync-worktree-scripts.sh {{.ConfigDir}}/assets/scripts {{.WorkDir}}/.gc/scripts",
+]
+
+# Scaling: max 1 — strict single-session.
+#
+# Earlier this was max 2 to allow inventory_beads to run alongside
+# read_order (both only need init-run). In practice, two sessions
+# reading the same formula reached step 8's emit logic concurrently
+# and both created the convoy bead — a duplicate-emit race observed
+# on the 2026-05-13T03-00-48Z run of WO-008 (produced both app-imu and
+# app-cet for the same WO). The bead engine's per-step claim was
+# supposed to serialize emit, but the prompt's "work through them
+# in order" instruction lets one session run multiple formula steps
+# without re-claiming each step bead, so the serialization guarantee
+# does not hold under concurrency.
+#
+# Forcing max=1 means the formula loses its intended in-flight
+# parallelism but gains correctness. The cost is small: parallel
+# steps (3 read_order + 4 inventory_beads) save ~5 min on a ~30 min
+# run.
+#
+# Demand rationale: the default ready predicate excludes `step` and
+# `molecule` beads as formula scaffolding. The spec-cartographer formula
+# produces step work, so Cartographer declares a typed routed-step selector
+# shared by controller demand, worker discovery, and claim.
+min_active_sessions = 0
+max_active_sessions = 1
+
+[work_selector]
+status = "open"
+type = "step"
+unassigned = true
+ready = true
+sort = "created_asc"
+
+[work_selector.metadata]
+"gc.routed_to" = "{{.Agent}}"
+
+[scale_check_query]
+status = "open"
+type = "step"
+unassigned = true
+ready = true
+sort = "created_asc"
+
+[scale_check_query.metadata]
+"gc.routed_to" = "{{.Agent}}"
+
+# Pin the model. Permission_mode is intentionally omitted so the
+# cartographer inherits the provider default (same as polecat) — step
+# 8 of the formula calls `gc bd create` / `gc bd dep add` / `gc bd close`
+# which would be blocked under permission_mode = "plan".
+[option_defaults]
+effort = "high"
+model = "gpt-5.5"

@@ -1,0 +1,60 @@
+# Rig-scoped single-session agent.
+#
+# The canonical work item is an open, unassigned owned-convoy landing-failure
+# bug with decision_state=pending. Controller demand, worker discovery, and
+# claim all use the typed selector below; the legacy cooldown order is retained
+# only to reap old patrol wisps during migration.
+#
+# Decision and audit state lives on the landing-failure bug bead (metadata +
+# description). There is no filesystem run-dir -- beads are the Dolt-backed
+# source of truth and survive city reloads.
+scope = "rig"
+provider = "claude"
+wake_mode = "fresh"
+idle_timeout = "1h"
+nudge = "Check for pending owned-convoy landing-failure bugs and process them."
+
+# Dedicated worktree per arbiter session for reading source files, specs,
+# work orders, AGENTS.md, and ADRs. The arbiter does not write code,
+# commit, push, or create branches.
+work_dir = ".gc/worktrees/{{.Rig}}/landing-arbiter"
+pre_start = [
+  "{{.ConfigDir}}/../gastown/assets/scripts/worktree-setup.sh {{.RigRoot}} {{.WorkDir}} {{.AgentBase}} --sync",
+]
+
+# Strict single-session. Two arbiter sessions racing on the same bug would
+# duplicate decisions and emit duplicate repair beads.
+min_active_sessions = 0
+max_active_sessions = 1
+
+# Landing-failure bugs are the canonical work items. The typed selector keeps
+# controller demand, `gc work next`, and `gc work claim` on the same predicate.
+[work_selector]
+status = "open"
+type = "bug"
+unassigned = true
+ready = true
+sort = "created_asc"
+
+[work_selector.metadata]
+"gc.kind" = "owned_convoy_landing_failure"
+"decision_state" = "pending"
+"gc.routed_to" = "{{.Agent}}"
+
+[scale_check_query]
+status = "open"
+type = "bug"
+unassigned = true
+ready = true
+sort = "created_asc"
+
+[scale_check_query.metadata]
+"gc.kind" = "owned_convoy_landing_failure"
+"decision_state" = "pending"
+"gc.routed_to" = "{{.Agent}}"
+
+# Pin the model. Permission_mode is omitted so the arbiter inherits the
+# provider default; the formula calls `gc bd create` / `gc bd update`
+# which are blocked under permission_mode = "plan".
+[option_defaults]
+model = "opus"

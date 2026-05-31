@@ -179,6 +179,108 @@ func TestMaterializeBuiltinPacks(t *testing.T) {
 	}
 }
 
+func TestCodegenSupportBuiltinPackComposesWithGastown(t *testing.T) {
+	dir := t.TempDir()
+	if err := MaterializeBuiltinPacks(dir); err != nil {
+		t.Fatalf("MaterializeBuiltinPacks() error: %v", err)
+	}
+
+	codegenPackDir := filepath.Join(dir, citylayout.SystemPacksRoot, "codegen-support")
+	if _, err := os.Stat(filepath.Join(codegenPackDir, "pack.toml")); err != nil {
+		t.Fatalf("codegen-support pack.toml missing: %v", err)
+	}
+	assertNoPackText(t, codegenPackDir, "vg-support")
+	assertNoPackText(t, codegenPackDir, "Matchpoint-Vehicle-Graph")
+
+	if err := os.WriteFile(filepath.Join(dir, "pack.toml"), []byte(`[pack]
+name = "codegen-city"
+schema = 2
+
+[imports.gastown]
+source = ".gc/system/packs/gastown"
+
+[imports.codegen-support]
+source = ".gc/system/packs/codegen-support"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(pack.toml): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "city.toml"), []byte(`[workspace]
+name = "codegen-city"
+provider = "claude"
+global_fragments = ["command-glossary", "operational-awareness"]
+
+[defaults.rig.imports.gastown]
+source = ".gc/system/packs/gastown"
+
+[defaults.rig.imports.codegen-support]
+source = ".gc/system/packs/codegen-support"
+
+[[rigs]]
+name = "app"
+prefix = "app"
+[rigs.imports]
+[rigs.imports.gastown]
+source = ".gc/system/packs/gastown"
+[rigs.imports.codegen-support]
+source = ".gc/system/packs/codegen-support"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(city.toml): %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".gc"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.gc): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".gc", "site.toml"), []byte(`[[rig]]
+name = "app"
+path = "."
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(.gc/site.toml): %v", err)
+	}
+
+	cfg, _, err := config.LoadWithIncludes(fsys.OSFS{}, filepath.Join(dir, "city.toml"))
+	if err != nil {
+		t.Fatalf("LoadWithIncludes: %v", err)
+	}
+	got := map[string]bool{}
+	for i := range cfg.Agents {
+		got[cfg.Agents[i].QualifiedName()] = true
+	}
+	for _, want := range []string{
+		"gastown.mayor",
+		"gastown.dog",
+		"codegen-support.debugger",
+		"app/gastown.polecat",
+		"app/gastown.refinery",
+		"app/codegen-support.cartographer",
+		"app/codegen-support.landing-arbiter",
+	} {
+		if !got[want] {
+			t.Fatalf("missing composed agent %q; got agents=%v", want, got)
+		}
+	}
+}
+
+func assertNoPackText(t *testing.T, root, needle string) {
+	t.Helper()
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(data), needle) {
+			t.Fatalf("%s contains stale text %q", path, needle)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("WalkDir(%s): %v", root, err)
+	}
+}
+
 func TestBuiltinDatabaseEnumeratorsSkipManagedProbeDatabase(t *testing.T) {
 	dir := t.TempDir()
 	if err := MaterializeBuiltinPacks(dir); err != nil {

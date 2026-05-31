@@ -15,6 +15,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/gastownhall/gascity/examples/bd"
 	"github.com/gastownhall/gascity/examples/dolt"
+	codegensupport "github.com/gastownhall/gascity/examples/gastown/packs/codegen-support"
 	"github.com/gastownhall/gascity/examples/gastown/packs/gastown"
 	"github.com/gastownhall/gascity/examples/gastown/packs/maintenance"
 	"github.com/gastownhall/gascity/internal/bootstrap/packs/core"
@@ -50,6 +51,7 @@ func All() []Pack {
 		{Name: "dolt", Subpath: "examples/dolt", FS: dolt.PackFS},
 		{Name: "maintenance", Subpath: "examples/gastown/packs/maintenance", FS: maintenance.PackFS},
 		{Name: "gastown", Subpath: "examples/gastown/packs/gastown", FS: gastown.PackFS},
+		{Name: "codegen-support", Subpath: "examples/gastown/packs/codegen-support", FS: codegensupport.PackFS},
 	}
 }
 

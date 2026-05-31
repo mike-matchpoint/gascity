@@ -1,0 +1,12 @@
+# Legacy cleanup for pre-selector landing-arbiter patrol wisps.
+#
+# Current activation is typed-selector demand on pending owned-convoy
+# landing-failure bugs in `agents/landing-arbiter/agent.toml`. This order no
+# longer pours `mol-landing-arbiter-patrol`; it runs only the scoped reaper so
+# old wisps from previous deployments do not accumulate.
+[order]
+description = "Reap legacy landing-arbiter patrol wisps"
+exec = "bash $PACK_DIR/assets/scripts/landing-arbiter-watch.sh"
+trigger = "cooldown"
+interval = "60s"
+timeout = "30s"

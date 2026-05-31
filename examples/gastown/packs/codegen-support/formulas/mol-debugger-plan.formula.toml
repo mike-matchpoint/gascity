@@ -1,0 +1,975 @@
+description = """
+Debugger plan-mode formula. Created as a durable issue-tier molecule bead
+by the `orders/debugger-watch.toml` cooldown trigger (30s interval) for
+each pending bug routed to the debugger.
+
+One plan bead = one bug = one fresh session. The formula runs the 12 steps
+below in order and closes the plan bead at the final step. There is no
+next-iteration loop — the watch order creates fresh plan beads for any
+remaining work on its next tick, and the controller spawns concurrent
+sessions up to debugger's `max_active_sessions`.
+
+All durable state lives on the bug bead (metadata + description). The
+debugger's worktree is read-only working space for reproduction and
+validation runs; no filesystem run dir.
+"""
+formula = "mol-debugger-plan"
+version = 1
+contract = "graph.v2"
+
+[vars]
+[vars.bug_id]
+description = "The bug bead id this invocation should plan"
+required = true
+
+[vars.rig_name]
+description = "The rig this planning run belongs to"
+required = true
+
+[vars.binding_prefix]
+description = "Agent name prefix for pool routes (e.g. 'gastown.')"
+default = "gastown."
+
+[vars.mode]
+description = "Run mode: 'plan' for diagnosis, 'verify' for verify-fix re-entry. The verify formula uses its own toml; this var is here for symmetry."
+default = "plan"
+
+[[steps]]
+id = "validate-identity"
+title = "Validate unique debugger claim identity"
+description = """
+**Fail fast if a unique session identity is not set.**
+
+The debugger uses `$DEBUGGER_OWNER` as its durable claim identity. It
+must be derived from `$GC_SESSION_ID` or `$GC_SESSION_NAME`, never from
+`$GC_ALIAS`, because debugger aliases come from a reusable namepool.
+The same alias can represent different sessions over time and cannot
+prove liveness or ownership.
+
+```bash
+if [ -z "${DEBUGGER_OWNER:-}" ]; then
+  DEBUGGER_OWNER="${GC_SESSION_ID:-${GC_SESSION_NAME:-}}"
+fi
+
+if [ -z "${DEBUGGER_OWNER:-}" ]; then
+  echo "No unique debugger session identity; refusing to claim with reusable alias."
+  gc mail send mayor/ -s "ESCALATION: debugger missing unique session identity [HIGH]" \\
+    -m "Debugger cannot claim safely because GC_SESSION_ID and GC_SESSION_NAME are both empty."
+  [ -n "${GC_BEAD_ID:-}" ] && gc bd close "$GC_BEAD_ID" --force --reason "Debugger missing unique session identity" 2>/dev/null \\
+    || { [ -n "${GC_BEAD_ID:-}" ] && gc bd mol burn "$GC_BEAD_ID" --force 2>/dev/null || true; }
+  gc runtime drain-ack
+  exit 1
+fi
+
+if [ -z "${BUG:-}" ] || [ -z "${RIG:-}" ]; then
+  if [ -n "${GC_BEAD_ID:-}" ]; then
+    PLAN_JSON=$(gc bd show "$GC_BEAD_ID" --json)
+    BUG="${BUG:-$(printf '%s' "$PLAN_JSON" | jq -r '.[0].metadata.bug_id // empty')}"
+    RIG="${RIG:-$(printf '%s' "$PLAN_JSON" | jq -r '.[0].metadata.rig_name // empty')}"
+    BINDING_PREFIX="${BINDING_PREFIX:-$(printf '%s' "$PLAN_JSON" | jq -r '.[0].metadata.binding_prefix // "gastown."')}"
+  fi
+fi
+
+if [ -z "${BUG:-}" ] || [ -z "${RIG:-}" ]; then
+  echo "Debugger plan missing BUG/RIG context."
+  [ -n "${GC_BEAD_ID:-}" ] && gc bd close "$GC_BEAD_ID" --force --reason "Malformed debugger plan: missing BUG/RIG context" 2>/dev/null \\
+    || { [ -n "${GC_BEAD_ID:-}" ] && gc bd mol burn "$GC_BEAD_ID" --force 2>/dev/null || true; }
+  gc runtime drain-ack
+  exit 1
+fi
+
+BINDING_PREFIX="${BINDING_PREFIX:-gastown.}"
+export DEBUGGER_OWNER BUG RIG BINDING_PREFIX
+```
+
+Close this step only when `$DEBUGGER_OWNER`, `$BUG`, and `$RIG` are confirmed non-empty.
+"""
+
+[[steps]]
+id = "setup-worktree"
+title = "Create per-session git worktree of the target rig"
+needs = ["validate-identity"]
+description = """
+City-scoped pool agents need a per-session isolated git worktree of
+the rig under test so reproduction, validation, and source reads
+operate on an isolated tree (not the live worktree polecat/refinery
+share). The worktree is created idempotently — first invocation sets
+up; subsequent (e.g., after crash recovery) reuses.
+
+```bash
+RIG="${RIG:?debugger plan did not export RIG}"
+
+# Find city root (the dir containing city.toml) regardless of where
+# the session was spawned. Walk up from cwd.
+CITY_ROOT="$(pwd)"
+while [ "$CITY_ROOT" != "/" ] && [ ! -f "$CITY_ROOT/city.toml" ]; do
+  CITY_ROOT=$(dirname "$CITY_ROOT")
+done
+if [ ! -f "$CITY_ROOT/city.toml" ]; then
+  echo "FATAL: cannot locate city.toml walking up from $(pwd)"
+  [ -n "${GC_BEAD_ID:-}" ] && gc bd close "$GC_BEAD_ID" --force --reason "Debugger setup failed: cannot locate city.toml" 2>/dev/null \\
+    || { [ -n "${GC_BEAD_ID:-}" ] && gc bd mol burn "$GC_BEAD_ID" --force 2>/dev/null || true; }
+  gc runtime drain-ack
+  exit 1
+fi
+cd "$CITY_ROOT"
+
+# Resolve the rig's git root from .gc/site.toml.
+RIG_ROOT=$(awk -v r="$RIG" '
+  /^\\[\\[rig\\]\\]/ { in_block=1; name=""; path=""; next }
+  in_block && /^name *= *"/ { sub(/^name *= *"/, ""); sub(/".*$/, ""); name=$0; next }
+  in_block && /^path *= *"/ { sub(/^path *= *"/, ""); sub(/".*$/, ""); path=$0; next }
+  in_block && /^\\[/ { if (name==r && path!="") { print path; exit } in_block=0 }
+  END { if (in_block && name==r && path!="") print path }
+' .gc/site.toml)
+
+if [ -z "$RIG_ROOT" ] || [ ! -d "$RIG_ROOT/.git" ]; then
+  echo "FATAL: could not resolve rig root for '$RIG' from $CITY_ROOT/.gc/site.toml"
+  [ -n "${GC_BEAD_ID:-}" ] && gc bd close "$GC_BEAD_ID" --force --reason "Debugger setup failed: cannot resolve rig root for $RIG" 2>/dev/null \\
+    || { [ -n "${GC_BEAD_ID:-}" ] && gc bd mol burn "$GC_BEAD_ID" --force 2>/dev/null || true; }
+  gc runtime drain-ack
+  exit 1
+fi
+
+# Per-instance worktree path (relative to city root, where it expects to be).
+DEBUGGER_WORKTREE_KEY=$(printf '%s' "$DEBUGGER_OWNER" | tr -c '[:alnum:]_.-' '_')
+WORKTREE="$CITY_ROOT/.gc/worktrees/$RIG/debuggers/$DEBUGGER_WORKTREE_KEY"
+
+# Reuse the gastown pack's idempotent worktree-setup script — parity
+# with polecat's pattern.
+"$CITY_ROOT/.gc/system/packs/gastown/assets/scripts/worktree-setup.sh" \\
+  "$RIG_ROOT" "$WORKTREE" "$DEBUGGER_OWNER" --sync
+
+cd "$WORKTREE"
+export WORKTREE
+echo "Worktree ready: $PWD (rig=$RIG, instance=$DEBUGGER_OWNER)"
+```
+
+Subsequent steps inherit this cwd. Reproduction, validation, source
+reads, etc. operate inside the isolated tree. Multi-rig clean: the
+rig is read from the plan bead metadata at runtime.
+
+Close this step.
+"""
+
+[[steps]]
+id = "check-inbox"
+title = "Read mail before processing"
+needs = ["setup-worktree"]
+description = """
+```bash
+gc mail inbox
+```
+
+Archive anything you handle. Note any priority overrides, hold
+requests, or human-supplied decisions on the bug you are about to
+plan.
+
+Close this step and proceed.
+"""
+
+[[steps]]
+id = "recover-stranded-claim"
+title = "Release a stranded claim from a dead prior session"
+needs = ["check-inbox"]
+description = """
+**Belt-and-suspenders crash recovery.** If this bug is currently
+assigned to a session that is no longer alive AND `decision_state` is
+`in_progress`, release it so the normal claim path picks it up clean.
+
+```bash
+BUG="${BUG:?debugger plan did not export BUG}"
+RIG="${RIG:?debugger plan did not export RIG}"
+
+CURRENT=$(gc --rig "$RIG" bd show "$BUG" --json \\
+  | jq -r '.[0] | "\\(.assignee)|\\(.metadata.decision_state // "")"')
+ASSIGNEE="${CURRENT%%|*}"
+STATE="${CURRENT##*|}"
+
+if [ "$STATE" = "in_progress" ] && [ -n "$ASSIGNEE" ] && [ "$ASSIGNEE" != "$DEBUGGER_OWNER" ]; then
+  LIVE_DEBUGGER_OWNERS=$(gc session list --state all --json 2>/dev/null \\
+    | jq -r '
+        .sessions[]
+        | select((.State != "closed") and (.State != "stopped") and (.State != "gc_swept"))
+        | select(((.Template // "") | test("debugger")) or ((.Alias // "") | test("debugger")))
+        | .ID, .SessionName
+        | select(. != null and . != "")
+      ' | sort -u || true)
+  if ! printf '%s\\n' "$LIVE_DEBUGGER_OWNERS" | grep -qFx "$ASSIGNEE"; then
+    gc --rig "$RIG" bd update "$BUG" \\
+      --assignee="" \\
+      --set-metadata decision_state=pending \\
+      --notes "Released stranded claim from dead session $ASSIGNEE"
+  else
+    # Prior session is alive — refuse to steal. Transfer this durable
+    # plan to that owner so the controller can still see assigned
+    # debugger work, then exit. If the session-list read was stale and
+    # the prior owner is actually dead, debugger-plan-reap will reset
+    # this plan and release the bug after its bounded grace window.
+    echo "Bug $BUG is in-progress under alive session $ASSIGNEE; refusing to steal."
+    if [ -n "${GC_BEAD_ID:-}" ]; then
+      gc bd update "$GC_BEAD_ID" \\
+        --status=in_progress \\
+        --assignee="$ASSIGNEE" \\
+        --set-metadata debugger_retained_for_owner="$ASSIGNEE" \\
+        --set-metadata debugger_retained_at="$(date -u +%FT%TZ)" >/dev/null 2>&1 || true
+    fi
+    gc runtime drain-ack
+    exit 0
+  fi
+fi
+```
+
+For first-attempt bugs this is a no-op.
+
+Close this step.
+"""
+
+[[steps]]
+id = "claim-bug"
+title = "Claim the bug with post-write verification (CAS)"
+needs = ["recover-stranded-claim"]
+description = """
+Claim the bug, then **immediately re-read and verify ownership**. The
+`bd update --assignee=$DEBUGGER_OWNER` write is last-write-wins, not atomic
+check-and-set, so two sessions that both passed `recover-stranded-claim`
+in the same instant could both write their own assignee. The post-claim
+read decides who actually owns it; the loser closes its plan bead and exits
+without proceeding through the rest of the formula. This guarantees
+exactly-one debugger session works any given bug at any moment, even
+under tick-aligned spawn races.
+
+```bash
+gc --rig "$RIG" bd update "$BUG" \\
+  --assignee="$DEBUGGER_OWNER" \\
+  --set-metadata decision_state=in_progress
+
+# Post-write CAS verification. If our assignee write was overwritten
+# by a concurrent session, we lost the race — close plan and exit.
+ACTUAL_ASSIGNEE=$(gc --rig "$RIG" bd show "$BUG" --json | jq -r '.[0].assignee // ""')
+if [ "$ACTUAL_ASSIGNEE" != "$DEBUGGER_OWNER" ]; then
+  echo "Lost claim race for bug $BUG (actual assignee=$ACTUAL_ASSIGNEE, expected $DEBUGGER_OWNER); closing plan and exiting."
+  [ -n "${GC_BEAD_ID:-}" ] && gc bd close "$GC_BEAD_ID" --force --reason "Debugger lost claim race for $BUG to $ACTUAL_ASSIGNEE" 2>/dev/null \\
+    || { [ -n "${GC_BEAD_ID:-}" ] && gc bd mol burn "$GC_BEAD_ID" --force 2>/dev/null || true; }
+  gc runtime drain-ack
+  exit 0
+fi
+
+# Ownership confirmed — snapshot bug state to working memory.
+gc --rig "$RIG" bd show "$BUG" --json > /tmp/bug-${BUG}.json
+
+BUG_CLASS=$(jq -r '.[0].metadata."bug.class" // empty' /tmp/bug-${BUG}.json)
+COMPONENT=$(jq -r '.[0].metadata.component // empty' /tmp/bug-${BUG}.json)
+REPRO_CMD=$(jq -r '.[0].metadata.repro_command // empty' /tmp/bug-${BUG}.json)
+OBSERVED=$(jq -r '.[0].metadata.observed // empty' /tmp/bug-${BUG}.json)
+EXPECTED=$(jq -r '.[0].metadata.expected // empty' /tmp/bug-${BUG}.json)
+GC_KIND=$(jq -r '.[0].metadata."gc.kind" // empty' /tmp/bug-${BUG}.json)
+EVIDENCE_COMPLETE=$(jq -r '.[0].metadata.evidence_complete // "true"' /tmp/bug-${BUG}.json)
+
+# Investigation re-plan signals — set by verify-mode when an
+# investigation task closed. If present, downstream steps weight these
+# heavily over the original observed/expected.
+INVEST_FINDINGS=$(jq -r '.[0].metadata.investigation_findings // empty' /tmp/bug-${BUG}.json)
+INVEST_RECOMMENDATION=$(jq -r '.[0].metadata.investigation_recommendation // empty' /tmp/bug-${BUG}.json)
+VERIFY_ATTEMPTS=$(jq -r '.[0].metadata.verify_attempts // "0"' /tmp/bug-${BUG}.json)
+
+if [ -n "$INVEST_FINDINGS" ] || [ -n "$INVEST_RECOMMENDATION" ]; then
+  echo "Re-plan after investigation: findings=$INVEST_FINDINGS recommendation=$INVEST_RECOMMENDATION"
+fi
+if [ "$VERIFY_ATTEMPTS" -gt 0 ]; then
+  echo "Re-plan after verify fail (attempt $VERIFY_ATTEMPTS); validation evidence on bug."
+fi
+```
+
+Carry `$BUG`, `$RIG`, `$COMPONENT`, `$BUG_CLASS`, `$REPRO_CMD`,
+`$OBSERVED`, `$EXPECTED`, `$GC_KIND`, `$EVIDENCE_COMPLETE`,
+`$INVEST_FINDINGS`, `$INVEST_RECOMMENDATION`, `$VERIFY_ATTEMPTS`
+forward.
+
+Close this step.
+"""
+
+[[steps]]
+id = "validate-evidence"
+title = "Gate: wrong routing, missing fields, or supplementable"
+needs = ["claim-bug"]
+description = """
+Three gates in order.
+
+**4a. Wrong routing.** If `gc.kind` is not `bug`, reroute and exit.
+
+```bash
+if [ "$GC_KIND" = "owned_convoy_landing_failure" ]; then
+  gc --rig "$RIG" bd update "$BUG" \\
+    --set-metadata decision_state=rerouted \\
+    --set-metadata "gc.routed_to=$RIG/codegen-support.landing-arbiter" \\
+    --notes "Rerouted: owned-convoy landing failure belongs to landing-arbiter."
+  [ -n "${GC_BEAD_ID:-}" ] && gc bd close "$GC_BEAD_ID" --force --reason "Debugger plan completed: rerouted $BUG to landing-arbiter" 2>/dev/null \\
+    || { [ -n "${GC_BEAD_ID:-}" ] && gc bd mol burn "$GC_BEAD_ID" --force 2>/dev/null || true; }
+  gc runtime drain-ack
+  exit 0
+fi
+
+if [ "$GC_KIND" != "bug" ]; then
+  gc --rig "$RIG" bd update "$BUG" \\
+    --set-metadata decision_state=human_review \\
+    --set-metadata "gc.routed_to=human-escalation" \\
+    --notes "Unknown gc.kind=$GC_KIND on a bug-routed bead; needs human triage."
+  gc mail send mayor/ -s "ESCALATION: unknown gc.kind on $BUG" \\
+    -m "Bug $BUG carries gc.kind=$GC_KIND. Debugger cannot proceed."
+  [ -n "${GC_BEAD_ID:-}" ] && gc bd close "$GC_BEAD_ID" --force --reason "Debugger plan completed: unknown gc.kind=$GC_KIND on $BUG" 2>/dev/null \\
+    || { [ -n "${GC_BEAD_ID:-}" ] && gc bd mol burn "$GC_BEAD_ID" --force 2>/dev/null || true; }
+  gc runtime drain-ack
+  exit 0
+fi
+```
+
+**4b. Required fields.** If any required field is empty OR
+`evidence_complete=false`, decide between supplementing safely or
+routing to investigation. See `debugger-evidence-supplementation`
+for the discipline.
+
+```bash
+MISSING=()
+[ -z "$COMPONENT" ] && MISSING+=("component")
+[ -z "$OBSERVED" ] && MISSING+=("observed")
+[ -z "$EXPECTED" ] && MISSING+=("expected")
+[ -z "$BUG_CLASS" ] && MISSING+=("bug.class")
+
+if [ "${#MISSING[@]}" -gt 0 ] || [ "$EVIDENCE_COMPLETE" = "false" ]; then
+  # Read the failure_artifact / stack_trace_path if available and
+  # under the safe-supplementation rules. If gaps remain, the `decide`
+  # step will pick `investigation_needed`.
+  :
+fi
+```
+
+**4c. Carry forward** the validated fields for downstream steps.
+
+Close this step.
+"""
+
+[[steps]]
+id = "reproduce-or-confirm"
+title = "Run the recorded repro command (if safe) or set cannot_run"
+needs = ["validate-evidence"]
+description = """
+If `repro_command` is non-empty AND the command is safe to run in the
+debugger's worktree (no network writes, no production credentials,
+bounded runtime), execute it.
+
+```bash
+if [ -n "$REPRO_CMD" ]; then
+  REPRO_LOG=$(mktemp)
+  if eval "$REPRO_CMD" > "$REPRO_LOG" 2>&1; then
+    REPRO_STATUS="not_reproducing"
+  else
+    REPRO_STATUS="reproduces"
+  fi
+
+  gc --rig "$RIG" bd update "$BUG" \\
+    --set-metadata repro_status="$REPRO_STATUS" \\
+    --notes "Reproduction attempt: $REPRO_STATUS (log $REPRO_LOG)"
+
+  if [ "$REPRO_STATUS" = "not_reproducing" ]; then
+    gc --rig "$RIG" bd update "$BUG" \\
+      --set-metadata decision_state=closed-no-repro
+    gc --rig "$RIG" bd close "$BUG" --reason "no repro after debugger attempt; if recurs, file a fresh bug with updated evidence"
+    [ -n "${GC_BEAD_ID:-}" ] && gc bd close "$GC_BEAD_ID" --force --reason "Debugger plan completed: no repro for $BUG" 2>/dev/null \\
+      || { [ -n "${GC_BEAD_ID:-}" ] && gc bd mol burn "$GC_BEAD_ID" --force 2>/dev/null || true; }
+    gc runtime drain-ack
+    exit 0
+  fi
+else
+  gc --rig "$RIG" bd update "$BUG" \\
+    --set-metadata repro_status=cannot_run \\
+    --notes "No repro_command recorded; proceeding to diagnose from static evidence."
+fi
+```
+
+If reproduction reveals a DIFFERENT failure mode than recorded
+(`observed` mismatches the actual failure), update `observed` and
+plan to pick `investigation_needed` in the decide step.
+
+Close this step.
+"""
+
+[[steps]]
+id = "gather-context"
+title = "Read specs, AGENTS.md, ADRs, source, recent commits"
+needs = ["reproduce-or-confirm"]
+description = """
+Read the source and intent. Bound payload size — summarize, do not
+copy file contents into bug metadata. See
+`debugger-architectural-context` for the full discipline.
+
+**6a. Walk up for AGENTS.md from `$COMPONENT` to repo root.**
+
+```bash
+AGENTS_MD_FOUND=()
+d="$COMPONENT"
+while [ "$d" != "." ] && [ "$d" != "/" ]; do
+  [ -f "$d/AGENTS.md" ] && AGENTS_MD_FOUND+=("$d/AGENTS.md")
+  d=$(dirname "$d")
+done
+[ -f "./AGENTS.md" ] && AGENTS_MD_FOUND+=("./AGENTS.md")
+```
+
+**6b. Specs.**
+
+```bash
+SPEC_HITS=$(grep -rlE "$(echo "$COMPONENT" | sed 's|/|.\\*|g')" specs/ 2>/dev/null | sort -u | tr '\\n' ',')
+```
+
+**6c. ADRs.**
+
+```bash
+ADR_HITS=""
+for adr_dir in docs/adr docs/decisions; do
+  [ -d "$adr_dir" ] || continue
+  ADR_HITS="$ADR_HITS$(grep -lE "$(echo "$COMPONENT" | sed 's|/|.\\*|g')" "$adr_dir"/*.md 2>/dev/null | tr '\\n' ',')"
+done
+```
+
+**6d. Recent commits on the affected paths.**
+
+```bash
+RECENT_COMMITS=$(git log --oneline -10 -- "$COMPONENT" 2>/dev/null | awk '{print $1}' | tr '\\n' ',')
+```
+
+**6e. Failure-artifact inspection** if `failure_artifact` is a
+readable path under the safe-supplementation rules.
+
+**6f. Synthesize and record on the bug.**
+
+```bash
+SYNTHESIS=$(cat <<EOF
+## Architectural intent synthesis
+
+<one-paragraph synthesis: what the component is supposed to do per
+specs/AGENTS.md/ADRs, what the observed behavior is, what the root
+cause is in architectural terms (not symptom-level)>
+
+## Root cause
+
+<one paragraph naming the specific cause, citing file:line or symbol>
+
+## Sources read
+
+- Specs: <paths or "none found">
+- AGENTS.md: <paths or "none found">
+- ADRs: <paths or "none">
+- Source: <paths>
+- Recent commits inspected: <SHAs or "none">
+EOF
+)
+
+AGENTS_CSV=$(IFS=,; echo "${AGENTS_MD_FOUND[*]}")
+
+gc --rig "$RIG" bd update "$BUG" \\
+  --description "$SYNTHESIS" \\
+  --set-metadata spec_paths="$SPEC_HITS" \\
+  --set-metadata agents_md_paths="$AGENTS_CSV" \\
+  --set-metadata adr_paths="$ADR_HITS" \\
+  --set-metadata source_paths="$COMPONENT" \\
+  --set-metadata related_commits="$RECENT_COMMITS"
+```
+
+Close this step.
+"""
+
+[[steps]]
+id = "prior-art-search"
+title = "Find similar past bugs AND identify duplicate candidates"
+needs = ["gather-context"]
+description = """
+This step does two jobs: (a) record prior precedent for the decide
+step's reasoning, AND (b) surface OPEN duplicate candidates that
+force the `duplicate` decision class. Skipping (b) is what produced
+the app-1g8w/app-7nf8 deadlock — duplicate detection cannot wait until
+emit time.
+
+```bash
+PRIOR_OPEN=$(gc --rig "$RIG" bd list --type=bug --status=open \\
+  --metadata-field component="$COMPONENT" --json \\
+  | jq -r --arg me "$BUG" '[.[] | select(.id != $me)] | .[].id' | tr '\\n' ',')
+
+PRIOR_CLOSED=$(gc --rig "$RIG" bd list --type=bug --status=closed \\
+  --metadata-field component="$COMPONENT" --json \\
+  | jq -r --arg me "$BUG" '[.[] | select(.id != $me)] | .[].id' | tr '\\n' ',')
+
+PRIOR="${PRIOR_OPEN}${PRIOR_CLOSED}"
+[ -z "$PRIOR" ] && PRIOR="none"
+
+gc --rig "$RIG" bd update "$BUG" --set-metadata prior_art="$PRIOR"
+```
+
+### Duplicate candidate detection (REQUIRED — not optional)
+
+The producer's dedup gate may have missed because two producers framed
+the same failure under different `component` labels (refinery uses the
+test path; polecat uses the file-being-edited). Run a signature-only
+sweep across ALL open bugs, not just same-component:
+
+```bash
+# Pull the most discriminating substring from this bug's observed.
+# Prefer the tool's verbatim error message (e.g., the lint/test
+# assertion). Skip if observed is too short (<30 chars) to discriminate.
+OBSERVED=$(jq -r '.[0].metadata.observed // empty' /tmp/bug-${BUG}.json)
+SIG_CANDIDATE="$OBSERVED"   # narrower extraction acceptable
+
+DUPLICATE_CANDIDATES=""
+if [ "${#SIG_CANDIDATE}" -ge 30 ]; then
+  DUPLICATE_CANDIDATES=$(gc --rig "$RIG" bd list \\
+    --type=bug --status=open --label "bug" --json \\
+    | jq -r --arg me "$BUG" --arg sig "$SIG_CANDIDATE" '
+      [.[] | select(
+        .id != $me
+        and (((.metadata.observed // "") | contains($sig))
+             or ((.title // "") | contains($sig)))
+      ) | "\\(.id)|\\(.created_at)"] | sort_by(. | split("|")[1]) | .[]')
+fi
+
+gc --rig "$RIG" bd update "$BUG" \\
+  --set-metadata duplicate_candidates="$(echo "$DUPLICATE_CANDIDATES" | tr '\\n' ',' | sed 's/,$//')"
+```
+
+If `$DUPLICATE_CANDIDATES` is non-empty, the candidate with the
+earliest `created_at` (first in the sorted list) is the canonical IF
+this bug is newer than it. The `decide` step MUST evaluate `duplicate`
+as decision class 1 in that case.
+
+If prior art (closed) exists, read the closed bugs' descriptions and
+`repair_beads` to understand precedent. Cite any precedent the
+current decision follows or explicitly diverges from in
+`classification_reasoning` (recorded in the `decide` step).
+
+Close this step.
+"""
+
+[[steps]]
+id = "classify"
+title = "Pick a resolution class; record on the bug"
+needs = ["prior-art-search"]
+description = """
+Pick a resolution class from the taxonomy (or introduce a new one if
+your judgment calls for one not listed):
+
+- `contract_regression`, `documented_behavior_drift`,
+  `missing_test_coverage`, `flaky_test`, `fixture_or_config_drift`,
+  `dependency_upgrade_regression`, `error_handling_gap`,
+  `refactor_required`, `architectural_drift`, `spec_gap`,
+  `cannot_reproduce`, `evidence_incomplete`, `out_of_scope`.
+
+The class is audit vocabulary; the decision is driven by criteria in
+the `debugger-decision-criteria` fragment.
+
+```bash
+RESOLUTION_CLASS="<one-of-the-taxonomy-or-novel>"
+CONFIDENCE="<high|medium|low>"
+
+gc --rig "$RIG" bd update "$BUG" \\
+  --set-metadata resolution_class="$RESOLUTION_CLASS" \\
+  --set-metadata confidence="$CONFIDENCE"
+```
+
+Close this step.
+"""
+
+[[steps]]
+id = "decide"
+title = "Pick one of seven decision buckets; record reasoning"
+needs = ["classify"]
+description = """
+Pick exactly one decision class — and ONLY one of these seven values.
+Inventing a new value (e.g., `closed-duplicate`) deadlocks the bug
+because no watch script knows how to drain it.
+
+- `duplicate` — evaluate FIRST; if `duplicate_candidates` from prior-art
+  surfaced an older bug covering the same failure, this is the only
+  correct decision. Tiebreaker rule in the prompt's criteria section.
+- `direct_bugfix`
+- `convoy`
+- `investigation_needed`
+- `scope_expanded_to_feature`
+- `specialist_routed`
+- `human_required`
+
+Apply the criteria in `debugger-decision-criteria` (decision order,
+criteria table, anti-pattern guards). The fragment is the
+authoritative framework.
+
+Write the decision and a non-empty `classification_reasoning` field
+that cites the invariants from `gather-context`:
+
+```bash
+DECISION_CLASS="<duplicate|direct_bugfix|convoy|investigation_needed|scope_expanded_to_feature|specialist_routed|human_required>"
+
+REASONING="<one paragraph: which invariants the fix preserves, why the
+chosen shape over the alternatives, what prior-art precedent it follows
+or diverges from>"
+
+gc --rig "$RIG" bd update "$BUG" \\
+  --set-metadata decision_class="$DECISION_CLASS" \\
+  --set-metadata classification_reasoning="$REASONING"
+```
+
+Close this step.
+"""
+
+[[steps]]
+id = "emit"
+title = "Emit the bead structure for the chosen decision class"
+needs = ["decide"]
+description = """
+Branch on `$DECISION_CLASS`. Every path ends by updating the bug
+with `decision_state` and (where applicable) `repair_beads`,
+`validation_commands`, `acceptance_criteria`, `non_goals`. The
+emitted artifact is parented to the bug.
+
+### INVARIANT — repair_kind vocabulary
+
+When you emit a child bead (repair task, repair convoy, or
+investigation), the `repair_kind` metadata field MUST be EXACTLY
+the same string as the parent bug's `decision_class`. No prefixes,
+no hyphenation variants, no synonyms, no abbreviations.
+
+| decision_class | repair_kind (MUST match exactly) |
+|---|---|
+| `direct_bugfix` | `direct_bugfix` |
+| `convoy` | `convoy` |
+| `investigation_needed` | `investigation_needed` |
+
+The other decision_class values (`scope_expanded_to_feature`,
+`specialist_routed`, `duplicate`, `human_required`) do NOT emit
+child beads, so they do NOT set `repair_kind` anywhere.
+
+**Why this is non-negotiable:** the bug-closing watcher
+(`debugger-watch.sh`) is a strict allowlist on `repair_kind`. Any
+value outside `{direct_bugfix, convoy}` causes the bug to remain
+open forever, even if its repair landed and merged. There is no
+soft-fail path — deviations deadlock the bug silently.
+
+### `duplicate` — link to canonical, transfer dep edges, no repair
+
+See the prompt's `### For \\`duplicate\\`:` section for the full recipe
+including: canonical-selection tiebreaker (older bug wins; ties by
+bead-id lex), duplicate-chain resolution (follow `duplicate_of` to
+the ultimate ancestor, bounded at 5 hops), dependent transfer
+(`bd dep add <dep> <canonical>` then `bd dep remove <dep> $BUG` for
+every dependent), the `bd dep add $BUG $CANONICAL` link (cycle-
+detection backs up the tiebreaker against debugger races), and the
+metadata write:
+
+```
+gc --rig "$RIG" bd update "$BUG" \\
+  --set-metadata decision_class=duplicate \\
+  --set-metadata decision_state=duplicate \\
+  --set-metadata resolution_class=duplicate \\
+  --set-metadata duplicate_of="$CANONICAL"
+```
+
+Emit NO repair beads. Do NOT close the bug — the watch script's
+close-duplicate path owns close-on-canonical-close. The dependents
+you transferred now gate on the actual fix landing (the canonical's
+repair chain), not on this bug's bookkeeping close.
+
+### `direct_bugfix` — one atomic task bead
+
+```bash
+TASK_METADATA=$(jq -nc \\
+  --arg routed_to "$RIG/${BINDING_PREFIX:-gastown.}polecat" \\
+  --arg target "main" \\
+  --arg repair_for_bug "$BUG" \\
+  --arg root_cause "$ROOT_CAUSE" \\
+  --arg architectural_decision "$ARCHITECTURAL_DECISION" \\
+  --argjson files_to_touch "$FILES_TO_TOUCH_JSON" \\
+  --argjson acceptance_criteria "$ACCEPTANCE_JSON" \\
+  --argjson validation_commands "$VALIDATION_JSON" \\
+  --argjson non_goals "$NON_GOALS_JSON" \\
+  '{
+    "gc.routed_to": $routed_to,
+    "target": $target,
+    "repair_for_bug": $repair_for_bug,
+    "root_cause": $root_cause,
+    "architectural_decision": $architectural_decision,
+    "files_to_touch": $files_to_touch,
+    "acceptance_criteria": $acceptance_criteria,
+    "validation_commands": $validation_commands,
+    "non_goals": $non_goals,
+    "repair_kind": "direct_bugfix"
+  }')
+
+TASK_ID=$(gc --rig "$RIG" bd create \\
+  --type=task \\
+  --priority=2 \\
+  --parent="$BUG" \\
+  --title="$REPAIR_TITLE" \\
+  --labels="bug-repair,repair_for_bug:$BUG,component:$COMPONENT" \\
+  --metadata "$TASK_METADATA" \\
+  --description "$REPAIR_BODY" \\
+  --json | jq -r '.id')
+
+gc --rig "$RIG" bd update "$BUG" \\
+  --set-metadata decision_state=decided \\
+  --set-metadata repair_beads="$TASK_ID" \\
+  --set-metadata validation_commands="$(echo "$VALIDATION_JSON" | jq -r 'join(";;")')" \\
+  --set-metadata acceptance_criteria="$(echo "$ACCEPTANCE_JSON" | jq -r 'join(";;")')" \\
+  --set-metadata non_goals="$(echo "$NON_GOALS_JSON" | jq -r 'join(";;")')"
+```
+
+### `convoy` — convoy bead with N children
+
+```bash
+CONVOY_METADATA=$(jq -nc \\
+  --arg target "main" \\
+  --arg repair_for_bug "$BUG" \\
+  --arg component "$COMPONENT" \\
+  '{
+    "owned": "true",
+    "branch": ("integration/bug-" + $repair_for_bug),
+    "target": $target,
+    "repair_for_bug": $repair_for_bug,
+    "component": $component,
+    "repair_kind": "convoy"
+  }')
+
+CONVOY_ID=$(gc --rig "$RIG" bd create \\
+  --type=convoy --priority=2 --parent="$BUG" \\
+  --title="Bug repair convoy for $BUG" \\
+  --labels="owned,bug-repair-convoy,repair_for_bug:$BUG,component:$COMPONENT" \\
+  --metadata "$CONVOY_METADATA" \\
+  --description "Convoy of repair tasks for bug $BUG. See child task descriptions for individual repair scope." \\
+  --json | jq -r '.id')
+
+TASK_IDS=()
+# Create each child task parented to $CONVOY_ID with the same per-task
+# metadata shape used by direct_bugfix; collect ids into $TASK_IDS.
+# Add `gc bd dep add <dependent> <prerequisite>` edges where ordering
+# is required (e.g., fix-task depends on refactor-task).
+
+TASK_CSV=$(IFS=,; echo "${TASK_IDS[*]}")
+gc --rig "$RIG" bd update "$BUG" \\
+  --set-metadata decision_state=decided \\
+  --set-metadata repair_beads="$CONVOY_ID" \\
+  --set-metadata repair_convoy_children="$TASK_CSV" \\
+  --set-metadata validation_commands="..." \\
+  --set-metadata acceptance_criteria="..." \\
+  --set-metadata non_goals="..."
+```
+
+### `investigation_needed` — one investigation task
+
+```bash
+INVEST_METADATA=$(jq -nc \\
+  --arg routed_to "$RIG/${BINDING_PREFIX:-gastown.}polecat" \\
+  --arg repair_for_bug "$BUG" \\
+  --arg investigation_kind "$INVEST_KIND" \\
+  --argjson questions "$QUESTIONS_JSON" \\
+  '{
+    "gc.routed_to": $routed_to,
+    "repair_for_bug": $repair_for_bug,
+    "investigation_kind": $investigation_kind,
+    "questions": $questions,
+    "repair_kind": "investigation_needed",
+    "done_when": "answers to questions are recorded in metadata.findings; no production code is changed"
+  }')
+
+INVEST_ID=$(gc --rig "$RIG" bd create \\
+  --type=task --priority=2 --parent="$BUG" \\
+  --title="Investigation: $BUG" \\
+  --labels="bug-investigation,repair_for_bug:$BUG" \\
+  --metadata "$INVEST_METADATA" \\
+  --description "$INVEST_BODY" \\
+  --json | jq -r '.id')
+
+gc --rig "$RIG" bd update "$BUG" \\
+  --set-metadata decision_state=decided_investigation \\
+  --set-metadata repair_beads="$INVEST_ID"
+```
+
+### `scope_expanded_to_feature` — draft outline, mail mayor
+
+```bash
+gc --rig "$RIG" bd update "$BUG" \\
+  --description "$WO_OUTLINE" \\
+  --set-metadata decision_state=decided \\
+  --set-metadata work_order_needed=true \\
+  --set-metadata proposed_work_order_title="$WO_TITLE"
+```
+
+### `specialist_routed` — reroute and exit
+
+```bash
+TARGET_ROUTE="$RIG/codegen-support.landing-arbiter"   # or other specialist
+
+gc --rig "$RIG" bd update "$BUG" \\
+  --set-metadata decision_state=rerouted \\
+  --set-metadata "gc.routed_to=$TARGET_ROUTE" \\
+  --notes "Rerouted by debugger to $TARGET_ROUTE because: <one sentence>."
+```
+
+### `human_required` — leave open, route to human-escalation
+
+```bash
+gc --rig "$RIG" bd update "$BUG" \\
+  --set-metadata decision_state=human_review \\
+  --set-metadata decision_class=human_required \\
+  --set-metadata "gc.routed_to=human-escalation"
+```
+
+### Post-emit verification (REQUIRED — fail closed on unknown states)
+
+The first jq predicate ENFORCES the closed set of decision_class
+values. If $DECISION_CLASS is anything else (a typo, a novel state
+invented under pressure), this fails fast and the formula step
+errors — the plan bead stays open, the watch order's next tick spawns a
+fresh session to retry, and mayor sees the deadlock alert from the
+watch script's safety net. The previous version's bug was that an
+unrecognized value silently fell through every disjunct and the
+verification returned false → "EMIT VERIFICATION FAILED" → exit 1
+WITHOUT making clear that the issue was the decision_class itself.
+
+```bash
+gc --rig "$RIG" bd show "$BUG" --json | jq -e --arg d "$DECISION_CLASS" '
+  ($d | IN("duplicate", "direct_bugfix", "convoy", "investigation_needed",
+           "scope_expanded_to_feature", "specialist_routed", "human_required")) and
+  .[0].metadata.decision_class == $d and
+  (
+    ($d == "duplicate" and .[0].status == "open" and .[0].metadata.decision_state == "duplicate" and (.[0].metadata.duplicate_of // "") != "") or
+    ($d == "human_required"  and .[0].status == "open" and .[0].metadata.decision_state == "human_review") or
+    ($d == "specialist_routed" and .[0].metadata.decision_state == "rerouted") or
+    ($d == "scope_expanded_to_feature" and .[0].status == "open" and .[0].metadata.decision_state == "decided") or
+    ($d == "investigation_needed" and .[0].status == "open" and .[0].metadata.decision_state == "decided_investigation") or
+    (($d == "direct_bugfix" or $d == "convoy") and .[0].status == "open" and .[0].metadata.decision_state == "decided" and (.[0].metadata.repair_beads // "") != "")
+  )
+' >/dev/null || {
+  echo "EMIT VERIFICATION FAILED for $BUG (decision_class=$DECISION_CLASS)"
+  gc --rig "$RIG" bd show "$BUG" --json | jq '.[0] | {id, status, metadata}'
+  exit 1
+}
+
+# Duplicate-specific post-conditions: cycle absent, edge to canonical
+# present. The cycle check is cheap insurance against rare races where
+# bd dep add's own cycle detector raced with concurrent debugger
+# sessions.
+if [ "$DECISION_CLASS" = "duplicate" ]; then
+  if ! gc --rig "$RIG" bd dep cycles --json 2>/dev/null \\
+       | jq -e --arg b "$BUG" '[.[]? | .ids[]?] | index($b) | not' >/dev/null; then
+    echo "DUPLICATE EMIT created a cycle involving $BUG; manual recovery required"
+    exit 1
+  fi
+fi
+```
+
+Close this step.
+"""
+
+[[steps]]
+id = "notify"
+title = "Mail mayor for human escalation, scope expansion, or unusual risk"
+needs = ["emit"]
+description = """
+Mail mayor only for `human_required`, `scope_expanded_to_feature`, or
+genuinely unusual risk. Routine decisions are recorded on the bug +
+child beads; no notification needed.
+
+```bash
+case "$DECISION_CLASS" in
+  human_required)
+    gc mail send mayor/ -s "ESCALATION: debugger cannot scope $BUG" \\
+      -m "Bug: $BUG
+Component: $COMPONENT
+Resolution class: $RESOLUTION_CLASS
+Decision: human_required because: <one paragraph>.
+
+Synthesis on bug description; reasoning in classification_reasoning."
+    ;;
+  scope_expanded_to_feature)
+    gc mail send mayor/ -s "SCOPE EXPANDED: $BUG needs a work order" \\
+      -m "Bug: $BUG
+Component: $COMPONENT
+
+The fix shape requires new product/spec work, not a polecat task.
+Draft work-order outline in bug description. Author the spec under
+specs/agent-work-orders/ to invoke cartographer. Parent the resulting
+convoy to this bug so verify-fix runs automatically."
+    ;;
+  *)
+    : # No notification needed.
+    ;;
+esac
+```
+
+Close this step.
+"""
+
+[[steps]]
+id = "close-plan-and-exit"
+title = "Close the plan bead and close this session so the pool frees the slot"
+needs = ["notify"]
+description = """
+This is single-bug, single-session. No next-iteration loop. The watch
+order's next 30s tick creates fresh plan beads for any remaining work; the
+controller spawns sessions for them up to `max_active_sessions`.
+
+**Why explicit `gc session close` and not just `exit`:** `exit` only
+terminates the Bash subshell inside the Claude conversation — the
+Claude session itself stays alive waiting for more input, and the
+controller continues to count it as an `active` session. The pool's
+scale_check sees "plan beads==sessions" and refuses to spawn a fresh
+session for the next bug, so new work piles up behind a dead-idle
+session. `gc runtime drain-ack` alone has empirically been
+insufficient to terminate. `gc session close` ends the conversation
+deterministically, frees the pool slot, and the next reconcile
+spawns a fresh session for any waiting plan bead. `wake_mode = "fresh"`
+on the agent means there's no resume-state to lose by closing.
+
+There is no interactive-session exception in the debugger pool. Do not ask
+whether to drain and do not hold the pane open for inspection after a
+terminal decision. A session that leaves the plan closed but stays `active`
+still consumes pool capacity and can strand later debugger demand.
+
+```bash
+CITY_ROOT="${CITY_ROOT:-$(pwd)}"
+while [ "$CITY_ROOT" != "/" ] && [ ! -f "$CITY_ROOT/city.toml" ]; do
+  CITY_ROOT=$(dirname "$CITY_ROOT")
+done
+DEBUGGER_CLOSE_PLAN=""
+for CANDIDATE in \
+  "${CODEGEN_SUPPORT_PACK_DIR:-}" \
+  "$CITY_ROOT/.gc/system/packs/codegen-support" \
+  "$CITY_ROOT/packs/codegen-support"; do
+  [ -n "$CANDIDATE" ] || continue
+  if [ -x "$CANDIDATE/assets/scripts/debugger-close-plan.sh" ]; then
+    DEBUGGER_CLOSE_PLAN="$CANDIDATE/assets/scripts/debugger-close-plan.sh"
+    break
+  fi
+done
+if [ ! -x "$DEBUGGER_CLOSE_PLAN" ]; then
+  echo "FATAL: cannot locate executable debugger-close-plan.sh in codegen-support pack" >&2
+  gc mail send mayor/ -s "ESCALATION: debugger plan close helper missing [HIGH]" \\
+    -m "Debugger reached terminal close for ${BUG:-unknown} but could not locate debugger-close-plan.sh in the codegen-support pack."
+  gc runtime drain-ack
+  exit 1
+fi
+
+if ! "$DEBUGGER_CLOSE_PLAN" "Debugger plan completed for $BUG"; then
+  gc runtime drain-ack
+  exit 1
+fi
+gc runtime drain-ack
+
+# Terminate the session so the pool slot frees immediately.
+# Try the canonical session-id env var first; fall back to the
+# session name (the `gc session close` command accepts either).
+if [ -n "${GC_SESSION_ID:-}" ]; then
+  gc session close "$GC_SESSION_ID" 2>/dev/null || true
+elif [ -n "${GC_SESSION_NAME:-}" ]; then
+  gc session close "$GC_SESSION_NAME" 2>/dev/null || true
+fi
+
+# Fallback in case close didn't terminate the process.
+exit
+```
+"""
