@@ -42,6 +42,7 @@ type runtimeIdentitySpec struct {
 	Affinity              *corev1.Affinity       `json:"affinity,omitempty"`
 	PriorityClassName     string                 `json:"priority_class_name,omitempty"`
 	ManagedDoltEnv        map[string]string      `json:"managed_dolt_env,omitempty"`
+	AgentEnv              map[string]string      `json:"agent_env,omitempty"`
 }
 
 type runtimeResourceSpec struct {
@@ -205,6 +206,7 @@ func (p *Provider) runtimeIdentitySpec(cfg runtime.Config) (runtimeIdentitySpec,
 		Affinity:              cloneAffinity(p.affinity),
 		PriorityClassName:     p.priorityClassName,
 		ManagedDoltEnv:        managedDoltEnv,
+		AgentEnv:              cloneStringMap(p.agentEnv),
 	}, nil
 }
 

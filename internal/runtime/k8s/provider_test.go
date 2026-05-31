@@ -38,6 +38,26 @@ func TestManagedServiceAliasDefaults(t *testing.T) {
 	}
 }
 
+func TestParseAgentEnv(t *testing.T) {
+	t.Setenv("GC_K8S_AGENT_ENV_JSON", `{"GASCITY_EVENT_BUS":"bus","GASCITY_CODE_CITY":"code"}`)
+
+	env, err := parseAgentEnv()
+	if err != nil {
+		t.Fatalf("parseAgentEnv: %v", err)
+	}
+	if env["GASCITY_EVENT_BUS"] != "bus" || env["GASCITY_CODE_CITY"] != "code" {
+		t.Fatalf("env = %#v", env)
+	}
+}
+
+func TestParseAgentEnvRejectsInvalidJSON(t *testing.T) {
+	t.Setenv("GC_K8S_AGENT_ENV_JSON", `["not","an","object"]`)
+
+	if _, err := parseAgentEnv(); err == nil {
+		t.Fatal("parseAgentEnv error = nil, want invalid JSON shape error")
+	}
+}
+
 func TestManagedServiceAliasCompatOverride(t *testing.T) {
 	t.Setenv("GC_DOLT_HOST", "canonical-dolt.example.com")
 	t.Setenv("GC_DOLT_PORT", "4407")
@@ -1656,6 +1676,94 @@ func TestBuildPodEnvRemapsVars(t *testing.T) {
 	// GC_TMUX_SESSION should be added.
 	if envMap["GC_TMUX_SESSION"] != "main" {
 		t.Errorf("GC_TMUX_SESSION = %q, want main", envMap["GC_TMUX_SESSION"])
+	}
+}
+
+func TestBuildPodEnvStripsInheritedCloudCredentialEnv(t *testing.T) {
+	cfgEnv := map[string]string{
+		"GC_AGENT":                               "worker",
+		"AWS_REGION":                             "us-west-2",
+		"AWS_DEFAULT_REGION":                     "us-west-2",
+		"AWS_ROLE_ARN":                           "arn:aws:iam::123456789012:role/mayor",
+		"AWS_WEB_IDENTITY_TOKEN_FILE":            "/var/run/secrets/eks.amazonaws.com/serviceaccount/token",
+		"AWS_ACCESS_KEY_ID":                      "AKIA...",
+		"AWS_SECRET_ACCESS_KEY":                  "secret",
+		"AWS_SESSION_TOKEN":                      "session",
+		"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": "/v2/credentials/abc",
+		"AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE": "/var/run/secrets/token",
+		"GC_K8S_AGENT_ENV_JSON":                  `{"EXTRA":"value"}`,
+		"GASCITY_EVENT_BUS":                      "gascity-dev",
+	}
+
+	env := mustBuildPodEnv(t, cfgEnv, "/workspace", podManagedDoltHost, podManagedDoltPort)
+	envMap := envVarsByName(env)
+
+	for _, key := range []string{
+		"AWS_ROLE_ARN",
+		"AWS_WEB_IDENTITY_TOKEN_FILE",
+		"AWS_ACCESS_KEY_ID",
+		"AWS_SECRET_ACCESS_KEY",
+		"AWS_SESSION_TOKEN",
+		"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+		"AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+		"GC_K8S_AGENT_ENV_JSON",
+	} {
+		if _, exists := envMap[key]; exists {
+			t.Fatalf("%s should not be copied from the controller into agent pod env", key)
+		}
+	}
+	if envMap["AWS_REGION"] != "us-west-2" {
+		t.Fatalf("AWS_REGION = %q, want us-west-2", envMap["AWS_REGION"])
+	}
+	if envMap["AWS_DEFAULT_REGION"] != "us-west-2" {
+		t.Fatalf("AWS_DEFAULT_REGION = %q, want us-west-2", envMap["AWS_DEFAULT_REGION"])
+	}
+	if envMap["GASCITY_EVENT_BUS"] != "gascity-dev" {
+		t.Fatalf("GASCITY_EVENT_BUS = %q, want gascity-dev", envMap["GASCITY_EVENT_BUS"])
+	}
+}
+
+func TestBuildPodAddsAgentEnvDefaultsWithoutOverridingSessionEnv(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+	p.agentEnv = map[string]string{
+		"GASCITY_CODE_CITY": "code-city",
+		"GASCITY_EVENT_BUS": "default-bus",
+		"GC_AGENT":          "wrong-agent",
+	}
+	cfg := runtime.Config{
+		Command: "/bin/bash",
+		Env: map[string]string{
+			"GC_AGENT":          "worker",
+			"GASCITY_EVENT_BUS": "session-bus",
+		},
+	}
+
+	pod, err := buildPod("test-session", cfg, p)
+	if err != nil {
+		t.Fatalf("buildPod: %v", err)
+	}
+	envMap := envVarsByName(pod.Spec.Containers[0].Env)
+	if envMap["GASCITY_CODE_CITY"] != "code-city" {
+		t.Fatalf("GASCITY_CODE_CITY = %q, want code-city", envMap["GASCITY_CODE_CITY"])
+	}
+	if envMap["GASCITY_EVENT_BUS"] != "session-bus" {
+		t.Fatalf("GASCITY_EVENT_BUS = %q, want session-bus", envMap["GASCITY_EVENT_BUS"])
+	}
+	if envMap["GC_AGENT"] != "worker" {
+		t.Fatalf("GC_AGENT = %q, want worker", envMap["GC_AGENT"])
+	}
+}
+
+func TestRuntimeIdentityIncludesAgentEnvDefaults(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+	p.agentEnv = map[string]string{"GASCITY_CODE_CITY": "code-city"}
+
+	spec, err := p.runtimeIdentitySpec(runtime.Config{Env: map[string]string{"GC_AGENT": "worker"}})
+	if err != nil {
+		t.Fatalf("runtimeIdentitySpec: %v", err)
+	}
+	if spec.AgentEnv["GASCITY_CODE_CITY"] != "code-city" {
+		t.Fatalf("AgentEnv = %#v, want GASCITY_CODE_CITY", spec.AgentEnv)
 	}
 }
 

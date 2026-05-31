@@ -53,6 +53,7 @@ type Provider struct {
 	cpuLimit           string
 	memLimit           string
 	serviceAccount     string              // pod service account name (GC_K8S_SERVICE_ACCOUNT)
+	agentEnv           map[string]string   // default agent pod env (GC_K8S_AGENT_ENV_JSON)
 	prebaked           bool                // skip staging + init container for prebaked images
 	workspacePVC       string              // optional PersistentVolumeClaim for shared pod workspace
 	workspaceRoot      string              // pod mount path for workspacePVC
@@ -86,6 +87,8 @@ type workspaceFields struct {
 //   - GC_K8S_IMAGE — container image (required for Start)
 //   - GC_K8S_CONTEXT — kubectl context (default: current)
 //   - GC_K8S_SERVICE_ACCOUNT — pod service account name (default: namespace default)
+//   - GC_K8S_AGENT_ENV_JSON — JSON object of non-secret env defaults injected
+//     into every agent pod without overriding session-specific env
 //   - GC_K8S_WORKSPACE_PVC — optional PVC claim mounted into agent pods
 //   - GC_K8S_WORKSPACE_ROOT — mount path for GC_K8S_WORKSPACE_PVC (default: /workspace)
 //   - GC_K8S_CPU_REQUEST, GC_K8S_MEM_REQUEST — resource requests
@@ -128,6 +131,10 @@ func NewProvider() (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
+	agentEnv, err := parseAgentEnv()
+	if err != nil {
+		return nil, err
+	}
 
 	return &Provider{
 		ops: &realK8sOps{
@@ -145,6 +152,7 @@ func NewProvider() (*Provider, error) {
 		cpuLimit:           envOrDefault("GC_K8S_CPU_LIMIT", "2"),
 		memLimit:           envOrDefault("GC_K8S_MEM_LIMIT", "4Gi"),
 		serviceAccount:     os.Getenv("GC_K8S_SERVICE_ACCOUNT"),
+		agentEnv:           agentEnv,
 		prebaked:           os.Getenv("GC_K8S_PREBAKED") == "true",
 		workspacePVC:       workspace.pvc,
 		workspaceRoot:      workspace.root,
@@ -155,6 +163,29 @@ func NewProvider() (*Provider, error) {
 		affinity:           scheduling.affinity,
 		priorityClassName:  scheduling.priorityClassName,
 	}, nil
+}
+
+func parseAgentEnv() (map[string]string, error) {
+	raw := strings.TrimSpace(os.Getenv("GC_K8S_AGENT_ENV_JSON"))
+	if raw == "" {
+		return nil, nil
+	}
+	var parsed map[string]string
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return nil, fmt.Errorf("parsing GC_K8S_AGENT_ENV_JSON: %w", err)
+	}
+	if len(parsed) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(parsed))
+	for key, value := range parsed {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			return nil, fmt.Errorf("parsing GC_K8S_AGENT_ENV_JSON: env var names must be non-empty")
+		}
+		out[key] = value
+	}
+	return out, nil
 }
 
 func parseSchedulingEnv() (schedulingFields, error) {
