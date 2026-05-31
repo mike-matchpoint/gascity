@@ -1559,21 +1559,39 @@ func (s *BdStore) runRuntimeBD(ctx context.Context, policy WritePolicy, operatio
 	}
 	start := time.Now()
 	s.recordRuntimeWriteEvent(events.RuntimeWriteStarted, policy, operation, args, 0, nil)
-	run := s.ctxRunner
-	if run != nil {
-		out, err := run(ctx, s.dir, "bd", args...)
+	if s.ctxRunner == nil && s.runner == nil {
+		err := degradedWrite(policy, s.RuntimeWriteStoreKey(), operation, WriteOutcomeUnsupported, errors.New("nil bd command runner"))
+		s.traceRuntimeWrite(policy, operation, args, time.Since(start), err)
+		return nil, err
+	}
+	var out []byte
+	var err error
+	for attempt := 1; attempt <= bdTransientWriteAttempts; attempt++ {
+		out, err = s.runRuntimeBDCommand(ctx, args...)
 		if err != nil {
 			wrapped := s.runtimeCommandError(ctx, policy, operation, err)
+			if runtimeWriteShouldRetry(ctx, wrapped) && attempt < bdTransientWriteAttempts {
+				if !sleepRuntimeWriteRetry(ctx, attempt) {
+					timeoutErr := s.runtimeCommandError(ctx, policy, operation, ctx.Err())
+					s.traceRuntimeWrite(policy, operation, args, time.Since(start), timeoutErr)
+					return out, timeoutErr
+				}
+				continue
+			}
 			s.traceRuntimeWrite(policy, operation, args, time.Since(start), wrapped)
 			return out, wrapped
 		}
 		s.traceRuntimeWrite(policy, operation, args, time.Since(start), nil)
 		return out, nil
 	}
-	if s.runner == nil {
-		err := degradedWrite(policy, s.RuntimeWriteStoreKey(), operation, WriteOutcomeUnsupported, errors.New("nil bd command runner"))
-		s.traceRuntimeWrite(policy, operation, args, time.Since(start), err)
-		return nil, err
+	err = s.runtimeCommandError(ctx, policy, operation, err)
+	s.traceRuntimeWrite(policy, operation, args, time.Since(start), err)
+	return out, err
+}
+
+func (s *BdStore) runRuntimeBDCommand(ctx context.Context, args ...string) ([]byte, error) {
+	if s.ctxRunner != nil {
+		return s.ctxRunner(ctx, s.dir, "bd", args...)
 	}
 	type result struct {
 		out []byte
@@ -1586,17 +1604,31 @@ func (s *BdStore) runRuntimeBD(ctx context.Context, policy WritePolicy, operatio
 	}()
 	select {
 	case res := <-done:
-		if res.err != nil {
-			wrapped := s.runtimeCommandError(ctx, policy, operation, res.err)
-			s.traceRuntimeWrite(policy, operation, args, time.Since(start), wrapped)
-			return res.out, wrapped
-		}
-		s.traceRuntimeWrite(policy, operation, args, time.Since(start), nil)
-		return res.out, nil
+		return res.out, res.err
 	case <-ctx.Done():
-		err := degradedWrite(policy, s.RuntimeWriteStoreKey(), operation, WriteOutcomeAmbiguousTimeout, ctx.Err())
-		s.traceRuntimeWrite(policy, operation, args, time.Since(start), err)
-		return nil, err
+		return nil, ctx.Err()
+	}
+}
+
+func runtimeWriteShouldRetry(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return false
+	}
+	return isBdTransientWriteError(err)
+}
+
+func sleepRuntimeWriteRetry(ctx context.Context, attempt int) bool {
+	delay := time.Duration(attempt) * 25 * time.Millisecond
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctxDone(ctx):
+		return false
 	}
 }
 

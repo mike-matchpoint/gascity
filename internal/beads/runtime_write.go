@@ -349,6 +349,7 @@ type RuntimeWriteManagerStats struct {
 type runtimeWriteManager struct {
 	storeKey string
 	queue    chan *runtimeWriteJob
+	hotQueue chan *runtimeWriteJob
 
 	mu        sync.Mutex
 	pending   map[string]*runtimeWriteJob
@@ -394,6 +395,7 @@ func newRuntimeWriteManager(storeKey string) *runtimeWriteManager {
 	m := &runtimeWriteManager{
 		storeKey:     storeKey,
 		queue:        make(chan *runtimeWriteJob, RuntimeWriteQueueLimit),
+		hotQueue:     make(chan *runtimeWriteJob, RuntimeWriteQueueLimit),
 		pending:      make(map[string]*runtimeWriteJob),
 		breakerState: RuntimeWriteBreakerClosed,
 	}
@@ -433,20 +435,38 @@ func (m *runtimeWriteManager) doWithPayload(ctx context.Context, policy WritePol
 	}
 	if collapseKey != "" {
 		m.mu.Lock()
+		tracked := false
 		if existing := m.pending[collapseKey]; existing != nil {
-			if !existing.started && existing.merge != nil {
+			switch {
+			case existing.started:
+				// A started write already captured its payload; make this job the
+				// follow-up merge target so newer updates are not lost or fanned out.
+				m.pending[collapseKey] = job
+				tracked = true
+			case existing.merge != nil:
 				existing.payload = existing.merge(existing.payload, payload)
+				existing.waiters = append(existing.waiters, result)
+				m.collapsed++
+				m.mu.Unlock()
+				return m.awaitResult(writeCtx, policy, op, result)
+			default:
+				existing.waiters = append(existing.waiters, result)
+				m.collapsed++
+				m.mu.Unlock()
+				return m.awaitResult(writeCtx, policy, op, result)
 			}
-			existing.waiters = append(existing.waiters, result)
-			m.collapsed++
-			m.mu.Unlock()
-			return m.awaitResult(writeCtx, policy, op, result)
 		}
-		m.pending[collapseKey] = job
+		if collapseKey != "" && !tracked {
+			m.pending[collapseKey] = job
+		}
 		m.mu.Unlock()
 	}
+	queue := m.queue
+	if runtimeWriteUsesHotQueue(policy, op) {
+		queue = m.hotQueue
+	}
 	select {
-	case m.queue <- job:
+	case queue <- job:
 		m.noteEnqueued(job.enqueued)
 	case <-writeCtx.Done():
 		m.removePending(collapseKey, job)
@@ -520,32 +540,57 @@ func (m *runtimeWriteManager) noteEnqueued(enqueued time.Time) {
 }
 
 func (m *runtimeWriteManager) loop() {
-	for job := range m.queue {
-		m.mu.Lock()
-		m.active++
-		m.oldest = time.Now()
-		job.started = true
-		payload := job.payload
-		m.mu.Unlock()
-		value, err := job.run(job.ctx, payload)
-		res := runtimeWriteResult{value: value, err: err}
-		m.recordResult(err)
-		m.mu.Lock()
-		m.active--
-		m.completed++
-		if len(m.queue) == 0 {
-			m.oldest = time.Time{}
+	for {
+		if hot := m.nextHotJob(); hot != nil {
+			m.runJob(hot)
+			continue
 		}
-		if job.collapseKey != "" && m.pending[job.collapseKey] == job {
-			delete(m.pending, job.collapseKey)
+		var job *runtimeWriteJob
+		select {
+		case job = <-m.hotQueue:
+		case job = <-m.queue:
 		}
-		waiters := append([]chan runtimeWriteResult(nil), job.waiters...)
-		m.mu.Unlock()
-		for _, waiter := range waiters {
-			select {
-			case waiter <- res:
-			default:
-			}
+		m.runJob(job)
+	}
+}
+
+func (m *runtimeWriteManager) nextHotJob() *runtimeWriteJob {
+	select {
+	case job := <-m.hotQueue:
+		return job
+	default:
+		return nil
+	}
+}
+
+func (m *runtimeWriteManager) runJob(job *runtimeWriteJob) {
+	if job == nil {
+		return
+	}
+	m.mu.Lock()
+	m.active++
+	m.oldest = time.Now()
+	job.started = true
+	payload := job.payload
+	m.mu.Unlock()
+	value, err := job.run(job.ctx, payload)
+	res := runtimeWriteResult{value: value, err: err}
+	m.recordResult(err)
+	m.mu.Lock()
+	m.active--
+	m.completed++
+	if len(m.queue) == 0 && len(m.hotQueue) == 0 {
+		m.oldest = time.Time{}
+	}
+	if job.collapseKey != "" && m.pending[job.collapseKey] == job {
+		delete(m.pending, job.collapseKey)
+	}
+	waiters := append([]chan runtimeWriteResult(nil), job.waiters...)
+	m.mu.Unlock()
+	for _, waiter := range waiters {
+		select {
+		case waiter <- res:
+		default:
 		}
 	}
 }
@@ -615,7 +660,7 @@ func (m *runtimeWriteManager) stats() RuntimeWriteManagerStats {
 	}
 	return RuntimeWriteManagerStats{
 		StoreKey:       m.storeKey,
-		QueueDepth:     len(m.queue),
+		QueueDepth:     len(m.queue) + len(m.hotQueue),
 		QueueLimit:     RuntimeWriteQueueLimit,
 		Active:         m.active,
 		BreakerState:   m.breakerState,
@@ -667,6 +712,10 @@ func runtimeWriteCollapseKey(policy WritePolicy, op, objectKey string) string {
 		strings.TrimSpace(objectKey),
 		idempotencyKey,
 	}, "\x00")
+}
+
+func runtimeWriteUsesHotQueue(policy WritePolicy, op string) bool {
+	return policy.Class == WriteClassHotState || strings.TrimSpace(op) == "ping"
 }
 
 func mergeRuntimeUpdatePayload(existing, incoming any) any {

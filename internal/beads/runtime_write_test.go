@@ -3,6 +3,7 @@ package beads
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -378,6 +379,68 @@ func TestBdStoreRuntimeWriterSerializesPerStore(t *testing.T) {
 	}
 }
 
+func TestBdStoreRuntimeWriterPrioritizesHotState(t *testing.T) {
+	holdStarted := make(chan struct{})
+	releaseHold := make(chan struct{})
+	var holdOnce sync.Once
+	var mu sync.Mutex
+	var order []string
+	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(ctx context.Context, _ string, _ string, args ...string) ([]byte, error) {
+		if len(args) < 3 || args[0] != "update" {
+			return []byte(`[]`), nil
+		}
+		id := args[2]
+		if id == "gc-hold" {
+			holdOnce.Do(func() { close(holdStarted) })
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-releaseHold:
+				return []byte(`[]`), nil
+			}
+		}
+		mu.Lock()
+		order = append(order, id)
+		mu.Unlock()
+		return []byte(`[]`), nil
+	})
+
+	holdPolicy := RuntimeWritePolicy(WriteClassAuditRepair, "test.priority-hold", "hold")
+	holdPolicy.Timeout = 5 * time.Second
+	errs := make(chan error, 3)
+	go func() {
+		errs <- store.RuntimeUpdate(context.Background(), "gc-hold", UpdateOpts{Metadata: map[string]string{"hold": "true"}}, holdPolicy)
+	}()
+	<-holdStarted
+
+	normalPolicy := RuntimeWritePolicy(WriteClassAuditRepair, "test.priority-normal", "normal")
+	normalPolicy.Timeout = 5 * time.Second
+	go func() {
+		errs <- store.RuntimeUpdate(context.Background(), "gc-normal", UpdateOpts{Metadata: map[string]string{"normal": "true"}}, normalPolicy)
+	}()
+	waitForRuntimeWriteQueueDepth(t, store, 1)
+
+	hotPolicy := RuntimeWritePolicy(WriteClassHotState, "test.priority-hot", "hot")
+	hotPolicy.Timeout = 5 * time.Second
+	go func() {
+		errs <- store.RuntimeUpdate(context.Background(), "gc-hot", UpdateOpts{Metadata: map[string]string{"hot": "true"}}, hotPolicy)
+	}()
+	waitForRuntimeWriteQueueDepth(t, store, 2)
+	close(releaseHold)
+
+	for i := 0; i < 3; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("RuntimeUpdate error: %v", err)
+		}
+	}
+	mu.Lock()
+	got := append([]string(nil), order...)
+	mu.Unlock()
+	if len(got) < 2 || got[0] != "gc-hot" || got[1] != "gc-normal" {
+		t.Fatalf("runtime write order = %v, want hot-state before normal audit write", got)
+	}
+}
+
 func TestBdStoreRuntimeWriteCircuitBreakerOpensAfterTimeouts(t *testing.T) {
 	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(ctx context.Context, _ string, _ string, _ ...string) ([]byte, error) {
 		<-ctx.Done()
@@ -398,6 +461,36 @@ func TestBdStoreRuntimeWriteCircuitBreakerOpensAfterTimeouts(t *testing.T) {
 	}
 	if stats.BreakerState != RuntimeWriteBreakerOpen {
 		t.Fatalf("breaker state = %q, want open (stats=%+v)", stats.BreakerState, stats)
+	}
+}
+
+func TestBdStoreRuntimeUpdateRetriesTransientWriteError(t *testing.T) {
+	tracePath := filepath.Join(t.TempDir(), "bd.trace")
+	t.Setenv("GC_BD_TRACE", tracePath)
+	var calls atomic.Int64
+	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(_ context.Context, _ string, _ string, _ ...string) ([]byte, error) {
+		if calls.Add(1) == 1 {
+			return nil, fmt.Errorf("exit status 1: Error updating gc-1: dolt commit: Error 1213 (40001): serialization failure: this transaction conflicts with a committed transaction from another client, try restarting transaction")
+		}
+		return []byte(`[]`), nil
+	})
+	policy := RuntimeWritePolicy(WriteClassHotState, "test.runtime-retry", "session:gc-1")
+	if err := store.RuntimeUpdate(context.Background(), "gc-1", UpdateOpts{Metadata: map[string]string{"state": "active"}}, policy); err != nil {
+		t.Fatalf("RuntimeUpdate: %v", err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("runtime update calls = %d, want retry success on second attempt", got)
+	}
+	traceBytes, err := os.ReadFile(tracePath)
+	if err != nil {
+		t.Fatalf("read trace: %v", err)
+	}
+	trace := string(traceBytes)
+	if !strings.Contains(trace, "outcome=success") {
+		t.Fatalf("trace missing success outcome:\n%s", trace)
+	}
+	if strings.Contains(trace, "outcome=failed") || strings.Contains(trace, "outcome=ambiguous-timeout") {
+		t.Fatalf("trace recorded transient retry as degraded:\n%s", trace)
 	}
 }
 
@@ -461,7 +554,7 @@ func TestBdStoreRuntimeWriteOpenBreakerAdmitsTimedRecoveryProbe(t *testing.T) {
 	waitForRuntimeWriteManagerState(t, store, RuntimeWriteBreakerClosed)
 }
 
-func TestBdStoreRuntimeWriteCoalescesIdempotencyKey(t *testing.T) {
+func TestBdStoreRuntimeWriteDoesNotCoalesceStartedUpdate(t *testing.T) {
 	var runnerCalls atomic.Int64
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -492,13 +585,7 @@ func TestBdStoreRuntimeWriteCoalescesIdempotencyKey(t *testing.T) {
 		defer wg.Done()
 		errs <- store.RuntimeUpdate(context.Background(), "gc-1", UpdateOpts{Metadata: map[string]string{"same": "true"}}, policy)
 	}()
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if store.RuntimeWriteManagerStats().Collapsed > 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForRuntimeWriteQueueDepth(t, store, 1)
 	close(release)
 	wg.Wait()
 	close(errs)
@@ -507,11 +594,74 @@ func TestBdStoreRuntimeWriteCoalescesIdempotencyKey(t *testing.T) {
 			t.Fatalf("RuntimeUpdate: %v", err)
 		}
 	}
-	if runnerCalls.Load() != 1 {
-		t.Fatalf("runner calls = %d, want one coalesced runtime write", runnerCalls.Load())
+	if runnerCalls.Load() != 2 {
+		t.Fatalf("runner calls = %d, want started update to run follow-up write separately", runnerCalls.Load())
 	}
-	if got := store.RuntimeWriteManagerStats().Collapsed; got != 1 {
-		t.Fatalf("collapsed = %d, want 1", got)
+	if got := store.RuntimeWriteManagerStats().Collapsed; got != 0 {
+		t.Fatalf("collapsed = %d, want 0 for started update", got)
+	}
+}
+
+func TestBdStoreRuntimeWriteMergesFollowUpAfterStartedUpdate(t *testing.T) {
+	var runnerCalls atomic.Int64
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var mu sync.Mutex
+	var followUpArgs []string
+	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(ctx context.Context, _ string, _ string, args ...string) ([]byte, error) {
+		if runnerCalls.Add(1) == 1 {
+			close(started)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-release:
+				return []byte(`[]`), nil
+			}
+		}
+		mu.Lock()
+		followUpArgs = append([]string(nil), args...)
+		mu.Unlock()
+		return []byte(`[]`), nil
+	})
+	policy := RuntimeWritePolicy(WriteClassHotState, "test.coalesce-follow-up", "session:gc-1")
+	policy.Timeout = 5 * time.Second
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 3)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errs <- store.RuntimeUpdate(context.Background(), "gc-1", UpdateOpts{Metadata: map[string]string{"first": "true"}}, policy)
+	}()
+	<-started
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errs <- store.RuntimeUpdate(context.Background(), "gc-1", UpdateOpts{Metadata: map[string]string{"second": "true"}}, policy)
+	}()
+	waitForRuntimeWriteQueueDepth(t, store, 1)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errs <- store.RuntimeUpdate(context.Background(), "gc-1", UpdateOpts{Metadata: map[string]string{"third": "true"}}, policy)
+	}()
+	waitForRuntimeWriteCollapsed(t, store, 1)
+	close(release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("RuntimeUpdate: %v", err)
+		}
+	}
+	if runnerCalls.Load() != 2 {
+		t.Fatalf("runner calls = %d, want started update plus one merged follow-up", runnerCalls.Load())
+	}
+	mu.Lock()
+	gotArgs := strings.Join(followUpArgs, " ")
+	mu.Unlock()
+	if !strings.Contains(gotArgs, "second") || !strings.Contains(gotArgs, "third") {
+		t.Fatalf("follow-up args = %q, want merged second and third updates", gotArgs)
 	}
 }
 
@@ -826,6 +976,30 @@ func waitForRuntimeWriteManagerIdle(t *testing.T, store *BdStore, timeout time.D
 	}
 	stats := store.RuntimeWriteManagerStats()
 	t.Fatalf("runtime write manager still active after %s: active=%d queue_depth=%d", timeout, stats.Active, stats.QueueDepth)
+}
+
+func waitForRuntimeWriteQueueDepth(t *testing.T, store *BdStore, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if store.RuntimeWriteManagerStats().QueueDepth >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("runtime write queue depth < %d after wait: %+v", want, store.RuntimeWriteManagerStats())
+}
+
+func waitForRuntimeWriteCollapsed(t *testing.T, store *BdStore, want int64) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if store.RuntimeWriteManagerStats().Collapsed >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("runtime write collapsed < %d after wait: %+v", want, store.RuntimeWriteManagerStats())
 }
 
 func waitForRuntimeWriteManagerState(t *testing.T, store *BdStore, want RuntimeWriteBreakerState) {
