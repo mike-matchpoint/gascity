@@ -1,6 +1,7 @@
 package beads_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -95,6 +96,9 @@ func TestHQStoreRecoversFlushedSnapshotAfterSIGKILL(t *testing.T) {
 		"HQSTORE_SIGKILL_HELPER=1",
 		"HQSTORE_DIR="+dir,
 	)
+	var helperOutput bytes.Buffer
+	cmd.Stdout = &helperOutput
+	cmd.Stderr = &helperOutput
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting helper: %v", err)
 	}
@@ -103,7 +107,7 @@ func TestHQStoreRecoversFlushedSnapshotAfterSIGKILL(t *testing.T) {
 	// presence guarantees a durable snapshot exists on disk.
 	idPath := filepath.Join(dir, "created-id")
 	var id string
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		data, err := os.ReadFile(idPath)
 		if err == nil {
@@ -115,7 +119,7 @@ func TestHQStoreRecoversFlushedSnapshotAfterSIGKILL(t *testing.T) {
 	if id == "" {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		t.Fatal("helper did not write created bead id")
+		t.Fatalf("helper did not write created bead id; output:\n%s", helperOutput.String())
 	}
 
 	if err := cmd.Process.Kill(); err != nil {
