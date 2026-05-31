@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -56,6 +57,49 @@ func TestWriteFileAtomic_Overwrite(t *testing.T) {
 	for _, e := range entries {
 		if e.Name() != "test.toml" {
 			t.Errorf("leftover temp file: %s", e.Name())
+		}
+	}
+}
+
+func TestWriteFileAtomic_ConcurrentSameTarget(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "identity.toml")
+	data := []byte("project = true\n")
+
+	const writers = 64
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	errs := make([]error, writers)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			errs[i] = fsys.WriteFileAtomic(fsys.OSFS{}, path, data, 0o644)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("writer %d: WriteFileAtomic: %v", i, err)
+		}
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", path, err)
+	}
+	if string(got) != string(data) {
+		t.Fatalf("content = %q, want %q", got, data)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "identity.toml" {
+			t.Fatalf("leftover temp file after concurrent writes: %s", e.Name())
 		}
 	}
 }
@@ -276,6 +320,10 @@ func TestWriteFileAtomic_SweepsDeadPIDOrphans(t *testing.T) {
 	if err := os.WriteFile(deadOrphan, nil, 0o644); err != nil {
 		t.Fatalf("seed dead orphan: %v", err)
 	}
+	deadSeqOrphan := fmt.Sprintf("%s.tmp.%d.di258fvm6o6j.1", target, deadPID)
+	if err := os.WriteFile(deadSeqOrphan, nil, 0o644); err != nil {
+		t.Fatalf("seed dead sequence orphan: %v", err)
+	}
 
 	livePID := os.Getpid()
 	liveOrphan := fmt.Sprintf("%s.tmp.%d.di258dn070o5", target, livePID)
@@ -294,6 +342,9 @@ func TestWriteFileAtomic_SweepsDeadPIDOrphans(t *testing.T) {
 
 	if _, err := os.Stat(deadOrphan); !os.IsNotExist(err) {
 		t.Errorf("dead-PID orphan still present: stat err = %v", err)
+	}
+	if _, err := os.Stat(deadSeqOrphan); !os.IsNotExist(err) {
+		t.Errorf("dead-PID sequence orphan still present: stat err = %v", err)
 	}
 	if _, err := os.Stat(liveOrphan); err != nil {
 		t.Errorf("live-PID orphan unexpectedly removed: stat err = %v", err)
@@ -315,6 +366,8 @@ func TestWriteFileAtomic_PreservesUnparseablePeers(t *testing.T) {
 		target + ".bak",
 		filepath.Join(dir, "config.yaml.swp"),
 		fmt.Sprintf("%s.tmp.%d.not-base36!", target, deadPID),
+		fmt.Sprintf("%s.tmp.%d.di258fvm6o6j.", target, deadPID),
+		fmt.Sprintf("%s.tmp.%d.di258fvm6o6j.not-base36!", target, deadPID),
 	}
 	for _, name := range noise {
 		if err := os.WriteFile(name, nil, 0o644); err != nil {

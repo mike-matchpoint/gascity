@@ -8,10 +8,13 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/pidutil"
 )
+
+var atomicTempSeq atomic.Uint64
 
 // WriteFileAtomic writes data to path atomically using a temp file + rename.
 // The temp file is created in the same directory as path to ensure the rename
@@ -19,7 +22,7 @@ import (
 // are enforced on the temp file before the rename so the final path is never
 // visible with a wider mode (no write-then-chmod window).
 func WriteFileAtomic(fs FS, path string, data []byte, perm os.FileMode) error {
-	suffix := strconv.Itoa(os.Getpid()) + "." + strconv.FormatInt(time.Now().UnixNano(), 36)
+	suffix := atomicTempSuffix()
 	tmp := path + ".tmp." + suffix
 	if err := fs.WriteFile(tmp, data, perm); err != nil {
 		return fmt.Errorf("writing temp file: %w", err)
@@ -39,15 +42,21 @@ func WriteFileAtomic(fs FS, path string, data []byte, perm os.FileMode) error {
 	return nil
 }
 
+func atomicTempSuffix() string {
+	return strconv.Itoa(os.Getpid()) + "." +
+		strconv.FormatInt(time.Now().UnixNano(), 36) + "." +
+		strconv.FormatUint(atomicTempSeq.Add(1), 36)
+}
+
 // sweepDeadAtomicOrphans removes sibling temp files left behind by previous
 // WriteFileAtomic callers that died (e.g., SIGTERM) between WriteFile and
 // Rename. It is best-effort: any error during enumeration or removal is
 // ignored so a stale-temp cleanup never fails an otherwise successful write.
 //
 // Only siblings of `target` matching the WriteFileAtomic suffix scheme
-// (`<basename>.tmp.<pid>.<unixnano-base36>`) are considered. PIDs that are
-// still alive — including in-progress writers from concurrent calls — are
-// preserved.
+// (`<basename>.tmp.<pid>.<unixnano-base36>[.<seq-base36>]`) are considered.
+// PIDs that are still alive — including in-progress writers from concurrent
+// calls — are preserved.
 func sweepDeadAtomicOrphans(fs FS, target string) {
 	dir := filepath.Dir(target)
 	prefix := filepath.Base(target) + ".tmp."
@@ -74,20 +83,25 @@ func sweepDeadAtomicOrphans(fs FS, target string) {
 	}
 }
 
-// parseAtomicTempPID parses the `<pid>.<unixnano-base36>` suffix produced by
-// WriteFileAtomic and returns the PID. Returns ok=false when the input does
-// not match the scheme (e.g., no dot, non-numeric PID).
+// parseAtomicTempPID parses the `<pid>.<unixnano-base36>[.<seq-base36>]`
+// suffix produced by WriteFileAtomic and returns the PID. Returns ok=false
+// when the input does not match the scheme (e.g., no dot, non-numeric PID).
 func parseAtomicTempPID(suffix string) (int, bool) {
-	dot := strings.IndexByte(suffix, '.')
-	if dot <= 0 || dot == len(suffix)-1 {
+	parts := strings.Split(suffix, ".")
+	if len(parts) < 2 {
 		return 0, false
 	}
-	pid, err := strconv.Atoi(suffix[:dot])
+	pid, err := strconv.Atoi(parts[0])
 	if err != nil || pid <= 0 {
 		return 0, false
 	}
-	if _, err := strconv.ParseInt(suffix[dot+1:], 36, 64); err != nil {
-		return 0, false
+	for _, part := range parts[1:] {
+		if part == "" {
+			return 0, false
+		}
+		if _, err := strconv.ParseUint(part, 36, 64); err != nil {
+			return 0, false
+		}
 	}
 	return pid, true
 }
