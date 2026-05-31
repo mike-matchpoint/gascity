@@ -19,7 +19,7 @@ import (
 
 const (
 	orderRuntimeLeaseDir            = ".gc/runtime/order-dispatch/leases"
-	orderRuntimeLeaseVersion        = "v1"
+	orderRuntimeLeaseVersion        = "v2"
 	orderRuntimeReservationTTL      = 2 * time.Minute
 	orderRuntimeLeaseHeartbeatEvery = 10 * time.Second
 )
@@ -482,12 +482,14 @@ func safeOrderRuntimeLeaseFile(value string) string {
 	return b.String()
 }
 
-func orderRuntimeReservationFor(a orders.Order, storeKey string, now time.Time, eventSeq uint64) orderRuntimeReservation {
+func orderRuntimeReservationFor(a orders.Order, storeKey, storePrefix string, now time.Time, eventSeq uint64) orderRuntimeReservation {
 	const attempt = 1
 	fingerprint := orderTriggerFingerprint(a, now, eventSeq)
+	trackingPrefix := orderRuntimeTrackingIDPrefix(storePrefix)
 	input := strings.Join([]string{
 		orderRuntimeLeaseVersion,
 		strings.TrimSpace(storeKey),
+		trackingPrefix,
 		a.ScopedName(),
 		a.Trigger,
 		fingerprint,
@@ -496,7 +498,7 @@ func orderRuntimeReservationFor(a orders.Order, storeKey string, now time.Time, 
 	sum := sha256.Sum256([]byte(input))
 	hash := hex.EncodeToString(sum[:])
 	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:16])
-	trackingID := "gc-order-" + strings.ToLower(encoded)
+	trackingID := trackingPrefix + "-order-" + strings.ToLower(encoded)
 	return orderRuntimeReservation{
 		Input:       input,
 		Hash:        hash,
@@ -520,6 +522,14 @@ func orderRuntimeReservationFor(a orders.Order, storeKey string, now time.Time, 
 			EventSeq:                eventSeq,
 		},
 	}
+}
+
+func orderRuntimeTrackingIDPrefix(prefix string) string {
+	prefix = strings.Trim(strings.ToLower(strings.TrimSpace(prefix)), "-")
+	if prefix == "" {
+		return "gc"
+	}
+	return prefix
 }
 
 func orderTriggerFingerprint(a orders.Order, now time.Time, eventSeq uint64) string {

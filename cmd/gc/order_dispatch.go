@@ -594,7 +594,7 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 			redacted := redactOrderEnvError(err, os.Environ())
 			msg := fmt.Sprintf("building trigger env: %s", redacted)
 			logDispatchError(m.stderr, "gc: order dispatch: building trigger env for %s: %s", a.ScopedName(), redacted)
-			run, reservedAt, ok := m.reserveOrderForDispatch(ctx, candidate.store, candidate.storeKey, a, now, 0, append(orderTrackingLabels(scoped), labelTriggerEnvFailed), stats)
+			run, reservedAt, ok := m.reserveOrderForDispatch(ctx, candidate.store, candidate.storeKey, candidate.target.Prefix, a, now, 0, append(orderTrackingLabels(scoped), labelTriggerEnvFailed), stats)
 			if !ok {
 				continue
 			}
@@ -642,7 +642,7 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 			m.recordOrderDispatchDeferred(scoped, fmt.Errorf("event cursor head: %w", err), stats)
 			continue
 		}
-		run, reservedAt, ok := m.reserveOrderForDispatch(ctx, candidate.store, candidate.storeKey, a, now, eventSeq, orderTrackingLabels(scoped), stats)
+		run, reservedAt, ok := m.reserveOrderForDispatch(ctx, candidate.store, candidate.storeKey, candidate.target.Prefix, a, now, eventSeq, orderTrackingLabels(scoped), stats)
 		if !ok {
 			continue
 		}
@@ -729,9 +729,9 @@ func (m *memoryOrderDispatcher) eventReservationSeq(a orders.Order) (uint64, err
 	return seq, nil
 }
 
-func (m *memoryOrderDispatcher) reserveOrderForDispatch(ctx context.Context, store beads.Store, storeKey string, a orders.Order, now time.Time, eventSeq uint64, labels []string, stats *orderDispatchTickStats) (orderDispatchRun, time.Time, bool) {
+func (m *memoryOrderDispatcher) reserveOrderForDispatch(ctx context.Context, store beads.Store, storeKey, storePrefix string, a orders.Order, now time.Time, eventSeq uint64, labels []string, stats *orderDispatchTickStats) (orderDispatchRun, time.Time, bool) {
 	scoped := a.ScopedName()
-	reservation := orderRuntimeReservationFor(a, storeKey, now, eventSeq)
+	reservation := orderRuntimeReservationFor(a, storeKey, storePrefix, now, eventSeq)
 	reservation.Lease.ControllerStartID = m.controllerStartID()
 	lease, acquired, err := m.leaseStore.acquire(reservation.Lease)
 	if err != nil {

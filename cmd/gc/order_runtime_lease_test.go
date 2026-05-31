@@ -12,24 +12,29 @@ func TestOrderRuntimeReservationDeterministicID(t *testing.T) {
 	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
 	order := orders.Order{Name: "beads-health", Trigger: "cooldown", Interval: "1m"}
 
-	first := orderRuntimeReservationFor(order, "city:file:/tmp/store", now, 0)
-	second := orderRuntimeReservationFor(order, "city:file:/tmp/store", now, 0)
+	first := orderRuntimeReservationFor(order, "city:file:/tmp/store", "vgc", now, 0)
+	second := orderRuntimeReservationFor(order, "city:file:/tmp/store", "vgc", now, 0)
 	if first.TrackingID != second.TrackingID {
 		t.Fatalf("TrackingID mismatch: %q != %q", first.TrackingID, second.TrackingID)
 	}
 	if first.Hash != second.Hash || first.Input != second.Input {
 		t.Fatalf("reservation hash/input not deterministic")
 	}
-	if !strings.HasPrefix(first.TrackingID, "gc-order-") {
-		t.Fatalf("TrackingID = %q, want gc-order- prefix", first.TrackingID)
+	if !strings.HasPrefix(first.TrackingID, "vgc-order-") {
+		t.Fatalf("TrackingID = %q, want vgc-order- prefix", first.TrackingID)
 	}
 	if first.TrackingID != strings.ToLower(first.TrackingID) || strings.Contains(first.TrackingID, "=") {
 		t.Fatalf("TrackingID = %q, want lowercase unpadded base32", first.TrackingID)
 	}
 
-	nextBucket := orderRuntimeReservationFor(order, "city:file:/tmp/store", now.Add(time.Minute), 0)
+	nextBucket := orderRuntimeReservationFor(order, "city:file:/tmp/store", "vgc", now.Add(time.Minute), 0)
 	if first.TrackingID == nextBucket.TrackingID {
 		t.Fatalf("TrackingID did not change across cooldown bucket: %q", first.TrackingID)
+	}
+
+	noPrefix := orderRuntimeReservationFor(order, "city:file:/tmp/store", "", now, 0)
+	if !strings.HasPrefix(noPrefix.TrackingID, "gc-order-") {
+		t.Fatalf("TrackingID without store prefix = %q, want gc-order- fallback", noPrefix.TrackingID)
 	}
 }
 
