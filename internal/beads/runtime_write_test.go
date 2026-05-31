@@ -401,6 +401,66 @@ func TestBdStoreRuntimeWriteCircuitBreakerOpensAfterTimeouts(t *testing.T) {
 	}
 }
 
+func TestBdStoreRuntimeWriteHotStateSuccessClosesOpenBreaker(t *testing.T) {
+	var fail atomic.Bool
+	fail.Store(true)
+	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(ctx context.Context, _ string, _ string, _ ...string) ([]byte, error) {
+		if fail.Load() {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return []byte(`[]`), nil
+	})
+	for i := 0; i < 3; i++ {
+		policy := RuntimeWritePolicy(WriteClassAuditRepair, "test.breaker", "key-"+string(rune('0'+i)))
+		policy.Timeout = 5 * time.Millisecond
+		_ = store.RuntimeUpdate(context.Background(), "gc-1", UpdateOpts{Metadata: map[string]string{"i": "1"}}, policy)
+	}
+	waitForRuntimeWriteManagerState(t, store, RuntimeWriteBreakerOpen)
+
+	fail.Store(false)
+	policy := RuntimeWritePolicy(WriteClassHotState, "test.recover-hot", "session:gc-1")
+	policy.Timeout = time.Second
+	if err := store.RuntimeUpdate(context.Background(), "gc-1", UpdateOpts{Metadata: map[string]string{"state": "running"}}, policy); err != nil {
+		t.Fatalf("hot-state RuntimeUpdate: %v", err)
+	}
+	waitForRuntimeWriteManagerState(t, store, RuntimeWriteBreakerClosed)
+}
+
+func TestBdStoreRuntimeWriteOpenBreakerAdmitsTimedRecoveryProbe(t *testing.T) {
+	var fail atomic.Bool
+	fail.Store(true)
+	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(ctx context.Context, _ string, _ string, args ...string) ([]byte, error) {
+		if fail.Load() {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		if len(args) > 0 && args[0] == "create" {
+			return []byte(`{"id":"gc-order-probe","title":"probe","status":"open","created_at":"2026-05-31T00:00:00Z"}`), nil
+		}
+		return []byte(`[]`), nil
+	})
+	for i := 0; i < 3; i++ {
+		policy := RuntimeWritePolicy(WriteClassAuditRepair, "test.breaker", "key-"+string(rune('0'+i)))
+		policy.Timeout = 5 * time.Millisecond
+		_ = store.RuntimeUpdate(context.Background(), "gc-1", UpdateOpts{Metadata: map[string]string{"i": "1"}}, policy)
+	}
+	waitForRuntimeWriteManagerState(t, store, RuntimeWriteBreakerOpen)
+
+	manager := store.runtimeWriteManager()
+	manager.mu.Lock()
+	manager.breakerOpened = time.Now().Add(-RuntimeWriteBreakerRecoveryAfter - time.Second)
+	manager.mu.Unlock()
+	fail.Store(false)
+
+	policy := RuntimeWritePolicy(WriteClassReservation, "test.recover-probe", "probe")
+	policy.Timeout = time.Second
+	if _, err := store.RuntimeCreate(context.Background(), Bead{ID: "gc-order-probe", Title: "probe"}, policy); err != nil {
+		t.Fatalf("RuntimeCreate recovery probe: %v", err)
+	}
+	waitForRuntimeWriteManagerState(t, store, RuntimeWriteBreakerClosed)
+}
+
 func TestBdStoreRuntimeWriteCoalescesIdempotencyKey(t *testing.T) {
 	var runnerCalls atomic.Int64
 	started := make(chan struct{})
@@ -766,4 +826,18 @@ func waitForRuntimeWriteManagerIdle(t *testing.T, store *BdStore, timeout time.D
 	}
 	stats := store.RuntimeWriteManagerStats()
 	t.Fatalf("runtime write manager still active after %s: active=%d queue_depth=%d", timeout, stats.Active, stats.QueueDepth)
+}
+
+func waitForRuntimeWriteManagerState(t *testing.T, store *BdStore, want RuntimeWriteBreakerState) {
+	t.Helper()
+	const timeout = time.Second
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if got := store.RuntimeWriteManagerStats().BreakerState; got == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stats := store.RuntimeWriteManagerStats()
+	t.Fatalf("runtime write breaker state = %q after %s, want %q (stats=%+v)", stats.BreakerState, timeout, want, stats)
 }

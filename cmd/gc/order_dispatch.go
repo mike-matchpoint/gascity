@@ -781,12 +781,21 @@ func (m *memoryOrderDispatcher) reserveOrderForDispatch(ctx context.Context, sto
 		logDispatchError(m.stderr, "gc: order dispatch: deferring %s because tracking reservation is degraded: %v", scoped, err)
 		stats.recordTrackingWriteFailure()
 		stats.recordDeferred("tracking_reservation")
-		m.leaseStore.markReservationDegraded(run.LeaseID, err)
+		if orderTrackingReservationNotStarted(err) {
+			m.leaseStore.completeAndRemove(run.LeaseID)
+		} else {
+			m.leaseStore.markReservationDegraded(run.LeaseID, err)
+		}
 		return orderDispatchRun{}, time.Time{}, false
 	}
 	m.leaseStore.markActive(run.LeaseID, effectiveTimeout(a, m.maxTimeout))
 	m.rememberDegradedRun(scoped, now)
 	return run, now, true
+}
+
+func orderTrackingReservationNotStarted(err error) bool {
+	var degraded *beads.DegradedWriteError
+	return errors.As(err, &degraded) && degraded.Outcome == beads.WriteOutcomeNotStarted
 }
 
 func (m *memoryOrderDispatcher) controllerStartID() string {

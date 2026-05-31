@@ -110,6 +110,12 @@ type orderDispatchTestRuntimeStore struct {
 	beads.Store
 }
 
+type notStartedOrderTrackingStore struct {
+	orderDispatchTestRuntimeStore
+
+	createResult beads.Bead
+}
+
 type rowCapRuntimeListStore struct {
 	beads.Store
 }
@@ -292,6 +298,16 @@ func (s orderDispatchTestRuntimeStore) RuntimeCreate(ctx context.Context, b bead
 		return res.bead, res.err
 	case <-ctx.Done():
 		return beads.Bead{}, ctx.Err()
+	}
+}
+
+func (s notStartedOrderTrackingStore) RuntimeCreate(_ context.Context, _ beads.Bead, policy beads.WritePolicy) (beads.Bead, error) {
+	return s.createResult, &beads.DegradedWriteError{
+		Class:     policy.Class,
+		Caller:    policy.Caller,
+		Operation: "create",
+		Outcome:   beads.WriteOutcomeNotStarted,
+		Err:       errors.New("runtime write circuit breaker open"),
 	}
 }
 
@@ -1649,6 +1665,57 @@ func TestOrderDispatchTrackingReservationTimeoutDefersOnlyAffectedOrder(t *testi
 	}
 	if got := payload.DeferReasons["tracking_reservation"]; got != 1 {
 		t.Fatalf("tracking_reservation defer reason = %d, want 1; payload=%+v", got, payload)
+	}
+	if got := mad.leaseStore.count(); got == 0 {
+		t.Fatal("ambiguous reservation timeout released local lease; want lease retained until expiry")
+	}
+}
+
+func TestOrderDispatchTrackingReservationNotStartedReleasesLocalLease(t *testing.T) {
+	base := beads.NewMemStore()
+	store := notStartedOrderTrackingStore{orderDispatchTestRuntimeStore: orderDispatchTestRuntimeStore{Store: base}}
+	var rec memRecorder
+	ran := false
+	fakeExec := func(_ context.Context, _, _ string, _ []string) ([]byte, error) {
+		ran = true
+		return []byte("ok\n"), nil
+	}
+	ad := buildOrderDispatcherFromListExec([]orders.Order{{
+		Name:     "tracking-required",
+		Trigger:  "cooldown",
+		Interval: "1s",
+		Exec:     "tracking-required",
+	}}, base, nil, fakeExec, &rec)
+	if ad == nil {
+		t.Fatal("expected non-nil dispatcher")
+	}
+	mad := ad.(*memoryOrderDispatcher)
+	mad.storeFn = func(execStoreTarget) (beads.Store, error) {
+		return store, nil
+	}
+
+	ad.dispatch(context.Background(), t.TempDir(), time.Now().Add(time.Hour))
+	ad.drain(context.Background())
+
+	if ran {
+		t.Fatal("tracking-required order ran after not-started reservation")
+	}
+	if got := mad.leaseStore.count(); got != 0 {
+		t.Fatalf("local leases = %d, want 0 after not-started reservation", got)
+	}
+	if got := len(trackingBeads(t, base, "order-run:tracking-required")); got != 0 {
+		t.Fatalf("tracking beads = %d, want none after not-started reservation", got)
+	}
+	event, ok := rec.orderDispatchTickEvent()
+	if !ok {
+		t.Fatal("missing order dispatch tick event")
+	}
+	var payload events.OrderDispatchTickPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatalf("decode tick payload: %v; raw=%s", err, event.Payload)
+	}
+	if payload.OrdersDeferred != 1 || payload.TrackingWriteFails != 1 {
+		t.Fatalf("tick payload = %+v, want one reservation failure", payload)
 	}
 }
 

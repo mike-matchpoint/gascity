@@ -45,6 +45,10 @@ const (
 	RuntimeWriteAuditRepairBudget       = time.Second
 	RuntimeWriteHotStateBudget          = 2 * time.Second
 	RuntimeWritePingBudget              = time.Second
+
+	// RuntimeWriteBreakerRecoveryAfter bounds how long a process-local writer
+	// can stay open-loop before it admits one bounded recovery probe.
+	RuntimeWriteBreakerRecoveryAfter = 30 * time.Second
 )
 
 // RuntimeWriteTracePath returns the default runtime-write trace path under
@@ -469,6 +473,7 @@ func (m *runtimeWriteManager) awaitResult(ctx context.Context, policy WritePolic
 func (m *runtimeWriteManager) admit(policy WritePolicy, op string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	now := time.Now()
 	switch m.breakerState {
 	case RuntimeWriteBreakerClosed:
 		return nil
@@ -482,6 +487,10 @@ func (m *runtimeWriteManager) admit(policy WritePolicy, op string) error {
 		case policy.Class == WriteClassHotState:
 			return nil
 		case op == "ping" && !m.recoveryProbe:
+			m.breakerState = RuntimeWriteBreakerHalfOpen
+			m.recoveryProbe = true
+			return nil
+		case !m.recoveryProbe && !m.breakerOpened.IsZero() && now.Sub(m.breakerOpened) >= RuntimeWriteBreakerRecoveryAfter:
 			m.breakerState = RuntimeWriteBreakerHalfOpen
 			m.recoveryProbe = true
 			return nil
@@ -544,7 +553,7 @@ func (m *runtimeWriteManager) loop() {
 func (m *runtimeWriteManager) recordResult(err error) {
 	if err == nil {
 		m.mu.Lock()
-		if m.breakerState == RuntimeWriteBreakerHalfOpen {
+		if m.breakerState != RuntimeWriteBreakerClosed {
 			m.breakerState = RuntimeWriteBreakerClosed
 			m.breakerOpened = time.Time{}
 			m.recoveryProbe = false
