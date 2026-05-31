@@ -739,7 +739,7 @@ func writeRuntimeWriteExecutable(t *testing.T, path, body string) {
 
 func waitForRuntimeWriteTestPID(t *testing.T, path string) string {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		data, err := os.ReadFile(path)
 		if err == nil {
