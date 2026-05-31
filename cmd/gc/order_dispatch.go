@@ -759,7 +759,7 @@ func (m *memoryOrderDispatcher) reserveOrderForDispatch(ctx context.Context, sto
 			"gc.order.scoped":                  scoped,
 			"gc.order.trigger_kind":            a.Trigger,
 			"gc.order.trigger_fingerprint":     reservation.Fingerprint,
-			"gc.order.reservation_input":       reservation.Input,
+			"gc.order.reservation_input":       orderRuntimeReservationMetadataInput(reservation.Input),
 			"gc.order.reservation_hash":        reservation.Hash,
 			"gc.order.lease_id":                reservation.Lease.LeaseID,
 			"gc.idempotency_key":               reservation.Hash,

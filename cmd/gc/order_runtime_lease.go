@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/base32"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -522,6 +523,10 @@ func orderRuntimeReservationFor(a orders.Order, storeKey, storePrefix string, no
 			EventSeq:                eventSeq,
 		},
 	}
+}
+
+func orderRuntimeReservationMetadataInput(input string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(input))
 }
 
 func orderRuntimeTrackingIDPrefix(prefix string) string {

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -2091,7 +2092,11 @@ func TestOrderDispatchExecDue(t *testing.T) {
 	all := trackingBeads(t, store, "order-run:wasteland-poll")
 	found := false
 	hasExec := false
+	var tracking beads.Bead
 	for _, b := range all {
+		if strings.HasPrefix(b.Title, "order:") {
+			tracking = b
+		}
 		for _, l := range b.Labels {
 			if l == "order-run:wasteland-poll" {
 				found = true
@@ -2106,6 +2111,20 @@ func TestOrderDispatchExecDue(t *testing.T) {
 	}
 	if !hasExec {
 		t.Error("tracking bead missing exec label")
+	}
+	encodedInput := tracking.Metadata["gc.order.reservation_input"]
+	if encodedInput == "" {
+		t.Fatal("tracking bead missing gc.order.reservation_input metadata")
+	}
+	if strings.ContainsRune(encodedInput, '\x00') {
+		t.Fatalf("tracking reservation input metadata contains raw NUL: %q", encodedInput)
+	}
+	decodedInput, err := base64.RawURLEncoding.DecodeString(encodedInput)
+	if err != nil {
+		t.Fatalf("tracking reservation input metadata is not base64url: %v", err)
+	}
+	if !strings.ContainsRune(string(decodedInput), '\x00') {
+		t.Fatalf("decoded tracking reservation input = %q, want NUL-separated audit input", decodedInput)
 	}
 
 	// Check events.
