@@ -301,6 +301,94 @@ func TestIsRunning(t *testing.T) {
 	}
 }
 
+func TestIsDeadRuntimeSessionOldRunningPodWithDeadTmux(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+
+	fake.pods["gc-test-agent"] = &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "gc-test-agent",
+			Labels:            map[string]string{"app": "gc-agent", "gc-session": "gc-test-agent"},
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-startupGracePeriod - time.Minute)),
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	fake.setExecResult("gc-test-agent",
+		[]string{"tmux", "has-session", "-t", "main"}, "",
+		fmt.Errorf("no server running on /tmp/tmux-1000/default"))
+
+	dead, err := p.IsDeadRuntimeSession("gc-test-agent")
+	if err != nil {
+		t.Fatalf("IsDeadRuntimeSession: %v", err)
+	}
+	if !dead {
+		t.Fatal("IsDeadRuntimeSession = false, want true for old running pod with dead tmux")
+	}
+}
+
+func TestIsDeadRuntimeSessionYoungDeadTmuxPodStillInitializing(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+
+	fake.pods["gc-test-agent"] = &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "gc-test-agent",
+			Labels:            map[string]string{"app": "gc-agent", "gc-session": "gc-test-agent"},
+			CreationTimestamp: metav1.Now(),
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	fake.setExecResult("gc-test-agent",
+		[]string{"tmux", "has-session", "-t", "main"}, "",
+		fmt.Errorf("no server running on /tmp/tmux-1000/default"))
+
+	dead, err := p.IsDeadRuntimeSession("gc-test-agent")
+	if err != nil {
+		t.Fatalf("IsDeadRuntimeSession: %v", err)
+	}
+	if dead {
+		t.Fatal("IsDeadRuntimeSession = true, want false while pod is still inside startup grace")
+	}
+}
+
+func TestIsDeadRuntimeSessionLiveTmuxFalse(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+
+	addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+	fake.pods["gc-test-agent"].CreationTimestamp = metav1.NewTime(time.Now().Add(-startupGracePeriod - time.Minute))
+	fake.setExecResult("gc-test-agent", []string{"tmux", "has-session", "-t", "main"}, "", nil)
+
+	dead, err := p.IsDeadRuntimeSession("gc-test-agent")
+	if err != nil {
+		t.Fatalf("IsDeadRuntimeSession: %v", err)
+	}
+	if dead {
+		t.Fatal("IsDeadRuntimeSession = true, want false for live tmux")
+	}
+}
+
+func TestIsDeadRuntimeSessionTerminalPodTrue(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+
+	fake.pods["gc-test-agent"] = &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "gc-test-agent",
+			Labels: map[string]string{"app": "gc-agent", "gc-session": "gc-test-agent"},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodFailed},
+	}
+
+	dead, err := p.IsDeadRuntimeSession("gc-test-agent")
+	if err != nil {
+		t.Fatalf("IsDeadRuntimeSession: %v", err)
+	}
+	if !dead {
+		t.Fatal("IsDeadRuntimeSession = false, want true for failed pod")
+	}
+}
+
 func TestStop(t *testing.T) {
 	fake := newFakeK8sOps()
 	p := newProviderWithOps(fake)

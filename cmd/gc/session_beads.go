@@ -1882,21 +1882,21 @@ func cleanupDeadRuntimeSessionCorpses(
 	if !ok {
 		return 0
 	}
-	visible, err := sp.ListRunning("")
+	artifacts, err := runtime.ListRuntimeArtifacts(sp, "")
 	partialList := runtime.IsPartialListError(err)
 	if err != nil && !partialList {
-		fmt.Fprintf(stderr, "session reconciler: listing runtime sessions for dead cleanup: %v\n", err) //nolint:errcheck
+		fmt.Fprintf(stderr, "session reconciler: listing runtime artifacts for dead cleanup: %v\n", err) //nolint:errcheck
 		return 0
 	}
 	if partialList {
-		fmt.Fprintf(stderr, "session reconciler: listing runtime sessions partially failed for dead cleanup; checking %d visible session(s): %v\n", len(visible), err) //nolint:errcheck
+		fmt.Fprintf(stderr, "session reconciler: listing runtime artifacts partially failed for dead cleanup; checking %d visible artifact(s): %v\n", len(artifacts), err) //nolint:errcheck
 	}
-	if len(visible) == 0 {
+	if len(artifacts) == 0 {
 		return 0
 	}
-	visibleSet := make(map[string]bool, len(visible))
-	for _, name := range visible {
-		name = strings.TrimSpace(name)
+	visibleSet := make(map[string]bool, len(artifacts))
+	for _, artifact := range artifacts {
+		name := strings.TrimSpace(artifact.Name)
 		if name != "" {
 			visibleSet[name] = true
 		}
@@ -1909,7 +1909,10 @@ func cleanupDeadRuntimeSessionCorpses(
 	seen := make(map[string]bool)
 	for _, b := range sessionBeads.Open() {
 		pendingCreate := strings.TrimSpace(b.Metadata["pending_create_claim"]) == "true"
-		if pendingCreate || (dt != nil && dt.get(b.ID) != nil) || isNamedSessionBead(b) {
+		if pendingCreate || (dt != nil && dt.get(b.ID) != nil) {
+			continue
+		}
+		if isNamedSessionBead(b) && !terminalNamedSessionAllowsDeadArtifactCleanup(b) {
 			continue
 		}
 		name := strings.TrimSpace(b.Metadata["session_name"])
@@ -1936,6 +1939,16 @@ func cleanupDeadRuntimeSessionCorpses(
 		cleaned++
 	}
 	return cleaned
+}
+
+func terminalNamedSessionAllowsDeadArtifactCleanup(b beads.Bead) bool {
+	state := strings.TrimSpace(b.Metadata["state"])
+	switch state {
+	case "drained", string(session.StateAsleep), string(session.StateArchived):
+		return true
+	default:
+		return false
+	}
 }
 
 // reapRuntimesBoundToClosedBeads reconciles live runtime sessions whose

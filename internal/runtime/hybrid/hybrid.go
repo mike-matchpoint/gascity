@@ -18,11 +18,14 @@ type Provider struct {
 }
 
 var (
-	_ runtime.Provider                      = (*Provider)(nil)
-	_ runtime.DeadRuntimeSessionChecker     = (*Provider)(nil)
-	_ runtime.InteractionProvider           = (*Provider)(nil)
-	_ runtime.InterruptBoundaryWaitProvider = (*Provider)(nil)
-	_ runtime.InterruptedTurnResetProvider  = (*Provider)(nil)
+	_ runtime.Provider                             = (*Provider)(nil)
+	_ runtime.DeadRuntimeSessionChecker            = (*Provider)(nil)
+	_ runtime.InteractionProvider                  = (*Provider)(nil)
+	_ runtime.InterruptBoundaryWaitProvider        = (*Provider)(nil)
+	_ runtime.InterruptedTurnResetProvider         = (*Provider)(nil)
+	_ runtime.ProviderRuntimeIdentityReporter      = (*Provider)(nil)
+	_ runtime.ProviderRuntimeCompatibilityObserver = (*Provider)(nil)
+	_ runtime.RuntimeArtifactLister                = (*Provider)(nil)
 )
 
 // New creates a hybrid provider. isRemote returns true for sessions
@@ -66,6 +69,31 @@ func (p *Provider) IsDeadRuntimeSession(name string) (bool, error) {
 		return false, nil
 	}
 	return checker.IsDeadRuntimeSession(name)
+}
+
+// DesiredProviderRuntimeIdentity delegates to the routed backend when it can
+// report provider substrate identity.
+func (p *Provider) DesiredProviderRuntimeIdentity(ctx context.Context, name string, cfg runtime.Config) (runtime.ProviderRuntimeIdentity, error) {
+	reporter, ok := p.route(name).(runtime.ProviderRuntimeIdentityReporter)
+	if !ok {
+		return runtime.ProviderRuntimeIdentity{}, nil
+	}
+	return reporter.DesiredProviderRuntimeIdentity(ctx, name, cfg)
+}
+
+// ObserveRuntimeCompatibility delegates to the routed backend when it can
+// compare visible runtime artifacts with the desired provider substrate.
+func (p *Provider) ObserveRuntimeCompatibility(ctx context.Context, name string, cfg runtime.Config) (runtime.CompatibilityObservation, error) {
+	observer, ok := p.route(name).(runtime.ProviderRuntimeCompatibilityObserver)
+	if !ok {
+		return runtime.CompatibilityObservation{
+			Supported:  false,
+			Exists:     false,
+			Compatible: true,
+			Reason:     "unsupported",
+		}, nil
+	}
+	return observer.ObserveRuntimeCompatibility(ctx, name, cfg)
 }
 
 // IsAttached delegates to the routed backend.
@@ -170,6 +198,17 @@ func (p *Provider) ListRunning(prefix string) ([]string, error) {
 	return runtime.MergeBackendListResults(
 		runtime.BackendListResult{Label: "local", Names: local, Err: lErr},
 		runtime.BackendListResult{Label: "remote", Names: remote, Err: rErr},
+	)
+}
+
+// ListRuntimeArtifacts queries both backends so artifact cleanup can see
+// non-running remote pods as well as local sessions.
+func (p *Provider) ListRuntimeArtifacts(prefix string) ([]runtime.RuntimeArtifact, error) {
+	local, lErr := runtime.ListRuntimeArtifacts(p.local, prefix)
+	remote, rErr := runtime.ListRuntimeArtifacts(p.remote, prefix)
+	return runtime.MergeBackendArtifactResults(
+		runtime.BackendArtifactResult{Label: "local", Artifacts: local, Err: lErr},
+		runtime.BackendArtifactResult{Label: "remote", Artifacts: remote, Err: rErr},
 	)
 }
 

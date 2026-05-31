@@ -41,6 +41,13 @@ type BackendListResult struct {
 	Err   error
 }
 
+// BackendArtifactResult captures one backend's runtime artifact-list result.
+type BackendArtifactResult struct {
+	Label     string
+	Artifacts []RuntimeArtifact
+	Err       error
+}
+
 // IsPartialListError reports whether err represents a degraded-but-usable
 // ListRunning result from one or more failed backends.
 func IsPartialListError(err error) bool {
@@ -88,6 +95,39 @@ func ListRuntimeArtifacts(sp Provider, prefix string) ([]RuntimeArtifact, error)
 		artifacts = append(artifacts, RuntimeArtifact{Name: name})
 	}
 	return artifacts, err
+}
+
+// MergeBackendArtifactResults merges provider artifact-list results. On
+// partial backend failure it returns the best-effort merged artifacts plus a
+// [PartialListError] so cleanup can still inspect the healthy backend while
+// surfacing degradation.
+func MergeBackendArtifactResults(results ...BackendArtifactResult) ([]RuntimeArtifact, error) {
+	merged := make([]RuntimeArtifact, 0)
+	failures := make([]error, 0, len(results))
+	failed := 0
+
+	for _, result := range results {
+		merged = append(merged, result.Artifacts...)
+	}
+
+	for _, result := range results {
+		if result.Err == nil {
+			continue
+		}
+		failed++
+		failures = append(failures, fmt.Errorf("%s backend: %w", result.Label, result.Err))
+	}
+
+	if len(failures) == 0 {
+		return merged, nil
+	}
+	if len(merged) > 0 {
+		return merged, &PartialListError{Err: errors.Join(failures...)}
+	}
+	if failed == len(results) {
+		return nil, errors.Join(failures...)
+	}
+	return merged, &PartialListError{Err: errors.Join(failures...)}
 }
 
 // MergeBackendListResults merges provider ListRunning results. On partial
