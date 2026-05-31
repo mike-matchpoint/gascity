@@ -226,6 +226,10 @@ func (s *demandTierRecordingStore) List(query beads.ListQuery) ([]beads.Bead, er
 	return s.MemStore.List(query)
 }
 
+func (s *demandTierRecordingStore) RuntimeList(_ context.Context, query beads.ListQuery, _ beads.ReadPolicy) ([]beads.Bead, error) {
+	return s.List(query)
+}
+
 func (s *demandTierRecordingStore) WispTierLists() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

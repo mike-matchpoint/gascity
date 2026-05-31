@@ -1,6 +1,7 @@
 package nudgequeue
 
 import (
+	"context"
 	"errors"
 	"log"
 	"time"
@@ -150,11 +151,13 @@ func terminalNudgeBeads(store beads.Store, nudgeID string) ([]beads.Bead, error)
 	if nudgeID == "" {
 		return nil, nil
 	}
-	items, err := store.List(beads.ListQuery{
+	policy := beads.RuntimeReadPolicy(beads.ReadClassHotAuthoritative, "nudgequeue.withdraw.list")
+	policy.MaxRows = NudgeLookupLimit + 2
+	items, err := beads.RuntimeList(context.Background(), store, beads.ListQuery{
 		Label: "nudge:" + nudgeID,
 		Limit: NudgeLookupLimit + 1,
 		Sort:  beads.SortCreatedDesc,
-	})
+	}, policy)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +179,10 @@ func markTerminalCandidates(store beads.Store, nudgeID string, candidates []with
 			continue
 		}
 		seen[candidate.BeadID] = true
-		if err := markTerminalBeadByID(store, candidate.BeadID, now); err != nil {
+		if err := markTerminalBeadByID(store, candidate.BeadID, now); errors.Is(err, beads.ErrNotFound) {
+			legacyLookup = true
+			continue
+		} else if err != nil {
 			return err
 		}
 	}
@@ -212,9 +218,12 @@ func markTerminalBeadByID(store beads.Store, beadID, now string) error {
 	if beadID == "" {
 		return nil
 	}
-	item, err := store.Get(beadID)
+	item, err := beads.RuntimeGet(context.Background(), store, beadID, beads.RuntimeReadPolicy(beads.ReadClassHotAuthoritative, "nudgequeue.withdraw.get"))
+	if beads.IsDegradedRead(err) {
+		return beads.ErrNotFound
+	}
 	if errors.Is(err, beads.ErrNotFound) {
-		return nil
+		return beads.ErrNotFound
 	}
 	if err != nil {
 		return err
@@ -226,22 +235,23 @@ func markTerminalBeadByID(store beads.Store, beadID, now string) error {
 }
 
 func markTerminalBead(store beads.Store, item beads.Bead, now string) error {
-	if err := store.SetMetadataBatch(item.ID, map[string]string{
+	metadata := map[string]string{
 		"state":           "failed",
 		"terminal_reason": "wait-canceled",
 		"commit_boundary": "delivery-withdrawn",
 		"terminal_at":     now,
-	}); err != nil {
-		if errors.Is(err, beads.ErrNotFound) {
-			return nil
-		}
-		return err
+		"close_reason":    "wait nudge canceled before delivery",
 	}
-	if err := store.Close(item.ID); err != nil {
+	_, err := nudgequeueRuntimeCloseAll(context.Background(), store, []string{item.ID}, metadata, beads.RuntimeWritePolicy(beads.WriteClassHotState, "nudgequeue.withdraw.close", item.ID))
+	if err != nil {
 		if errors.Is(err, beads.ErrNotFound) {
 			return nil
 		}
 		return err
 	}
 	return nil
+}
+
+func nudgequeueRuntimeCloseAll(ctx context.Context, store beads.Store, ids []string, metadata map[string]string, policy beads.WritePolicy) (int, error) {
+	return beads.RuntimeCloseAll(ctx, store, ids, metadata, policy)
 }

@@ -359,14 +359,72 @@ func (s waitNudgeMetadataFailStore) SetMetadata(id, key, value string) error {
 	return s.MemStore.SetMetadata(id, key, value)
 }
 
+func (s waitNudgeMetadataFailStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	if _, ok := opts.Metadata["nudge_id"]; ok {
+		return errors.New("set nudge id failed")
+	}
+	return s.MemStore.RuntimeUpdate(ctx, id, opts, policy)
+}
+
+type waitHoldClearFailOnceStore struct {
+	*beads.MemStore
+	failed bool
+}
+
+func (s *waitHoldClearFailOnceStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	if !s.failed && opts.Metadata["wait_hold"] == "" {
+		s.failed = true
+		return errors.New("injected wait hold clear failure")
+	}
+	return s.MemStore.RuntimeUpdate(ctx, id, opts, policy)
+}
+
+type waitForegroundGetFailStore struct {
+	*beads.MemStore
+}
+
+func (s waitForegroundGetFailStore) Get(string) (beads.Bead, error) {
+	return beads.Bead{}, errors.New("foreground get used")
+}
+
+func (s waitForegroundGetFailStore) RuntimeGet(ctx context.Context, id string, policy beads.ReadPolicy) (beads.Bead, error) {
+	return s.MemStore.RuntimeGet(ctx, id, policy)
+}
+
 func (s *waitGetSpyStore) Get(id string) (beads.Bead, error) {
 	s.getIDs = append(s.getIDs, id)
 	return s.Store.Get(id)
 }
 
+func (s *waitGetSpyStore) RuntimeGet(ctx context.Context, id string, policy beads.ReadPolicy) (beads.Bead, error) {
+	s.getIDs = append(s.getIDs, id)
+	return beads.RuntimeGet(ctx, s.Store, id, policy)
+}
+
+func (s *waitGetSpyStore) RuntimeList(ctx context.Context, query beads.ListQuery, policy beads.ReadPolicy) ([]beads.Bead, error) {
+	return beads.RuntimeList(ctx, s.Store, query, policy)
+}
+
+func (s *waitGetSpyStore) RuntimeCreate(ctx context.Context, b beads.Bead, policy beads.WritePolicy) (beads.Bead, error) {
+	return beads.RuntimeCreate(ctx, s.Store, b, policy)
+}
+
+func (s *waitGetSpyStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	return beads.RuntimeUpdate(ctx, s.Store, id, opts, policy)
+}
+
+func (s *waitGetSpyStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy beads.WritePolicy) (int, error) {
+	return beads.RuntimeCloseAll(ctx, s.Store, ids, metadata, policy)
+}
+
 func (s *waitListQueryCaptureStore) List(query beads.ListQuery) ([]beads.Bead, error) {
 	s.queries = append(s.queries, query)
 	return s.Store.List(query)
+}
+
+func (s *waitListQueryCaptureStore) RuntimeList(ctx context.Context, query beads.ListQuery, policy beads.ReadPolicy) ([]beads.Bead, error) {
+	s.queries = append(s.queries, query)
+	return beads.RuntimeList(ctx, s.Store, query, policy)
 }
 
 func (s waitGlobalListOmitStore) List(query beads.ListQuery) ([]beads.Bead, error) {
@@ -376,6 +434,26 @@ func (s waitGlobalListOmitStore) List(query beads.ListQuery) ([]beads.Bead, erro
 	return s.Store.List(query)
 }
 
+func (s waitGlobalListOmitStore) RuntimeList(_ context.Context, query beads.ListQuery, _ beads.ReadPolicy) ([]beads.Bead, error) {
+	return s.List(query)
+}
+
+func (s waitGlobalListOmitStore) RuntimeGet(ctx context.Context, id string, policy beads.ReadPolicy) (beads.Bead, error) {
+	return beads.RuntimeGet(ctx, s.Store, id, policy)
+}
+
+func (s waitGlobalListOmitStore) RuntimeCreate(ctx context.Context, b beads.Bead, policy beads.WritePolicy) (beads.Bead, error) {
+	return beads.RuntimeCreate(ctx, s.Store, b, policy)
+}
+
+func (s waitGlobalListOmitStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	return beads.RuntimeUpdate(ctx, s.Store, id, opts, policy)
+}
+
+func (s waitGlobalListOmitStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy beads.WritePolicy) (int, error) {
+	return beads.RuntimeCloseAll(ctx, s.Store, ids, metadata, policy)
+}
+
 func (s waitGlobalListLimitStore) List(query beads.ListQuery) ([]beads.Bead, error) {
 	if query.Label == waitBeadLabel {
 		return waitLookupLimitStore(s).List(query)
@@ -383,11 +461,51 @@ func (s waitGlobalListLimitStore) List(query beads.ListQuery) ([]beads.Bead, err
 	return s.Store.List(query)
 }
 
+func (s waitGlobalListLimitStore) RuntimeList(_ context.Context, query beads.ListQuery, _ beads.ReadPolicy) ([]beads.Bead, error) {
+	return s.List(query)
+}
+
+func (s waitGlobalListLimitStore) RuntimeGet(ctx context.Context, id string, policy beads.ReadPolicy) (beads.Bead, error) {
+	return beads.RuntimeGet(ctx, s.Store, id, policy)
+}
+
+func (s waitGlobalListLimitStore) RuntimeCreate(ctx context.Context, b beads.Bead, policy beads.WritePolicy) (beads.Bead, error) {
+	return beads.RuntimeCreate(ctx, s.Store, b, policy)
+}
+
+func (s waitGlobalListLimitStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	return beads.RuntimeUpdate(ctx, s.Store, id, opts, policy)
+}
+
+func (s waitGlobalListLimitStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy beads.WritePolicy) (int, error) {
+	return beads.RuntimeCloseAll(ctx, s.Store, ids, metadata, policy)
+}
+
 func (s waitGlobalListErrorStore) List(query beads.ListQuery) ([]beads.Bead, error) {
 	if query.Label == waitBeadLabel {
 		return nil, errors.New("global wait list failed")
 	}
 	return s.Store.List(query)
+}
+
+func (s waitGlobalListErrorStore) RuntimeList(_ context.Context, query beads.ListQuery, _ beads.ReadPolicy) ([]beads.Bead, error) {
+	return s.List(query)
+}
+
+func (s waitGlobalListErrorStore) RuntimeGet(ctx context.Context, id string, policy beads.ReadPolicy) (beads.Bead, error) {
+	return beads.RuntimeGet(ctx, s.Store, id, policy)
+}
+
+func (s waitGlobalListErrorStore) RuntimeCreate(ctx context.Context, b beads.Bead, policy beads.WritePolicy) (beads.Bead, error) {
+	return beads.RuntimeCreate(ctx, s.Store, b, policy)
+}
+
+func (s waitGlobalListErrorStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	return beads.RuntimeUpdate(ctx, s.Store, id, opts, policy)
+}
+
+func (s waitGlobalListErrorStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy beads.WritePolicy) (int, error) {
+	return beads.RuntimeCloseAll(ctx, s.Store, ids, metadata, policy)
 }
 
 func (s waitOneSessionListLimitStore) List(query beads.ListQuery) ([]beads.Bead, error) {
@@ -398,6 +516,26 @@ func (s waitOneSessionListLimitStore) List(query beads.ListQuery) ([]beads.Bead,
 		return waitLookupLimitStore{Store: s.Store}.List(query)
 	}
 	return s.Store.List(query)
+}
+
+func (s waitOneSessionListLimitStore) RuntimeList(_ context.Context, query beads.ListQuery, _ beads.ReadPolicy) ([]beads.Bead, error) {
+	return s.List(query)
+}
+
+func (s waitOneSessionListLimitStore) RuntimeGet(ctx context.Context, id string, policy beads.ReadPolicy) (beads.Bead, error) {
+	return beads.RuntimeGet(ctx, s.Store, id, policy)
+}
+
+func (s waitOneSessionListLimitStore) RuntimeCreate(ctx context.Context, b beads.Bead, policy beads.WritePolicy) (beads.Bead, error) {
+	return beads.RuntimeCreate(ctx, s.Store, b, policy)
+}
+
+func (s waitOneSessionListLimitStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	return beads.RuntimeUpdate(ctx, s.Store, id, opts, policy)
+}
+
+func (s waitOneSessionListLimitStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy beads.WritePolicy) (int, error) {
+	return beads.RuntimeCloseAll(ctx, s.Store, ids, metadata, policy)
 }
 
 func (s waitLookupLimitStore) List(query beads.ListQuery) ([]beads.Bead, error) {
@@ -417,6 +555,26 @@ func (s waitLookupLimitStore) List(query beads.ListQuery) ([]beads.Bead, error) 
 		}
 	}
 	return items, nil
+}
+
+func (s waitLookupLimitStore) RuntimeList(_ context.Context, query beads.ListQuery, _ beads.ReadPolicy) ([]beads.Bead, error) {
+	return s.List(query)
+}
+
+func (s waitLookupLimitStore) RuntimeGet(ctx context.Context, id string, policy beads.ReadPolicy) (beads.Bead, error) {
+	return beads.RuntimeGet(ctx, s.Store, id, policy)
+}
+
+func (s waitLookupLimitStore) RuntimeCreate(ctx context.Context, b beads.Bead, policy beads.WritePolicy) (beads.Bead, error) {
+	return beads.RuntimeCreate(ctx, s.Store, b, policy)
+}
+
+func (s waitLookupLimitStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	return beads.RuntimeUpdate(ctx, s.Store, id, opts, policy)
+}
+
+func (s waitLookupLimitStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy beads.WritePolicy) (int, error) {
+	return beads.RuntimeCloseAll(ctx, s.Store, ids, metadata, policy)
 }
 
 var (
@@ -793,6 +951,60 @@ func TestPrepareWaitWakeState_MarksDepsReady(t *testing.T) {
 	}
 }
 
+func TestPrepareWaitWakeState_DependencyReadsUseRuntimeGet(t *testing.T) {
+	store := waitForegroundGetFailStore{MemStore: beads.NewMemStore()}
+	sessionBead, err := store.Create(beads.Bead{
+		Type:   sessionBeadType,
+		Labels: []string{sessionBeadLabel},
+		Metadata: map[string]string{
+			"session_name":       "worker",
+			"agent_name":         "worker",
+			"continuation_epoch": "1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create session bead: %v", err)
+	}
+	dep, err := store.Create(beads.Bead{Title: "dep"})
+	if err != nil {
+		t.Fatalf("create dep bead: %v", err)
+	}
+	if err := store.Close(dep.ID); err != nil {
+		t.Fatalf("close dep bead: %v", err)
+	}
+	waitBead, err := store.Create(beads.Bead{
+		Type:   waitBeadType,
+		Labels: []string{waitBeadLabel, "session:" + sessionBead.ID},
+		Metadata: map[string]string{
+			"session_id":       sessionBead.ID,
+			"session_name":     "worker",
+			"kind":             "deps",
+			"state":            waitStatePending,
+			"dep_ids":          dep.ID,
+			"dep_mode":         "all",
+			"registered_epoch": "1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create wait bead: %v", err)
+	}
+
+	readyWaitSet, err := prepareWaitWakeState(store, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("prepareWaitWakeState: %v", err)
+	}
+	if !readyWaitSet[sessionBead.ID] {
+		t.Fatalf("readyWaitSet missing session %s", sessionBead.ID)
+	}
+	updated, err := store.MemStore.Get(waitBead.ID)
+	if err != nil {
+		t.Fatalf("store.Get(wait): %v", err)
+	}
+	if updated.Metadata["state"] != waitStateReady {
+		t.Fatalf("wait state = %q, want %q", updated.Metadata["state"], waitStateReady)
+	}
+}
+
 func TestPrepareWaitWakeState_CancelsWaitForClosedSession(t *testing.T) {
 	store := beads.NewMemStore()
 	sessionBead, err := store.Create(beads.Bead{
@@ -1140,6 +1352,69 @@ func TestPrepareWaitWakeState_CancelsStaleEpochWaitForClosedSession(t *testing.T
 	}
 	if updated.Status != "closed" {
 		t.Fatalf("wait status = %q, want closed", updated.Status)
+	}
+}
+
+func TestPrepareWaitWakeState_RepairsWaitHoldAfterClearFailure(t *testing.T) {
+	now := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+	store := &waitHoldClearFailOnceStore{MemStore: beads.NewMemStore()}
+	sessionBead, err := store.Create(beads.Bead{
+		Type:   sessionBeadType,
+		Labels: []string{sessionBeadLabel},
+		Metadata: map[string]string{
+			"session_name": "worker",
+			"agent_name":   "worker",
+			"state":        string(sessionpkg.StateActive),
+			"wait_hold":    "true",
+			"sleep_intent": "wait-hold",
+			"sleep_reason": "wait-hold",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create session bead: %v", err)
+	}
+	waitBead, err := store.Create(beads.Bead{
+		Type:   waitBeadType,
+		Labels: []string{waitBeadLabel, "session:" + sessionBead.ID},
+		Metadata: map[string]string{
+			"session_id":   sessionBead.ID,
+			"session_name": "worker",
+			"kind":         "deps",
+			"state":        waitStatePending,
+			"expires_at":   now.Add(-time.Minute).Format(time.RFC3339),
+		},
+	})
+	if err != nil {
+		t.Fatalf("create wait bead: %v", err)
+	}
+
+	if _, err := prepareWaitWakeState(store, now); err == nil || !strings.Contains(err.Error(), "injected wait hold clear failure") {
+		t.Fatalf("prepareWaitWakeState error = %v, want injected wait hold clear failure", err)
+	}
+	closedWait, err := store.Get(waitBead.ID)
+	if err != nil {
+		t.Fatalf("store.Get(wait): %v", err)
+	}
+	if closedWait.Status != "closed" || closedWait.Metadata["state"] != waitStateExpired {
+		t.Fatalf("wait after failed clear = status %q state %q, want closed/%s", closedWait.Status, closedWait.Metadata["state"], waitStateExpired)
+	}
+	held, err := store.Get(sessionBead.ID)
+	if err != nil {
+		t.Fatalf("store.Get(session): %v", err)
+	}
+	if held.Metadata["wait_hold"] != "true" {
+		t.Fatalf("wait_hold after failed clear = %q, want true", held.Metadata["wait_hold"])
+	}
+
+	if _, err := prepareWaitWakeState(store, now.Add(time.Second)); err != nil {
+		t.Fatalf("second prepareWaitWakeState: %v", err)
+	}
+	repaired, err := store.Get(sessionBead.ID)
+	if err != nil {
+		t.Fatalf("store.Get(session repaired): %v", err)
+	}
+	if repaired.Metadata["wait_hold"] != "" || repaired.Metadata["sleep_intent"] != "" || repaired.Metadata["sleep_reason"] != "" {
+		t.Fatalf("wait hold metadata after repair = wait_hold:%q sleep_intent:%q sleep_reason:%q, want all empty", repaired.Metadata["wait_hold"], repaired.Metadata["sleep_intent"], repaired.Metadata["sleep_reason"])
 	}
 }
 
@@ -1698,6 +1973,154 @@ func TestDispatchReadyWaitNudges_EnqueuesDeterministicNudge(t *testing.T) {
 	}
 	if _, err := refreshedStore.Get(pending[0].BeadID); err != nil {
 		t.Fatalf("refreshedStore.Get(%s): %v", pending[0].BeadID, err)
+	}
+}
+
+func TestDispatchReadyWaitNudges_DoesNotRequeueTerminalNudge(t *testing.T) {
+	setWaitTestFileBeads(t)
+	dir := t.TempDir()
+	store, err := openCityStoreAt(dir)
+	if err != nil {
+		t.Fatalf("openCityStoreAt: %v", err)
+	}
+	sessionBead, err := store.Create(beads.Bead{
+		Type:   sessionBeadType,
+		Labels: []string{sessionBeadLabel},
+		Metadata: map[string]string{
+			"session_name":       "worker",
+			"agent_name":         "worker",
+			"continuation_epoch": "1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create session bead: %v", err)
+	}
+	waitBead, err := store.Create(beads.Bead{
+		Type:        waitBeadType,
+		Labels:      []string{waitBeadLabel, "session:" + sessionBead.ID},
+		Description: "Continue after review closes.",
+		Metadata: map[string]string{
+			"session_id":       sessionBead.ID,
+			"session_name":     "worker",
+			"kind":             "deps",
+			"state":            waitStateReady,
+			"dep_ids":          "gc-1",
+			"dep_mode":         "all",
+			"registered_epoch": "1",
+			"delivery_attempt": "1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create wait bead: %v", err)
+	}
+	nudgeID := waitNudgeID(waitBead)
+	nudgeBead, err := store.Create(beads.Bead{
+		ID:     nudgeID,
+		Title:  "nudge:" + nudgeID,
+		Type:   nudgeBeadType,
+		Labels: []string{nudgeBeadLabel, "agent:worker", "nudge:" + nudgeID, "source:wait"},
+		Metadata: map[string]string{
+			"nudge_id": nudgeID,
+			"state":    "injected",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create terminal nudge bead: %v", err)
+	}
+	if _, err := store.CloseAll([]string{nudgeBead.ID}, map[string]string{
+		"state":        "injected",
+		"close_reason": "nudge delivered before redispatch",
+	}); err != nil {
+		t.Fatalf("close terminal nudge bead: %v", err)
+	}
+	sp := runtime.NewFake()
+	if err := sp.Start(context.Background(), "worker", runtime.Config{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	if err := dispatchReadyWaitNudges(dir, store, sp, time.Now().UTC()); err != nil {
+		t.Fatalf("dispatchReadyWaitNudges: %v", err)
+	}
+	pending, inFlight, dead, err := listQueuedNudges(dir, "worker", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("listQueuedNudges: %v", err)
+	}
+	if len(pending) != 0 || len(inFlight) != 0 || len(dead) != 0 {
+		t.Fatalf("pending=%d inFlight=%d dead=%d, want 0/0/0", len(pending), len(inFlight), len(dead))
+	}
+	updated, err := store.Get(waitBead.ID)
+	if err != nil {
+		t.Fatalf("Get(wait): %v", err)
+	}
+	if got := updated.Metadata["nudge_id"]; got != nudgeID {
+		t.Fatalf("wait nudge_id = %q, want %q", got, nudgeID)
+	}
+}
+
+func TestDispatchReadyWaitNudges_QueuesWhenOnlyOpenAuditNudgeExists(t *testing.T) {
+	setWaitTestFileBeads(t)
+	dir := t.TempDir()
+	store, err := openCityStoreAt(dir)
+	if err != nil {
+		t.Fatalf("openCityStoreAt: %v", err)
+	}
+	sessionBead, err := store.Create(beads.Bead{
+		Type:   sessionBeadType,
+		Labels: []string{sessionBeadLabel},
+		Metadata: map[string]string{
+			"session_name":       "worker",
+			"agent_name":         "worker",
+			"continuation_epoch": "1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create session bead: %v", err)
+	}
+	waitBead, err := store.Create(beads.Bead{
+		Type:        waitBeadType,
+		Labels:      []string{waitBeadLabel, "session:" + sessionBead.ID},
+		Description: "Continue after review closes.",
+		Metadata: map[string]string{
+			"session_id":       sessionBead.ID,
+			"session_name":     "worker",
+			"kind":             "deps",
+			"state":            waitStateReady,
+			"dep_ids":          "gc-1",
+			"dep_mode":         "all",
+			"registered_epoch": "1",
+			"delivery_attempt": "1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create wait bead: %v", err)
+	}
+	nudgeID := waitNudgeID(waitBead)
+	audit, err := store.Create(beads.Bead{
+		ID:     nudgeID,
+		Title:  "nudge:" + nudgeID,
+		Type:   nudgeBeadType,
+		Labels: []string{nudgeBeadLabel, "agent:worker", "nudge:" + nudgeID, "source:wait"},
+		Metadata: map[string]string{
+			"nudge_id": nudgeID,
+			"state":    "queued",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create open audit nudge bead: %v", err)
+	}
+
+	if err := dispatchReadyWaitNudges(dir, store, runtime.NewFake(), time.Now().UTC()); err != nil {
+		t.Fatalf("dispatchReadyWaitNudges: %v", err)
+	}
+	pending, inFlight, dead, err := listQueuedNudges(dir, "worker", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("listQueuedNudges: %v", err)
+	}
+	if len(pending) != 1 || len(inFlight) != 0 || len(dead) != 0 {
+		t.Fatalf("pending=%d inFlight=%d dead=%d, want 1/0/0", len(pending), len(inFlight), len(dead))
+	}
+	if pending[0].ID != nudgeID || pending[0].BeadID != audit.ID {
+		t.Fatalf("pending nudge = %+v, want id %q bead_id %q", pending[0], nudgeID, audit.ID)
 	}
 }
 

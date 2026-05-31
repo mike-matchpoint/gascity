@@ -258,6 +258,19 @@ func (s *sessionGetSpyStore) Get(id string) (beads.Bead, error) {
 	return s.Store.Get(id)
 }
 
+func (s *sessionGetSpyStore) RuntimeGet(ctx context.Context, id string, policy beads.ReadPolicy) (beads.Bead, error) {
+	s.getIDs = append(s.getIDs, id)
+	return beads.RuntimeGet(ctx, s.Store, id, policy)
+}
+
+func (s *sessionGetSpyStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	return beads.RuntimeUpdate(ctx, s.Store, id, opts, policy)
+}
+
+func (s *sessionGetSpyStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy beads.WritePolicy) (int, error) {
+	return beads.RuntimeCloseAll(ctx, s.Store, ids, metadata, policy)
+}
+
 // allConfiguredDS builds configuredNames from a desiredState map.
 func allConfiguredDS(ds map[string]TemplateParams) map[string]bool {
 	m := make(map[string]bool, len(ds))

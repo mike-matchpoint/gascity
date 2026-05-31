@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -731,6 +732,10 @@ func loadSessionWaitBeads(store beads.Store, sessionID string) ([]beads.Bead, er
 	return sessionpkg.ListSessionWaitBeads(store, sessionID)
 }
 
+func loadSessionWaitBeadsRuntime(store beads.Store, sessionID, caller string) ([]beads.Bead, error) {
+	return sessionpkg.ListSessionWaitBeadsRuntime(context.Background(), store, sessionID, sessionRuntimeReadPolicy(caller))
+}
+
 const waitLookupLimit = sessionpkg.SessionWaitLookupLimit
 
 func isWaitLookupLimitError(err error) bool {
@@ -754,7 +759,7 @@ func stampWaitLookupCapDiagnostic(store beads.Store, sessionID string, err error
 	}
 	batch := map[string]string{}
 	sessionpkg.StampWaitLookupCapMetadata(batch, label, limitErr.Limit, now, source)
-	if err := store.SetMetadataBatch(sessionID, batch); err != nil {
+	if err := setWaitSessionMetadataRuntime(store, sessionID, batch, "wait.lookup-cap.diagnostic"); err != nil {
 		log.Printf("gc wait: recording lookup cap diagnostic for session %s failed: %v", sessionID, err)
 	}
 }
@@ -766,7 +771,22 @@ func stampGlobalWaitLookupCapDiagnostics(store beads.Store, sessionBeads *sessio
 }
 
 func loadWaitBeadsByLabel(store beads.Store) ([]beads.Bead, error) {
-	all, err := store.List(beads.ListQuery{
+	return loadWaitBeadsByLabelWithLister(func(query beads.ListQuery) ([]beads.Bead, error) {
+		return store.List(query)
+	})
+}
+
+func loadWaitBeadsByLabelRuntime(store beads.Store, caller string) ([]beads.Bead, error) {
+	if store == nil {
+		return nil, nil
+	}
+	return loadWaitBeadsByLabelWithLister(func(query beads.ListQuery) ([]beads.Bead, error) {
+		return beads.RuntimeList(context.Background(), store, query, sessionRuntimeReadPolicy(caller))
+	})
+}
+
+func loadWaitBeadsByLabelWithLister(list func(beads.ListQuery) ([]beads.Bead, error)) ([]beads.Bead, error) {
+	all, err := list(beads.ListQuery{
 		Label: waitBeadLabel,
 		Limit: waitLookupLimit + 1,
 		Sort:  beads.SortCreatedDesc,
@@ -798,11 +818,11 @@ func loadWaitBeadsForWakeState(store beads.Store, sessionBeads *sessionBeadSnaps
 	// Open sessions get per-session coverage; waits tied only to closed
 	// sessions can fall outside the newest global capped window under
 	// saturation, with cap diagnostics as the operator signal.
-	waits, seen, err := loadWaitBeadsForOpenSessionsWithSeen(store, sessionBeads)
+	waits, seen, err := loadWaitBeadsForOpenSessionsWithSeenRuntime(store, sessionBeads, "wait.wake-state.session-waits")
 	if err != nil {
 		return nil, err
 	}
-	globalWaits, err := loadWaitBeads(store)
+	globalWaits, err := loadWaitBeadsByLabelRuntime(store, "wait.wake-state.global-waits")
 	if err != nil {
 		if !isWaitLookupLimitError(err) {
 			return nil, err
@@ -821,18 +841,18 @@ func loadWaitBeadsForWakeState(store beads.Store, sessionBeads *sessionBeadSnaps
 }
 
 func loadWaitBeadsForOpenSessions(store beads.Store, sessionBeads *sessionBeadSnapshot) ([]beads.Bead, error) {
-	waits, _, err := loadWaitBeadsForOpenSessionsWithSeen(store, sessionBeads)
+	waits, _, err := loadWaitBeadsForOpenSessionsWithSeenRuntime(store, sessionBeads, "wait.open-session-waits")
 	return waits, err
 }
 
-func loadWaitBeadsForOpenSessionsWithSeen(store beads.Store, sessionBeads *sessionBeadSnapshot) ([]beads.Bead, map[string]bool, error) {
+func loadWaitBeadsForOpenSessionsWithSeenRuntime(store beads.Store, sessionBeads *sessionBeadSnapshot, caller string) ([]beads.Bead, map[string]bool, error) {
 	seen := map[string]bool{}
 	if store == nil || sessionBeads == nil {
 		return nil, seen, nil
 	}
 	waits := []beads.Bead(nil)
 	for _, sessionBead := range sessionBeads.Open() {
-		sessionWaits, err := loadSessionWaitBeads(store, sessionBead.ID)
+		sessionWaits, err := loadSessionWaitBeadsRuntime(store, sessionBead.ID, caller)
 		if err != nil {
 			if !isWaitLookupLimitError(err) {
 				return nil, seen, err
@@ -861,6 +881,18 @@ func depsWaitReadyDetailed(store beads.Store, wait beads.Bead) (bool, error) {
 }
 
 func depsWaitReadyDetailedForCity(cityPath string, store beads.Store, wait beads.Bead) (bool, error) {
+	return depsWaitReadyDetailedWithLoader(wait, func(depID string) (beads.Bead, error) {
+		return loadWaitDependencyBead(cityPath, store, depID)
+	})
+}
+
+func depsWaitReadyDetailedForCityRuntime(cityPath string, store beads.Store, wait beads.Bead) (bool, error) {
+	return depsWaitReadyDetailedWithLoader(wait, func(depID string) (beads.Bead, error) {
+		return loadWaitDependencyBeadRuntime(cityPath, store, depID)
+	})
+}
+
+func depsWaitReadyDetailedWithLoader(wait beads.Bead, load func(string) (beads.Bead, error)) (bool, error) {
 	rawDepIDs := strings.Split(wait.Metadata["dep_ids"], ",")
 	depIDs := make([]string, 0, len(rawDepIDs))
 	for _, depID := range rawDepIDs {
@@ -877,7 +909,7 @@ func depsWaitReadyDetailedForCity(cityPath string, store beads.Store, wait beads
 	foundAny := false
 	var missingErr error
 	for _, depID := range depIDs {
-		dep, err := loadWaitDependencyBead(cityPath, store, depID)
+		dep, err := load(depID)
 		if err != nil {
 			if errors.Is(err, beads.ErrNotFound) {
 				if mode != "any" {
@@ -905,6 +937,45 @@ func depsWaitReadyDetailedForCity(cityPath string, store beads.Store, wait beads
 		return false, nil
 	}
 	return closedCount == len(depIDs), nil
+}
+
+func loadWaitDependencyBeadRuntime(cityPath string, cityStore beads.Store, depID string) (beads.Bead, error) {
+	if strings.TrimSpace(cityPath) == "" {
+		if cityStore == nil {
+			return beads.Bead{}, beads.ErrNotFound
+		}
+		return beads.RuntimeGet(context.Background(), cityStore, depID, sessionRuntimeReadPolicy("wait.dependency.get"))
+	}
+	cfg, err := loadCityConfig(cityPath, io.Discard)
+	if err != nil {
+		return beads.Bead{}, err
+	}
+	cityRoot := filepath.Clean(cityPath)
+	for _, scopeRoot := range convoyStoreCandidates(cfg, cityPath, depID) {
+		scopeRoot = resolveStoreScopeRoot(cityPath, scopeRoot)
+		if scopeRoot == cityRoot && cityStore != nil {
+			dep, err := beads.RuntimeGet(context.Background(), cityStore, depID, sessionRuntimeReadPolicy("wait.dependency.get-city"))
+			if err == nil {
+				return dep, nil
+			}
+			if !errors.Is(err, beads.ErrNotFound) {
+				return beads.Bead{}, err
+			}
+			continue
+		}
+		scopeStore, err := openStoreAtForCity(scopeRoot, cityPath)
+		if err != nil {
+			continue
+		}
+		dep, err := beads.RuntimeGet(context.Background(), scopeStore, depID, sessionRuntimeReadPolicy("wait.dependency.get-scope"))
+		if err == nil {
+			return dep, nil
+		}
+		if !errors.Is(err, beads.ErrNotFound) {
+			return beads.Bead{}, err
+		}
+	}
+	return beads.Bead{}, beads.ErrNotFound
 }
 
 func loadWaitDependencyBead(cityPath string, cityStore beads.Store, depID string) (beads.Bead, error) {
@@ -1029,7 +1100,7 @@ func prepareWaitWakeStateForCityWithSnapshot(cityPath string, store beads.Store,
 			}); err != nil {
 				return nil, err
 			}
-			if err := clearSessionWaitHoldIfIdle(store, sessionID); err != nil {
+			if err := clearSessionWaitHoldIfIdleRuntime(store, sessionID); err != nil {
 				return nil, err
 			}
 			continue
@@ -1055,7 +1126,7 @@ func prepareWaitWakeStateForCityWithSnapshot(cityPath string, store beads.Store,
 				}); err != nil {
 					return nil, err
 				}
-				if err := clearSessionWaitHoldIfIdle(store, sessionID); err != nil {
+				if err := clearSessionWaitHoldIfIdleRuntime(store, sessionID); err != nil {
 					return nil, err
 				}
 				continue
@@ -1067,7 +1138,7 @@ func prepareWaitWakeStateForCityWithSnapshot(cityPath string, store beads.Store,
 				return nil, err
 			}
 			if done {
-				if err := clearSessionWaitHoldIfIdle(store, sessionID); err != nil {
+				if err := clearSessionWaitHoldIfIdleRuntime(store, sessionID); err != nil {
 					return nil, err
 				}
 				continue
@@ -1078,7 +1149,7 @@ func prepareWaitWakeStateForCityWithSnapshot(cityPath string, store beads.Store,
 		if wait.Metadata["kind"] != "deps" {
 			continue
 		}
-		ready, depErr := depsWaitReadyDetailedForCity(cityPath, store, wait)
+		ready, depErr := depsWaitReadyDetailedForCityRuntime(cityPath, store, wait)
 		if depErr != nil {
 			if errors.Is(depErr, beads.ErrNotFound) {
 				if err := setWaitTerminalState(store, wait.ID, map[string]string{
@@ -1088,7 +1159,7 @@ func prepareWaitWakeStateForCityWithSnapshot(cityPath string, store beads.Store,
 				}); err != nil {
 					return nil, err
 				}
-				if err := clearSessionWaitHoldIfIdle(store, sessionID); err != nil {
+				if err := clearSessionWaitHoldIfIdleRuntime(store, sessionID); err != nil {
 					return nil, err
 				}
 				continue
@@ -1096,14 +1167,17 @@ func prepareWaitWakeStateForCityWithSnapshot(cityPath string, store beads.Store,
 			return nil, depErr
 		}
 		if ready {
-			if err := store.SetMetadataBatch(wait.ID, map[string]string{
+			if err := setWaitMetadataRuntime(store, wait.ID, map[string]string{
 				"state":    waitStateReady,
 				"ready_at": now.UTC().Format(time.RFC3339),
-			}); err != nil {
+			}, "wait.ready-state.metadata"); err != nil {
 				return nil, err
 			}
 			readyWaitSet[sessionID] = true
 		}
+	}
+	if err := repairIdleWaitHoldsRuntime(store, sessionBeads); err != nil {
+		return nil, err
 	}
 	return readyWaitSet, nil
 }
@@ -1112,7 +1186,7 @@ func lookupSessionBeadByID(store beads.Store, id string) (beads.Bead, bool, erro
 	if store == nil || strings.TrimSpace(id) == "" {
 		return beads.Bead{}, false, nil
 	}
-	bead, err := store.Get(id)
+	bead, err := beads.RuntimeGet(context.Background(), store, id, sessionRuntimeReadPolicy("wait.session.lookup-by-id"))
 	if err != nil {
 		if errors.Is(err, beads.ErrNotFound) {
 			return beads.Bead{}, false, nil
@@ -1160,7 +1234,7 @@ func dispatchReadyWaitNudgesWithSnapshot(cityPath string, cfg *config.City, stor
 		if nudgeID == "" {
 			continue
 		}
-		_, ok, err := findQueuedNudgeBead(store, nudgeID)
+		existingNudge, ok, err := findAnyQueuedNudgeBeadRuntime(context.Background(), store, nudgeID, "wait.ready-nudge.find")
 		if err != nil {
 			if beads.IsLookupLimitError(err) {
 				stampWaitLookupCapDiagnostic(store, sessionID, err, now, "ready-wait-nudge")
@@ -1169,7 +1243,15 @@ func dispatchReadyWaitNudgesWithSnapshot(cityPath string, cfg *config.City, stor
 			return err
 		}
 		if ok {
-			continue
+			if wait.Metadata["nudge_id"] == "" && isTerminalNudgeState(existingNudge.Metadata["state"]) {
+				if err := setReadyWaitNudgeIDRuntime(context.Background(), store, wait.ID, nudgeID); err != nil {
+					return fmt.Errorf("setting wait nudge_id: %w", err)
+				}
+				continue
+			}
+			if isTerminalNudgeState(existingNudge.Metadata["state"]) {
+				continue
+			}
 		}
 		message := strings.TrimSpace(wait.Description)
 		if message == "" {
@@ -1185,7 +1267,7 @@ func dispatchReadyWaitNudgesWithSnapshot(cityPath string, cfg *config.City, stor
 		if err := enqueueQueuedNudgeWithStore(cityPath, store, item); err != nil {
 			return err
 		}
-		if err := store.SetMetadata(wait.ID, "nudge_id", nudgeID); err != nil {
+		if err := setReadyWaitNudgeIDRuntime(context.Background(), store, wait.ID, nudgeID); err != nil {
 			return fmt.Errorf("setting wait nudge_id: %w", err)
 		}
 		// provider_kind is stamped from ResolvedProvider.Kind /
@@ -1199,6 +1281,26 @@ func dispatchReadyWaitNudgesWithSnapshot(cityPath string, cfg *config.City, stor
 		}
 	}
 	return nil
+}
+
+func setReadyWaitNudgeIDRuntime(ctx context.Context, store beads.Store, waitID, nudgeID string) error {
+	return setWaitMetadataRuntimeWithContext(ctx, store, waitID, map[string]string{"nudge_id": nudgeID}, "wait.ready-nudge.metadata", waitID+":nudge_id:"+nudgeID)
+}
+
+func setWaitMetadataRuntime(store beads.Store, waitID string, metadata map[string]string, caller string) error {
+	return setWaitMetadataRuntimeWithContext(context.Background(), store, waitID, metadata, caller, waitID+":"+caller)
+}
+
+func setWaitSessionMetadataRuntime(store beads.Store, sessionID string, metadata map[string]string, caller string) error {
+	return setWaitMetadataRuntimeWithContext(context.Background(), store, sessionID, metadata, caller, "session:"+sessionID+":"+caller)
+}
+
+func setWaitMetadataRuntimeWithContext(ctx context.Context, store beads.Store, id string, metadata map[string]string, caller, idempotencyKey string) error {
+	if len(metadata) == 0 {
+		return nil
+	}
+	return beads.RuntimeUpdate(ctx, store, id, beads.UpdateOpts{Metadata: metadata},
+		beads.RuntimeWritePolicy(beads.WriteClassHotState, caller, idempotencyKey))
 }
 
 func waitNudgeProviderNeedsPoller(sessionBead beads.Bead) bool {
@@ -1227,7 +1329,7 @@ func finalizeReadyWaitFromNudge(store beads.Store, wait beads.Bead, now time.Tim
 	if nudgeID == "" {
 		return false, nil
 	}
-	nudge, ok, err := findAnyQueuedNudgeBead(store, nudgeID)
+	nudge, ok, err := findAnyQueuedNudgeBeadRuntime(context.Background(), store, nudgeID, "wait.finalize-nudge.find")
 	if err != nil {
 		if beads.IsLookupLimitError(err) {
 			stampWaitLookupCapDiagnostic(store, wait.Metadata["session_id"], err, now, "ready-wait-finalize-nudge")
@@ -1293,6 +1395,48 @@ func clearSessionWaitHold(store beads.Store, sessionID string) error {
 	return store.SetMetadataBatch(sessionID, batch)
 }
 
+func clearSessionWaitHoldRuntime(store beads.Store, sessionID string) error {
+	if strings.TrimSpace(sessionID) == "" || store == nil {
+		return nil
+	}
+	batch := map[string]string{
+		"wait_hold":    "",
+		"sleep_intent": "",
+	}
+	sessionBead, err := beads.RuntimeGet(context.Background(), store, sessionID, sessionRuntimeReadPolicy("wait.hold-clear.get-session"))
+	if err != nil {
+		if errors.Is(err, beads.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	if sessionBead.Metadata["sleep_reason"] == "wait-hold" {
+		batch["sleep_reason"] = ""
+	}
+	return setWaitSessionMetadataRuntime(store, sessionID, batch, "wait.hold-clear.metadata")
+}
+
+func repairIdleWaitHoldsRuntime(store beads.Store, sessionBeads *sessionBeadSnapshot) error {
+	if store == nil || sessionBeads == nil {
+		return nil
+	}
+	for _, sessionBead := range sessionBeads.Open() {
+		if !sessionHasWaitHold(sessionBead) {
+			continue
+		}
+		if err := clearSessionWaitHoldIfIdleRuntime(store, sessionBead.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sessionHasWaitHold(sessionBead beads.Bead) bool {
+	return strings.TrimSpace(sessionBead.Metadata["wait_hold"]) == "true" ||
+		strings.TrimSpace(sessionBead.Metadata["sleep_intent"]) == "wait-hold" ||
+		strings.TrimSpace(sessionBead.Metadata["sleep_reason"]) == "wait-hold"
+}
+
 func clearSessionWaitHoldIfIdle(store beads.Store, sessionID string) error {
 	hasWaits, err := hasNonTerminalWaits(store, sessionID)
 	if err != nil {
@@ -1304,8 +1448,37 @@ func clearSessionWaitHoldIfIdle(store beads.Store, sessionID string) error {
 	return clearSessionWaitHold(store, sessionID)
 }
 
+func clearSessionWaitHoldIfIdleRuntime(store beads.Store, sessionID string) error {
+	hasWaits, err := hasNonTerminalWaitsRuntime(store, sessionID)
+	if err != nil {
+		return err
+	}
+	if hasWaits {
+		return nil
+	}
+	return clearSessionWaitHoldRuntime(store, sessionID)
+}
+
 func hasNonTerminalWaits(store beads.Store, sessionID string) (bool, error) {
 	waits, err := loadSessionWaitBeads(store, sessionID)
+	if err != nil && !isWaitLookupLimitError(err) {
+		return false, err
+	}
+	capped := err != nil
+	for _, wait := range waits {
+		if !isWaitTerminal(wait.Metadata["state"]) {
+			return true, nil
+		}
+	}
+	if capped {
+		log.Printf("gc wait: session %s wait-hold lookup capped; preserving wait hold: %v", sessionID, err)
+		return true, nil
+	}
+	return false, nil
+}
+
+func hasNonTerminalWaitsRuntime(store beads.Store, sessionID string) (bool, error) {
+	waits, err := loadSessionWaitBeadsRuntime(store, sessionID, "wait.hold-clear.session-waits")
 	if err != nil && !isWaitLookupLimitError(err) {
 		return false, err
 	}
@@ -1351,10 +1524,16 @@ func sessionProviderFamily(sessionBead beads.Bead) string {
 }
 
 func setWaitTerminalState(store beads.Store, waitID string, batch map[string]string) error {
-	if err := store.SetMetadataBatch(waitID, batch); err != nil {
-		return err
+	metadata := cloneStringMap(batch)
+	if metadata == nil {
+		metadata = map[string]string{}
 	}
-	return store.Close(waitID)
+	if strings.TrimSpace(metadata["close_reason"]) == "" {
+		metadata["close_reason"] = "wait lifecycle reached terminal state"
+	}
+	_, err := beads.RuntimeCloseAll(context.Background(), store, []string{waitID}, metadata,
+		beads.RuntimeWritePolicy(beads.WriteClassHotState, "wait.terminal.close", waitID+":"+metadata["state"]))
+	return err
 }
 
 func retryClosedWait(store beads.Store, wait beads.Bead, now string) (beads.Bead, error) {

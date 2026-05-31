@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -90,11 +91,28 @@ func ListSessionWaitBeads(store beads.Store, sessionID string) ([]beads.Bead, er
 	if store == nil || sessionID == "" {
 		return nil, nil
 	}
+	return listSessionWaitBeadsWithLister(func(query beads.ListQuery) ([]beads.Bead, error) {
+		return store.List(query)
+	}, sessionID)
+}
+
+// ListSessionWaitBeadsRuntime returns open durable wait beads for one session
+// using the runtime read contract.
+func ListSessionWaitBeadsRuntime(ctx context.Context, store beads.Store, sessionID string, policy beads.ReadPolicy) ([]beads.Bead, error) {
+	if store == nil || sessionID == "" {
+		return nil, nil
+	}
+	return listSessionWaitBeadsWithLister(func(query beads.ListQuery) ([]beads.Bead, error) {
+		return beads.RuntimeList(ctx, store, query, policy)
+	}, sessionID)
+}
+
+func listSessionWaitBeadsWithLister(list func(beads.ListQuery) ([]beads.Bead, error), sessionID string) ([]beads.Bead, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return nil, nil
 	}
-	waits, err := store.List(beads.ListQuery{
+	waits, err := list(beads.ListQuery{
 		Status: "open",
 		Label:  "session:" + sessionID,
 		Limit:  SessionWaitLookupLimit + 1,

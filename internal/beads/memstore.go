@@ -137,6 +137,25 @@ func (m *MemStore) RuntimeGet(ctx context.Context, id string, policy ReadPolicy)
 	return m.Get(id)
 }
 
+// RuntimeList lists beads under a runtime read policy. MemStore is in-process,
+// so it can preserve authoritative semantics without a foreground subprocess.
+func (m *MemStore) RuntimeList(ctx context.Context, query ListQuery, policy ReadPolicy) ([]Bead, error) {
+	policy = normalizeReadPolicy(policy)
+	if policy.AllowFallback {
+		return m.List(query)
+	}
+	select {
+	case <-ctxDone(ctx):
+		return nil, degradedRead(policy, "list", "memory", "", ctx.Err())
+	default:
+	}
+	rows, err := m.List(query)
+	if err != nil {
+		return rows, err
+	}
+	return enforceRuntimeRowCap(rows, policy, "list", "memory")
+}
+
 // RuntimeUpdate updates a bead under a runtime write policy.
 func (m *MemStore) RuntimeUpdate(ctx context.Context, id string, opts UpdateOpts, policy WritePolicy) error {
 	select {

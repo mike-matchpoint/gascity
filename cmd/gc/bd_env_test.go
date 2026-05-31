@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -3516,11 +3515,9 @@ func TestControlBdCommandRunnerDefaultsBeadsActorToControllerWhenUnset(t *testin
 	}
 }
 
-func TestBdContextCommandRunnerAppliesRuntimeDoltRemoteShim(t *testing.T) {
+func TestBdContextCommandRunnerDoesNotInstallDoltRemoteShim(t *testing.T) {
 	t.Setenv("GC_BEADS", "bd")
 	t.Setenv("GC_DOLT", "skip")
-	fakeDolt := writeRuntimeShimTestDolt(t)
-	t.Setenv("PATH", filepath.Dir(fakeDolt))
 
 	origRunner := beadsExecContextCommandRunnerWithEnv
 	t.Cleanup(func() { beadsExecContextCommandRunnerWithEnv = origRunner })
@@ -3542,123 +3539,14 @@ func TestBdContextCommandRunnerAppliesRuntimeDoltRemoteShim(t *testing.T) {
 		t.Fatalf("context runner error = %v, want nil", err)
 	}
 
-	shimPath := captured[runtimeDoltRemoteShimPathEnvKey]
-	if shimPath == "" {
-		t.Fatalf("%s missing from runtime bd env: %#v", runtimeDoltRemoteShimPathEnvKey, captured)
-	}
-	if got := captured[runtimeDoltRemoteShimEnvKey]; got != "remote-v-empty" {
-		t.Fatalf("%s = %q, want remote-v-empty", runtimeDoltRemoteShimEnvKey, got)
-	}
-	if !strings.HasPrefix(captured["PATH"], filepath.Dir(shimPath)+string(os.PathListSeparator)) {
-		t.Fatalf("PATH = %q, want runtime shim dir prepended", captured["PATH"])
-	}
-
-	remoteCmd := exec.Command(shimPath, "remote", "-v")
-	remoteOut, err := remoteCmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("shim dolt remote -v error = %v output=%q", err, string(remoteOut))
-	}
-	if strings.TrimSpace(string(remoteOut)) != "" {
-		t.Fatalf("shim dolt remote -v output = %q, want empty", string(remoteOut))
-	}
-
-	versionCmd := exec.Command(shimPath, "version")
-	versionOut, err := versionCmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("shim delegated dolt version error = %v output=%q", err, string(versionOut))
-	}
-	if got := strings.TrimSpace(string(versionOut)); got != "fake-dolt version" {
-		t.Fatalf("shim delegated output = %q, want fake dolt output", got)
-	}
-}
-
-func TestBdCommandRunnerLeavesForegroundDoltPathUnshimmed(t *testing.T) {
-	t.Setenv("GC_BEADS", "bd")
-	t.Setenv("GC_DOLT", "skip")
-
-	origRunner := beadsExecCommandRunnerWithEnv
-	t.Cleanup(func() { beadsExecCommandRunnerWithEnv = origRunner })
-
-	var captured map[string]string
-	beadsExecCommandRunnerWithEnv = func(env map[string]string) beads.CommandRunner {
-		captured = map[string]string{}
-		for key, value := range env {
-			captured[key] = value
-		}
-		return func(string, string, ...string) ([]byte, error) {
-			return []byte("ok"), nil
+	for key, value := range captured {
+		combined := key + "=" + value
+		if strings.Contains(combined, "GC_RUNTIME_DOLT_REMOTE_SHIM") ||
+			strings.Contains(combined, "hot-dolt-shim") ||
+			strings.Contains(combined, "remote-v-empty") {
+			t.Fatalf("context runner installed a dolt remote shim via %s=%q", key, value)
 		}
 	}
-
-	cityPath := t.TempDir()
-	runner := bdCommandRunnerForCity(cityPath)
-	if _, err := runner(cityPath, "bd", "list", "--json"); err != nil {
-		t.Fatalf("foreground runner error = %v, want nil", err)
-	}
-
-	if got := captured[runtimeDoltRemoteShimEnvKey]; got != "" {
-		t.Fatalf("%s = %q, want absent for foreground bd runner", runtimeDoltRemoteShimEnvKey, got)
-	}
-	if got := captured[runtimeDoltRemoteShimPathEnvKey]; got != "" {
-		t.Fatalf("%s = %q, want absent for foreground bd runner", runtimeDoltRemoteShimPathEnvKey, got)
-	}
-}
-
-func TestBdContextCommandRunnerSkipsRuntimeDoltRemoteShimForPostgresEnv(t *testing.T) {
-	t.Setenv("GC_BEADS", "bd")
-	t.Setenv("GC_DOLT", "skip")
-	t.Setenv("PATH", t.TempDir())
-
-	origRunner := beadsExecContextCommandRunnerWithEnv
-	t.Cleanup(func() { beadsExecContextCommandRunnerWithEnv = origRunner })
-
-	var captured map[string]string
-	beadsExecContextCommandRunnerWithEnv = func(env map[string]string) beads.ContextCommandRunner {
-		captured = map[string]string{}
-		for key, value := range env {
-			captured[key] = value
-		}
-		return func(context.Context, string, string, ...string) ([]byte, error) {
-			return []byte("ok"), nil
-		}
-	}
-
-	cityPath := t.TempDir()
-	runner := bdContextCommandRunnerWithManagedRetryErr(cityPath, func(string) (map[string]string, error) {
-		return map[string]string{
-			"BEADS_POSTGRES_HOST":     "db.example.test",
-			"BEADS_POSTGRES_DATABASE": "beads",
-		}, nil
-	})
-	if _, err := runner(context.Background(), cityPath, "bd", "update", "pg-1", "--json"); err != nil {
-		t.Fatalf("postgres context runner error = %v, want nil", err)
-	}
-
-	if got := captured[runtimeDoltRemoteShimEnvKey]; got != "" {
-		t.Fatalf("%s = %q, want absent for postgres bd runner", runtimeDoltRemoteShimEnvKey, got)
-	}
-	if got := captured[runtimeDoltRemoteShimPathEnvKey]; got != "" {
-		t.Fatalf("%s = %q, want absent for postgres bd runner", runtimeDoltRemoteShimPathEnvKey, got)
-	}
-}
-
-func writeRuntimeShimTestDolt(t *testing.T) string {
-	t.Helper()
-	binDir := filepath.Join(t.TempDir(), "bin")
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		t.Fatalf("mkdir fake dolt bin: %v", err)
-	}
-	path := filepath.Join(binDir, "dolt")
-	script := "#!/bin/sh\n" +
-		"if [ \"$1\" = \"remote\" ] && [ \"$2\" = \"-v\" ]; then\n" +
-		"\techo real-remote-output\n" +
-		"\texit 0\n" +
-		"fi\n" +
-		"echo fake-dolt \"$@\"\n"
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake dolt: %v", err)
-	}
-	return path
 }
 
 // ── PG-backend wiring (slice 3 of PG-auth) ─────────────────────────────

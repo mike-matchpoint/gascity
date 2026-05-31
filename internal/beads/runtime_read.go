@@ -136,6 +136,10 @@ type runtimeReadyLister interface {
 	RuntimeReadyList(context.Context, ListQuery, ReadPolicy) ([]Bead, error)
 }
 
+type runtimeHotFallbackBlocker interface {
+	RuntimeHotFallbackDisabled() bool
+}
+
 // RuntimeList executes a list query under policy. Foreground/maintenance
 // policies preserve the existing authoritative store behavior. Hot policies use
 // cache or indexed routes only and return DegradedReadError instead of falling
@@ -151,7 +155,10 @@ func RuntimeList(ctx context.Context, store Store, query ListQuery, policy ReadP
 	if runtimeStore, ok := store.(runtimeLister); ok {
 		return runtimeStore.RuntimeList(ctx, query, policy)
 	}
-	return store.List(query)
+	if !runtimeHotFallbackDisabled(store) {
+		return store.List(query)
+	}
+	return nil, degradedRead(policy, "list", "runtime", "", ErrIndexedListUnsupported)
 }
 
 // RuntimeGet executes an ID lookup under policy. Foreground policies preserve
@@ -185,7 +192,10 @@ func RuntimeReady(ctx context.Context, store Store, query ReadyQuery, policy Rea
 	if runtimeStore, ok := store.(runtimeReadyer); ok {
 		return runtimeStore.RuntimeReady(ctx, query, policy)
 	}
-	return readyWithQuery(store, query)
+	if !runtimeHotFallbackDisabled(store) {
+		return readyWithQuery(store, query)
+	}
+	return nil, degradedRead(policy, "ready", "runtime", "", ErrIndexedListUnsupported)
 }
 
 // RuntimeReadyList executes selector-ready work lookup under policy. Unlike
@@ -218,6 +228,11 @@ func readyWithQuery(store Store, query ReadyQuery) ([]Bead, error) {
 		return store.Ready()
 	}
 	return store.Ready(query)
+}
+
+func runtimeHotFallbackDisabled(store Store) bool {
+	blocker, ok := store.(runtimeHotFallbackBlocker)
+	return ok && blocker.RuntimeHotFallbackDisabled()
 }
 
 func readyListWithQuery(store Store, query ListQuery) ([]Bead, error) {

@@ -29,6 +29,33 @@ func (slowRuntimeReadIndexedStub) ListIndexed(ctx context.Context, _ ListQuery) 
 	}
 }
 
+type runtimeReadNoFallbackStore struct {
+	Store
+	listCalls int
+}
+
+func (s *runtimeReadNoFallbackStore) List(query ListQuery) ([]Bead, error) {
+	s.listCalls++
+	return s.Store.List(query)
+}
+
+func (s *runtimeReadNoFallbackStore) RuntimeHotFallbackDisabled() bool {
+	return true
+}
+
+func TestRuntimeListHotWithoutRuntimeListerReturnsDegradedWithoutFallback(t *testing.T) {
+	base := NewMemStore()
+	store := &runtimeReadNoFallbackStore{Store: base}
+	_, err := RuntimeList(context.Background(), store, ListQuery{Status: "open"},
+		RuntimeReadPolicy(ReadClassHotAuthoritative, "test.no-runtime-list"))
+	if !IsDegradedRead(err) {
+		t.Fatalf("err = %v, want degraded read", err)
+	}
+	if store.listCalls != 0 {
+		t.Fatalf("List calls = %d, want 0", store.listCalls)
+	}
+}
+
 func TestRuntimeListHotDoesNotFallbackToBdListOnIndexedError(t *testing.T) {
 	var runnerCalls atomic.Int64
 	store := NewBdStore("/city", func(string, string, ...string) ([]byte, error) {

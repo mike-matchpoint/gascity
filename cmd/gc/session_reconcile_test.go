@@ -58,6 +58,26 @@ func (s *testStore) SetMetadataBatch(id string, kvs map[string]string) error {
 	return nil
 }
 
+func (s *testStore) RuntimeGet(_ context.Context, id string, _ beads.ReadPolicy) (beads.Bead, error) {
+	return s.Get(id)
+}
+
+func (s *testStore) RuntimeUpdate(_ context.Context, id string, opts beads.UpdateOpts, _ beads.WritePolicy) error {
+	if len(opts.Metadata) == 0 {
+		return nil
+	}
+	return s.SetMetadataBatch(id, opts.Metadata)
+}
+
+func (s *testStore) RuntimeCloseAll(_ context.Context, ids []string, metadata map[string]string, _ beads.WritePolicy) (int, error) {
+	for _, id := range ids {
+		if err := s.SetMetadataBatch(id, metadata); err != nil {
+			return 0, err
+		}
+	}
+	return len(ids), nil
+}
+
 func (s *testStore) Ping() error {
 	return nil
 }

@@ -166,12 +166,29 @@ func IsDegradedWrite(err error) bool {
 	return errors.As(err, &degraded)
 }
 
-// RuntimeWriter is implemented by stores that support bounded runtime writes.
-type RuntimeWriter interface {
+type runtimeCreator interface {
 	RuntimeCreate(context.Context, Bead, WritePolicy) (Bead, error)
+}
+
+type runtimeUpdater interface {
 	RuntimeUpdate(context.Context, string, UpdateOpts, WritePolicy) error
+}
+
+type runtimeCloser interface {
 	RuntimeCloseAll(context.Context, []string, map[string]string, WritePolicy) (int, error)
+}
+
+type runtimePinger interface {
 	RuntimePing(context.Context, WritePolicy) error
+}
+
+// RuntimeWriter is implemented by stores that support every bounded runtime
+// write operation.
+type RuntimeWriter interface {
+	runtimeCreator
+	runtimeUpdater
+	runtimeCloser
+	runtimePinger
 }
 
 // RuntimeCreate executes a create under policy. CachingStore is deliberately
@@ -187,7 +204,7 @@ func RuntimeCreate(ctx context.Context, store Store, b Bead, policy WritePolicy)
 	if policy.AllowFallback {
 		return store.Create(b)
 	}
-	if writer, ok := store.(RuntimeWriter); ok {
+	if writer, ok := store.(runtimeCreator); ok {
 		return writer.RuntimeCreate(ctx, b, policy)
 	}
 	return Bead{}, degradedWrite(policy, "", "create", WriteOutcomeUnsupported, ErrRuntimeWriteUnsupported)
@@ -222,7 +239,7 @@ func RuntimeUpdate(ctx context.Context, store Store, id string, opts UpdateOpts,
 	if policy.AllowFallback {
 		return store.Update(id, opts)
 	}
-	if writer, ok := store.(RuntimeWriter); ok {
+	if writer, ok := store.(runtimeUpdater); ok {
 		return writer.RuntimeUpdate(ctx, id, opts, policy)
 	}
 	return degradedWrite(policy, "", "update", WriteOutcomeUnsupported, ErrRuntimeWriteUnsupported)
@@ -241,7 +258,7 @@ func RuntimeCloseAll(ctx context.Context, store Store, ids []string, metadata ma
 	if policy.AllowFallback {
 		return store.CloseAll(ids, metadata)
 	}
-	if writer, ok := store.(RuntimeWriter); ok {
+	if writer, ok := store.(runtimeCloser); ok {
 		return writer.RuntimeCloseAll(ctx, ids, metadata, policy)
 	}
 	return 0, degradedWrite(policy, "", "close-all", WriteOutcomeUnsupported, ErrRuntimeWriteUnsupported)
@@ -259,14 +276,14 @@ func RuntimePing(ctx context.Context, store Store, policy WritePolicy) error {
 	if policy.AllowFallback {
 		return store.Ping()
 	}
-	if writer, ok := store.(RuntimeWriter); ok {
+	if writer, ok := store.(runtimePinger); ok {
 		return writer.RuntimePing(ctx, policy)
 	}
 	return degradedWrite(policy, "", "ping", WriteOutcomeUnsupported, ErrRuntimeWriteUnsupported)
 }
 
 // ErrRuntimeWriteUnsupported is returned when a hot write reaches a store that
-// does not implement RuntimeWriter.
+// does not implement the requested runtime write operation.
 var ErrRuntimeWriteUnsupported = errors.New("runtime write unsupported")
 
 func normalizeWritePolicy(policy WritePolicy) WritePolicy {

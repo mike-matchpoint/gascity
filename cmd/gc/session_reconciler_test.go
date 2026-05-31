@@ -1873,6 +1873,18 @@ func (s *listErrStore) List(q beads.ListQuery) ([]beads.Bead, error) {
 	return s.Store.List(q)
 }
 
+func (s *listErrStore) RuntimeList(_ context.Context, q beads.ListQuery, _ beads.ReadPolicy) ([]beads.Bead, error) {
+	return s.List(q)
+}
+
+func (s *listErrStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	return beads.RuntimeUpdate(ctx, s.Store, id, opts, policy)
+}
+
+func (s *listErrStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy beads.WritePolicy) (int, error) {
+	return beads.RuntimeCloseAll(ctx, s.Store, ids, metadata, policy)
+}
+
 type assignOnListStore struct {
 	beads.Store
 	sessionID string
@@ -1896,12 +1908,31 @@ func (s *assignOnListStore) List(q beads.ListQuery) ([]beads.Bead, error) {
 	return s.Store.List(q)
 }
 
+func (s *assignOnListStore) RuntimeList(_ context.Context, q beads.ListQuery, _ beads.ReadPolicy) ([]beads.Bead, error) {
+	return s.List(q)
+}
+
+func (s *assignOnListStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	return beads.RuntimeUpdate(ctx, s.Store, id, opts, policy)
+}
+
+func (s *assignOnListStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy beads.WritePolicy) (int, error) {
+	return beads.RuntimeCloseAll(ctx, s.Store, ids, metadata, policy)
+}
+
 type failSetMetadataBatchStore struct {
 	beads.Store
 	err error
 }
 
 func (s *failSetMetadataBatchStore) SetMetadataBatch(string, map[string]string) error {
+	if s.err != nil {
+		return s.err
+	}
+	return nil
+}
+
+func (s *failSetMetadataBatchStore) RuntimeUpdate(context.Context, string, beads.UpdateOpts, beads.WritePolicy) error {
 	if s.err != nil {
 		return s.err
 	}
@@ -2767,6 +2798,13 @@ func (s *failStopPendingStore) SetMetadataBatch(id string, kvs map[string]string
 		return errors.New("stop-pending metadata failed")
 	}
 	return s.Store.SetMetadataBatch(id, kvs)
+}
+
+func (s *failStopPendingStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	if opts.Metadata["state_reason"] == sessionpkg.DrainAckStopPendingReason {
+		return errors.New("stop-pending metadata failed")
+	}
+	return beads.RuntimeUpdate(ctx, s.Store, id, opts, policy)
 }
 
 func TestReconcileSessionBeads_DrainAckStopPendingMetadataFailureLogsDiagnostic(t *testing.T) {

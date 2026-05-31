@@ -1,6 +1,7 @@
 package nudgequeue
 
 import (
+	"context"
 	"errors"
 	"os"
 	"strings"
@@ -54,8 +55,21 @@ func (s *listQueryCaptureStore) List(query beads.ListQuery) ([]beads.Bead, error
 	return s.Store.List(query)
 }
 
+func (s *listQueryCaptureStore) RuntimeList(ctx context.Context, query beads.ListQuery, policy beads.ReadPolicy) ([]beads.Bead, error) {
+	s.queries = append(s.queries, query)
+	return beads.RuntimeList(ctx, s.Store, query, policy)
+}
+
+func (s *listQueryCaptureStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy beads.WritePolicy) (int, error) {
+	return beads.RuntimeCloseAll(ctx, s.Store, ids, metadata, policy)
+}
+
 func (s nudgeExactLimitStore) List(query beads.ListQuery) ([]beads.Bead, error) {
 	return nudgeItems(query, NudgeLookupLimit), nil
+}
+
+func (s nudgeExactLimitStore) RuntimeList(_ context.Context, query beads.ListQuery, _ beads.ReadPolicy) ([]beads.Bead, error) {
+	return s.List(query)
 }
 
 func nudgeItems(query beads.ListQuery, count int) []beads.Bead {
@@ -74,11 +88,24 @@ func (s nudgeMarkFailStore) SetMetadataBatch(string, map[string]string) error {
 	return errors.New("mark terminal failed")
 }
 
+func (s nudgeMarkFailStore) RuntimeCloseAll(context.Context, []string, map[string]string, beads.WritePolicy) (int, error) {
+	return 0, errors.New("mark terminal failed")
+}
+
 func (s nudgeSelectiveMarkFailStore) SetMetadataBatch(id string, kvs map[string]string) error {
 	if id == s.failID {
 		return errors.New("mark terminal failed")
 	}
 	return s.MemStore.SetMetadataBatch(id, kvs)
+}
+
+func (s nudgeSelectiveMarkFailStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy beads.WritePolicy) (int, error) {
+	for _, id := range ids {
+		if id == s.failID {
+			return 0, errors.New("mark terminal failed")
+		}
+	}
+	return s.MemStore.RuntimeCloseAll(ctx, ids, metadata, policy)
 }
 
 func (s *nudgeReenqueueStore) SetMetadataBatch(id string, kvs map[string]string) error {
@@ -110,6 +137,35 @@ func (s *nudgeReenqueueStore) SetMetadataBatch(id string, kvs map[string]string)
 	return s.MemStore.SetMetadataBatch(id, kvs)
 }
 
+func (s *nudgeReenqueueStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy beads.WritePolicy) (int, error) {
+	if !s.injected {
+		s.injected = true
+		created, err := s.Create(beads.Bead{
+			Title:  "replacement nudge",
+			Labels: []string{"nudge:" + s.nudgeID},
+		})
+		if err != nil {
+			return 0, err
+		}
+		replacement := Item{
+			ID:        s.nudgeID,
+			BeadID:    created.ID,
+			Agent:     "worker",
+			Source:    "wait",
+			Message:   "ready again",
+			CreatedAt: time.Now().Add(time.Minute).UTC(),
+			ExpiresAt: time.Now().Add(time.Hour).UTC(),
+		}
+		if err := WithState(s.cityPath, func(state *State) error {
+			state.Pending = append(state.Pending, replacement)
+			return nil
+		}); err != nil {
+			return 0, err
+		}
+	}
+	return s.MemStore.RuntimeCloseAll(ctx, ids, metadata, policy)
+}
+
 func (s *nudgeReenqueueBeforeTerminalStore) List(query beads.ListQuery) ([]beads.Bead, error) {
 	if query.Label == "nudge:"+s.nudgeID {
 		if err := s.injectReplacement(); err != nil {
@@ -119,11 +175,29 @@ func (s *nudgeReenqueueBeforeTerminalStore) List(query beads.ListQuery) ([]beads
 	return s.MemStore.List(query)
 }
 
+func (s *nudgeReenqueueBeforeTerminalStore) RuntimeList(ctx context.Context, query beads.ListQuery, _ beads.ReadPolicy) ([]beads.Bead, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+	return s.List(query)
+}
+
 func (s *nudgeReenqueueBeforeTerminalStore) Get(id string) (beads.Bead, error) {
 	if err := s.injectReplacement(); err != nil {
 		return beads.Bead{}, err
 	}
 	return s.MemStore.Get(id)
+}
+
+func (s *nudgeReenqueueBeforeTerminalStore) RuntimeGet(ctx context.Context, id string, _ beads.ReadPolicy) (beads.Bead, error) {
+	select {
+	case <-ctx.Done():
+		return beads.Bead{}, ctx.Err()
+	default:
+	}
+	return s.Get(id)
 }
 
 func (s *nudgeReenqueueBeforeTerminalStore) injectReplacement() error {
@@ -161,6 +235,27 @@ func (s queueLockDetectStore) List(query beads.ListQuery) ([]beads.Bead, error) 
 	return s.MemStore.List(query)
 }
 
+func (s queueLockDetectStore) RuntimeList(ctx context.Context, query beads.ListQuery, _ beads.ReadPolicy) ([]beads.Bead, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+	return s.List(query)
+}
+
+func (s queueLockDetectStore) RuntimeGet(ctx context.Context, id string, _ beads.ReadPolicy) (beads.Bead, error) {
+	select {
+	case <-ctx.Done():
+		return beads.Bead{}, ctx.Err()
+	default:
+	}
+	if err := s.requireQueueLockAvailable(); err != nil {
+		return beads.Bead{}, err
+	}
+	return s.Get(id)
+}
+
 func (s queueLockDetectStore) SetMetadataBatch(id string, kvs map[string]string) error {
 	if err := s.requireQueueLockAvailable(); err != nil {
 		return err
@@ -173,6 +268,18 @@ func (s queueLockDetectStore) Close(id string) error {
 		return err
 	}
 	return s.MemStore.Close(id)
+}
+
+func (s queueLockDetectStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy beads.WritePolicy) (int, error) {
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	default:
+	}
+	if err := s.requireQueueLockAvailable(); err != nil {
+		return 0, err
+	}
+	return s.MemStore.RuntimeCloseAll(ctx, ids, metadata, policy)
 }
 
 func (s queueLockDetectStore) requireQueueLockAvailable() error {

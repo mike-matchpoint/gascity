@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 
 	"github.com/gastownhall/gascity/internal/beads"
 )
@@ -16,11 +15,7 @@ func sessionRuntimeWritePolicy(id, caller string) beads.WritePolicy {
 }
 
 func runtimeGetSessionBead(ctx context.Context, store beads.Store, id, caller string) (beads.Bead, error) {
-	b, err := beads.RuntimeGet(ctx, store, id, sessionRuntimeReadPolicy(caller))
-	if err != nil && errors.Is(err, beads.ErrIndexedListUnsupported) && store != nil {
-		return store.Get(id)
-	}
-	return b, err
+	return beads.RuntimeGet(ctx, store, id, sessionRuntimeReadPolicy(caller))
 }
 
 func runtimeUpdateSessionBead(ctx context.Context, store beads.Store, id string, opts beads.UpdateOpts, caller string) error {
@@ -28,22 +23,14 @@ func runtimeUpdateSessionBead(ctx context.Context, store beads.Store, id string,
 }
 
 func runtimeSetSessionMetadata(ctx context.Context, store beads.Store, id, key, value, caller string) error {
-	err := runtimeUpdateSessionBead(ctx, store, id, beads.UpdateOpts{Metadata: map[string]string{key: value}}, caller)
-	if err != nil && errors.Is(err, beads.ErrRuntimeWriteUnsupported) && store != nil {
-		return store.SetMetadata(id, key, value)
-	}
-	return err
+	return runtimeUpdateSessionBead(ctx, store, id, beads.UpdateOpts{Metadata: map[string]string{key: value}}, caller)
 }
 
 func runtimeSetSessionMetadataBatch(ctx context.Context, store beads.Store, id string, batch map[string]string, caller string) error {
 	if len(batch) == 0 {
 		return nil
 	}
-	err := runtimeUpdateSessionBead(ctx, store, id, beads.UpdateOpts{Metadata: batch}, caller)
-	if err != nil && errors.Is(err, beads.ErrRuntimeWriteUnsupported) && store != nil {
-		return store.SetMetadataBatch(id, batch)
-	}
-	return err
+	return runtimeUpdateSessionBead(ctx, store, id, beads.UpdateOpts{Metadata: batch}, caller)
 }
 
 func runtimeCloseSessionBeads(ctx context.Context, store beads.Store, ids []string, metadata map[string]string, caller string) (int, error) {
@@ -52,9 +39,5 @@ func runtimeCloseSessionBeads(ctx context.Context, store beads.Store, ids []stri
 		idempotencyKey = "session:" + ids[0] + ":close"
 	}
 	policy := beads.RuntimeWritePolicy(beads.WriteClassHotState, caller, idempotencyKey)
-	n, err := beads.RuntimeCloseAll(ctx, store, ids, metadata, policy)
-	if err != nil && errors.Is(err, beads.ErrRuntimeWriteUnsupported) && store != nil {
-		return store.CloseAll(ids, metadata)
-	}
-	return n, err
+	return beads.RuntimeCloseAll(ctx, store, ids, metadata, policy)
 }

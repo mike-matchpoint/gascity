@@ -43,6 +43,12 @@ func NewStore(script string) *Store {
 	}
 }
 
+// RuntimeHotFallbackDisabled prevents hot runtime read helpers from reaching
+// this fork/exec store through their generic foreground fallback path.
+func (s *Store) RuntimeHotFallbackDisabled() bool {
+	return true
+}
+
 func execProcessEnv(overrides map[string]string) []string {
 	out := make([]string, 0, len(os.Environ())+len(overrides))
 	for _, entry := range os.Environ() {

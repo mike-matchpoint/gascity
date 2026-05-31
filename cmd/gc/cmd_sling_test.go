@@ -47,12 +47,29 @@ func (s *selectiveErrStore) Create(b beads.Bead) (beads.Bead, error) {
 	return s.Store.Create(b)
 }
 
+func (s *selectiveErrStore) RuntimeCreate(ctx context.Context, b beads.Bead, policy beads.WritePolicy) (beads.Bead, error) {
+	if s.failOnCreate != nil {
+		if err := s.failOnCreate(b); err != nil {
+			return beads.Bead{}, err
+		}
+	}
+	if err, ok := s.failOnParentIDs[b.ParentID]; ok {
+		return beads.Bead{}, err
+	}
+	return beads.RuntimeCreate(ctx, s.Store, b, policy)
+}
+
 type getErrStore struct {
 	beads.Store
 	err error
 }
 
 func (s *getErrStore) Get(_ string) (beads.Bead, error) {
+	return beads.Bead{}, s.err
+}
+
+//nolint:unparam // Mirrors Get for runtime-read tests that only assert the error path.
+func (s *getErrStore) RuntimeGet(context.Context, string, beads.ReadPolicy) (beads.Bead, error) {
 	return beads.Bead{}, s.err
 }
 
@@ -81,6 +98,13 @@ func (s *recordingStore) Get(id string) (beads.Bead, error) {
 		return b, nil
 	}
 	return s.Store.Get(id)
+}
+
+func (s *recordingStore) RuntimeGet(ctx context.Context, id string, policy beads.ReadPolicy) (beads.Bead, error) {
+	if b, ok := s.beadsByID[id]; ok {
+		return b, nil
+	}
+	return beads.RuntimeGet(ctx, s.Store, id, policy)
 }
 
 // fakeRunnerRule maps a command substring to a canned response.
@@ -123,6 +147,34 @@ func (s *slingTestStore) Get(id string) (beads.Bead, error) {
 		return s.ensureSynthetic(id), nil
 	}
 	return b, nil
+}
+
+func (s *slingTestStore) RuntimeGet(ctx context.Context, id string, policy beads.ReadPolicy) (beads.Bead, error) {
+	select {
+	case <-ctx.Done():
+		return beads.Bead{}, ctx.Err()
+	default:
+	}
+	if strings.HasPrefix(id, "nudge-") || strings.HasPrefix(id, "wait-") {
+		return beads.RuntimeGet(ctx, s.Store, id, policy)
+	}
+	return s.Get(id)
+}
+
+func (s *slingTestStore) RuntimeList(ctx context.Context, query beads.ListQuery, policy beads.ReadPolicy) ([]beads.Bead, error) {
+	return beads.RuntimeList(ctx, s.Store, query, policy)
+}
+
+func (s *slingTestStore) RuntimeCreate(ctx context.Context, b beads.Bead, policy beads.WritePolicy) (beads.Bead, error) {
+	return beads.RuntimeCreate(ctx, s.Store, b, policy)
+}
+
+func (s *slingTestStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	return beads.RuntimeUpdate(ctx, s.Store, id, opts, policy)
+}
+
+func (s *slingTestStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy beads.WritePolicy) (int, error) {
+	return beads.RuntimeCloseAll(ctx, s.Store, ids, metadata, policy)
 }
 
 // slingTestLooksLikeBeadID accepts the same single-dash shapes as

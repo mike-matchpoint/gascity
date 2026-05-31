@@ -76,6 +76,10 @@ func (s unusableCappedNudgeStore) List(query beads.ListQuery) ([]beads.Bead, err
 	return items, nil
 }
 
+func (s unusableCappedNudgeStore) RuntimeList(_ context.Context, query beads.ListQuery, _ beads.ReadPolicy) ([]beads.Bead, error) {
+	return s.List(query)
+}
+
 type ambiguousNudgeBeadStore struct {
 	*beads.MemStore
 	ambiguousID string
@@ -107,6 +111,15 @@ func (s *unrelatedNotFoundNudgeBeadStore) SetMetadataBatch(id string, kvs map[st
 	return s.MemStore.SetMetadataBatch(id, kvs)
 }
 
+func (s *unrelatedNotFoundNudgeBeadStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy beads.WritePolicy) (int, error) {
+	for _, id := range ids {
+		if id == s.errorID {
+			return 0, fmt.Errorf("setting metadata on %q: backend path not found", id)
+		}
+	}
+	return s.MemStore.RuntimeCloseAll(ctx, ids, metadata, policy)
+}
+
 type rollbackCloseFailStore struct {
 	*beads.MemStore
 	closeErr error
@@ -114,6 +127,186 @@ type rollbackCloseFailStore struct {
 
 func (s *rollbackCloseFailStore) Close(string) error {
 	return s.closeErr
+}
+
+func (s *rollbackCloseFailStore) RuntimeCloseAll(context.Context, []string, map[string]string, beads.WritePolicy) (int, error) {
+	return 0, s.closeErr
+}
+
+type runtimeCreateOnlyNudgeStore struct {
+	*beads.MemStore
+	foregroundCreates int
+	runtimeCreates    int
+}
+
+func (s *runtimeCreateOnlyNudgeStore) Create(beads.Bead) (beads.Bead, error) {
+	s.foregroundCreates++
+	return beads.Bead{}, errors.New("foreground create must not be used")
+}
+
+func (s *runtimeCreateOnlyNudgeStore) RuntimeCreate(ctx context.Context, b beads.Bead, policy beads.WritePolicy) (beads.Bead, error) {
+	s.runtimeCreates++
+	return s.MemStore.RuntimeCreate(ctx, b, policy)
+}
+
+type runtimeCloseOnlyNudgeStore struct {
+	*beads.MemStore
+	foregroundMetadata int
+	foregroundCloses   int
+	runtimeCloses      int
+}
+
+func (s *runtimeCloseOnlyNudgeStore) SetMetadataBatch(string, map[string]string) error {
+	s.foregroundMetadata++
+	return errors.New("foreground metadata must not be used")
+}
+
+func (s *runtimeCloseOnlyNudgeStore) Close(string) error {
+	s.foregroundCloses++
+	return errors.New("foreground close must not be used")
+}
+
+func (s *runtimeCloseOnlyNudgeStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy beads.WritePolicy) (int, error) {
+	s.runtimeCloses++
+	return s.MemStore.RuntimeCloseAll(ctx, ids, metadata, policy)
+}
+
+func TestEnsureQueuedNudgeBeadUsesRuntimeCreateWithDeterministicID(t *testing.T) {
+	store := &runtimeCreateOnlyNudgeStore{MemStore: beads.NewMemStore()}
+	item := queuedNudge{
+		ID:        "nudge-runtime-create",
+		Agent:     "wendy.wendy",
+		SessionID: "mc-ayq6xi",
+		Source:    "session",
+		Message:   "follow up",
+		CreatedAt: time.Now().UTC(),
+	}
+
+	createdID, created, err := ensureQueuedNudgeBead(store, item)
+	if err != nil {
+		t.Fatalf("ensureQueuedNudgeBead: %v", err)
+	}
+	if !created {
+		t.Fatal("created = false, want true")
+	}
+	if createdID != item.ID {
+		t.Fatalf("createdID = %q, want deterministic nudge id %q", createdID, item.ID)
+	}
+	if store.foregroundCreates != 0 {
+		t.Fatalf("foregroundCreates = %d, want 0", store.foregroundCreates)
+	}
+	if store.runtimeCreates != 1 {
+		t.Fatalf("runtimeCreates = %d, want 1", store.runtimeCreates)
+	}
+}
+
+func TestEnsureQueuedNudgeBeadUsesCacheOwnedPrefixID(t *testing.T) {
+	ctx := context.Background()
+	backing := beads.NewMemStore()
+	store := beads.NewCachingStoreForTestWithPrefix(backing, "gc", nil)
+	if err := store.Prime(ctx); err != nil {
+		t.Fatalf("Prime: %v", err)
+	}
+	item := queuedNudge{
+		ID:        "wait-gc-1-1-1",
+		Agent:     "wendy.wendy",
+		SessionID: "mc-ayq6xi",
+		Source:    "wait",
+		Message:   "wait satisfied",
+		CreatedAt: time.Now().UTC(),
+	}
+
+	createdID, created, err := ensureQueuedNudgeBead(store, item)
+	if err != nil {
+		t.Fatalf("ensureQueuedNudgeBead: %v", err)
+	}
+	if !created {
+		t.Fatal("created = false, want true")
+	}
+	if !strings.HasPrefix(createdID, "gc-nudge-") {
+		t.Fatalf("createdID = %q, want cache-owned gc-nudge-* id", createdID)
+	}
+	if createdID == item.ID {
+		t.Fatalf("createdID = %q, want prefix-owned audit id distinct from queue id", createdID)
+	}
+	stored, err := backing.Get(createdID)
+	if err != nil {
+		t.Fatalf("backing.Get(%q): %v", createdID, err)
+	}
+	if got := stored.Metadata["nudge_id"]; got != item.ID {
+		t.Fatalf("metadata nudge_id = %q, want %q", got, item.ID)
+	}
+
+	item.BeadID = createdID
+	if err := store.Prime(ctx); err != nil {
+		t.Fatalf("Prime after create: %v", err)
+	}
+	if err := markQueuedNudgeTerminal(store, item, "expired", "expired", "", time.Now().UTC()); err != nil {
+		t.Fatalf("markQueuedNudgeTerminal: %v", err)
+	}
+	closed, err := backing.Get(createdID)
+	if err != nil {
+		t.Fatalf("backing.Get closed %q: %v", createdID, err)
+	}
+	if closed.Status != "closed" {
+		t.Fatalf("status = %q, want closed", closed.Status)
+	}
+	if got := closed.Metadata["state"]; got != "expired" {
+		t.Fatalf("terminal state = %q, want expired", got)
+	}
+}
+
+func TestEnsureQueuedNudgeBeadRejectsMismatchedExactID(t *testing.T) {
+	store := beads.NewMemStore()
+	if _, err := store.Create(beads.Bead{
+		ID:    "nudge-collision",
+		Title: "unrelated",
+		Type:  "task",
+		Metadata: map[string]string{
+			"nudge_id": "different",
+		},
+	}); err != nil {
+		t.Fatalf("seed unrelated bead: %v", err)
+	}
+	_, _, err := ensureQueuedNudgeBead(store, queuedNudge{
+		ID:      "nudge-collision",
+		Agent:   "wendy.wendy",
+		Source:  "session",
+		Message: "follow up",
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not match queued nudge") {
+		t.Fatalf("ensureQueuedNudgeBead error = %v, want mismatched exact-id rejection", err)
+	}
+}
+
+func TestMarkQueuedNudgeTerminalUsesRuntimeCloseAll(t *testing.T) {
+	store := &runtimeCloseOnlyNudgeStore{MemStore: beads.NewMemStore()}
+	item := queuedNudge{
+		ID:        "nudge-runtime-close",
+		Agent:     "wendy.wendy",
+		SessionID: "mc-ayq6xi",
+		Source:    "session",
+		Message:   "follow up",
+		CreatedAt: time.Now().UTC(),
+	}
+	createdID, _, err := ensureQueuedNudgeBead(store.MemStore, item)
+	if err != nil {
+		t.Fatalf("ensureQueuedNudgeBead: %v", err)
+	}
+	item.BeadID = createdID
+
+	if err := markQueuedNudgeTerminal(store, item, "expired", "expired", "", time.Now().UTC()); err != nil {
+		t.Fatalf("markQueuedNudgeTerminal: %v", err)
+	}
+	if store.foregroundMetadata != 0 {
+		t.Fatalf("foregroundMetadata = %d, want 0", store.foregroundMetadata)
+	}
+	if store.foregroundCloses != 0 {
+		t.Fatalf("foregroundCloses = %d, want 0", store.foregroundCloses)
+	}
+	if store.runtimeCloses != 1 {
+		t.Fatalf("runtimeCloses = %d, want 1", store.runtimeCloses)
+	}
 }
 
 func TestMarkQueuedNudgeTerminalFallsBackWhenStoredBeadIDEmpty(t *testing.T) {

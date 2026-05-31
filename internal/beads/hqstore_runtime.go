@@ -27,6 +27,25 @@ func (s *HQStore) RuntimeGet(ctx context.Context, id string, policy ReadPolicy) 
 	return s.Get(id)
 }
 
+// RuntimeList lists beads under a runtime read policy. HQStore is in-process,
+// so it can preserve authoritative semantics without a foreground subprocess.
+func (s *HQStore) RuntimeList(ctx context.Context, query ListQuery, policy ReadPolicy) ([]Bead, error) {
+	policy = normalizeReadPolicy(policy)
+	if policy.AllowFallback {
+		return s.List(query)
+	}
+	select {
+	case <-ctxDone(ctx):
+		return nil, degradedRead(policy, "list", "hq", "", ctx.Err())
+	default:
+	}
+	rows, err := s.List(query)
+	if err != nil {
+		return rows, err
+	}
+	return enforceRuntimeRowCap(rows, policy, "list", "hq")
+}
+
 // RuntimeUpdate updates a bead under a runtime write policy.
 func (s *HQStore) RuntimeUpdate(ctx context.Context, id string, opts UpdateOpts, policy WritePolicy) error {
 	select {

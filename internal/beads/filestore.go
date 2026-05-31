@@ -263,6 +263,28 @@ func (fs *FileStore) RuntimeGet(ctx context.Context, id string, policy ReadPolic
 	return fs.MemStore.Get(id)
 }
 
+// RuntimeList lists beads under a runtime read policy. FileStore is
+// in-process; it still honors cancellation before entering the filesystem path.
+func (fs *FileStore) RuntimeList(ctx context.Context, query ListQuery, policy ReadPolicy) ([]Bead, error) {
+	if fs == nil {
+		return nil, degradedRead(policy, "list", "file", "", errors.New("nil FileStore"))
+	}
+	policy = normalizeReadPolicy(policy)
+	if policy.AllowFallback {
+		return fs.List(query)
+	}
+	select {
+	case <-ctxDone(ctx):
+		return nil, degradedRead(policy, "list", "file", "", ctx.Err())
+	default:
+	}
+	rows, err := fs.List(query)
+	if err != nil {
+		return rows, err
+	}
+	return enforceRuntimeRowCap(rows, policy, "list", "file")
+}
+
 // Update delegates to MemStore.Update and flushes to disk.
 // If the disk flush fails, the in-memory mutation is rolled back.
 func (fs *FileStore) Update(id string, opts UpdateOpts) error {

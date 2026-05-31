@@ -284,6 +284,10 @@ func (s *blockingListStatusStore) List(query beads.ListQuery) ([]beads.Bead, err
 	return s.MemStore.List(query)
 }
 
+func (s *blockingListStatusStore) RuntimeList(_ context.Context, query beads.ListQuery, _ beads.ReadPolicy) ([]beads.Bead, error) {
+	return s.List(query)
+}
+
 type getSpyStatusStore struct {
 	*beads.MemStore
 	ids []string
