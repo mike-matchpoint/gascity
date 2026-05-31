@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -20,9 +21,15 @@ import (
 	"github.com/gastownhall/gascity/internal/execenv"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/pgauth"
+	"github.com/gastownhall/gascity/internal/shellquote"
 )
 
 const defaultManagedDoltHost = "127.0.0.1"
+
+const (
+	runtimeDoltRemoteShimEnvKey     = "GC_RUNTIME_DOLT_REMOTE_SHIM"
+	runtimeDoltRemoteShimPathEnvKey = "GC_RUNTIME_DOLT_REMOTE_SHIM_PATH"
+)
 
 // bdCommandRunnerForCity centralizes bd subprocess env construction so all
 // GC-managed bd calls resolve Dolt against the same city-scoped runtime.
@@ -948,6 +955,11 @@ func bdContextCommandRunnerWithManagedRetryErr(cityPath string, envFn func(dir s
 		if env == nil {
 			env = map[string]string{}
 		}
+		if name == "bd" && runtimeDoltRemoteShimApplies(cityPath, dir, env) {
+			if err := applyRuntimeDoltRemoteShimEnv(cityPath, env); err != nil {
+				return nil, err
+			}
+		}
 		ensureProjectedDoltEnvExplicit(env)
 		ensureProjectedPostgresEnvExplicit(env)
 		runner := beadsExecContextCommandRunnerWithEnv(env)
@@ -979,11 +991,93 @@ func bdContextCommandRunnerWithManagedRetryErr(cityPath string, envFn func(dir s
 		if retryEnvErr != nil {
 			return nil, retryEnvErr
 		}
+		if retryEnv == nil {
+			retryEnv = map[string]string{}
+		}
+		if runtimeDoltRemoteShimApplies(cityPath, dir, retryEnv) {
+			if err := applyRuntimeDoltRemoteShimEnv(cityPath, retryEnv); err != nil {
+				return nil, err
+			}
+		}
 		ensureProjectedDoltEnvExplicit(retryEnv)
 		ensureProjectedPostgresEnvExplicit(retryEnv)
 		retryRunner := beadsExecContextCommandRunnerWithEnv(retryEnv)
 		return retryRunner(ctx, dir, name, args...)
 	}
+}
+
+func runtimeDoltRemoteShimApplies(cityPath, scopeRoot string, env map[string]string) bool {
+	if env != nil && (strings.TrimSpace(env["BEADS_POSTGRES_HOST"]) != "" || strings.TrimSpace(env["BEADS_POSTGRES_DATABASE"]) != "") {
+		return false
+	}
+	return !scopeBackendIsPostgres(cityPath, scopeRoot)
+}
+
+func applyRuntimeDoltRemoteShimEnv(cityPath string, env map[string]string) error {
+	shimDir, shimPath, err := ensureRuntimeDoltRemoteShim(cityPath)
+	if err != nil {
+		return err
+	}
+	basePath := env["PATH"]
+	if strings.TrimSpace(basePath) == "" {
+		basePath = os.Getenv("PATH")
+	}
+	if strings.TrimSpace(basePath) == "" {
+		env["PATH"] = shimDir
+	} else if !pathListContains(basePath, shimDir) {
+		env["PATH"] = shimDir + string(os.PathListSeparator) + basePath
+	}
+	env[runtimeDoltRemoteShimEnvKey] = "remote-v-empty"
+	env[runtimeDoltRemoteShimPathEnvKey] = shimPath
+	return nil
+}
+
+func ensureRuntimeDoltRemoteShim(cityPath string) (string, string, error) {
+	realDolt, err := exec.LookPath("dolt")
+	if err != nil {
+		return "", "", fmt.Errorf("runtime dolt remote shim requires dolt on PATH: %w", err)
+	}
+	shimDir := filepath.Join(citylayout.RuntimeDataDir(cityPath), "beads", "hot-dolt-shim")
+	shimPath := filepath.Join(shimDir, "dolt")
+	if err := os.MkdirAll(shimDir, 0o755); err != nil {
+		return "", "", fmt.Errorf("creating runtime dolt remote shim dir: %w", err)
+	}
+	desired := []byte(runtimeDoltRemoteShimScript(realDolt))
+	if existing, readErr := os.ReadFile(shimPath); readErr == nil && string(existing) == string(desired) {
+		if err := os.Chmod(shimPath, 0o755); err != nil {
+			return "", "", fmt.Errorf("chmod runtime dolt remote shim: %w", err)
+		}
+		return shimDir, shimPath, nil
+	}
+	tmpPath := shimPath + ".tmp"
+	if err := os.WriteFile(tmpPath, desired, 0o755); err != nil {
+		return "", "", fmt.Errorf("writing runtime dolt remote shim: %w", err)
+	}
+	if err := os.Rename(tmpPath, shimPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", "", fmt.Errorf("installing runtime dolt remote shim: %w", err)
+	}
+	if err := os.Chmod(shimPath, 0o755); err != nil {
+		return "", "", fmt.Errorf("chmod runtime dolt remote shim: %w", err)
+	}
+	return shimDir, shimPath, nil
+}
+
+func runtimeDoltRemoteShimScript(realDolt string) string {
+	return "#!/bin/sh\n" +
+		"if [ \"$#\" -eq 2 ] && [ \"$1\" = \"remote\" ] && [ \"$2\" = \"-v\" ]; then\n" +
+		"\texit 0\n" +
+		"fi\n" +
+		"exec " + shellquote.Quote(realDolt) + " \"$@\"\n"
+}
+
+func pathListContains(pathValue, dir string) bool {
+	for _, part := range strings.Split(pathValue, string(os.PathListSeparator)) {
+		if part == dir {
+			return true
+		}
+	}
+	return false
 }
 
 func applyResolvedCityDoltEnv(env map[string]string, cityPath string, allowRecovery bool) error {
