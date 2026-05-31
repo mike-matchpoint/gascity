@@ -1613,10 +1613,16 @@ func TestOrderDispatchSnapshotManyOrdersDoesNotExhaustSharedStoreBudget(t *testi
 }
 
 func TestOrderDispatchTrackingReservationTimeoutDefersOnlyAffectedOrder(t *testing.T) {
+	oldBudget := orderDispatchTrackingWriteBudget
+	orderDispatchTrackingWriteBudget = 200 * time.Millisecond
+	t.Cleanup(func() {
+		orderDispatchTrackingWriteBudget = oldBudget
+	})
+
 	base := beads.NewMemStore()
 	store := delayedOrderTrackingCreateStore{
 		Store: base,
-		delay: beads.RuntimeWriteReservationBudget + 150*time.Millisecond,
+		delay: orderDispatchTrackingWriteBudget + 50*time.Millisecond,
 	}
 	var rec memRecorder
 	ran := make(map[string]bool)
@@ -1721,10 +1727,16 @@ func TestOrderDispatchTrackingReservationNotStartedReleasesLocalLease(t *testing
 }
 
 func TestOrderDispatchTrackingDegradedAllowedStartsWithLocalLease(t *testing.T) {
+	oldBudget := orderDispatchTrackingWriteBudget
+	orderDispatchTrackingWriteBudget = 200 * time.Millisecond
+	t.Cleanup(func() {
+		orderDispatchTrackingWriteBudget = oldBudget
+	})
+
 	base := beads.NewMemStore()
 	store := delayedOrderTrackingCreateStore{
 		Store: base,
-		delay: beads.RuntimeWriteReservationBudget + 150*time.Millisecond,
+		delay: orderDispatchTrackingWriteBudget + 50*time.Millisecond,
 	}
 	var rec memRecorder
 	ran := false
@@ -1925,10 +1937,10 @@ func TestOrderDispatchRoundRobinDoesNotStarveFrontOrders(t *testing.T) {
 	}
 }
 
-// TestOrderDispatchUncappedAfterStartupWindow proves the create cap is a
-// startup throttle, not an always-on limit: once now is past the startup grace
-// window from startedAt, all due orders fire in a single tick.
-func TestOrderDispatchUncappedAfterStartupWindow(t *testing.T) {
+// TestOrderDispatchLimitRemainsActiveAfterStartup proves the create cap stays
+// active after controller startup. Live Dolt needs steady-state backpressure;
+// round-robin fairness, not an uncapped burst, keeps due orders on cadence.
+func TestOrderDispatchLimitRemainsActiveAfterStartup(t *testing.T) {
 	oldMax := orderDispatchMaxCreatesPerTick
 	orderDispatchMaxCreatesPerTick = 4
 	t.Cleanup(func() {
@@ -1954,18 +1966,22 @@ func TestOrderDispatchUncappedAfterStartupWindow(t *testing.T) {
 	}
 	md.cfg = &config.City{}
 
-	// Controller started well before the throttle window elapsed → steady state.
+	// Controller started well before this tick. The cap still applies.
 	start := time.Date(2026, 5, 28, 1, 0, 0, 0, time.UTC)
 	md.startedAt = start
-	now := start.Add(orderDispatchStartupThrottleWindow + time.Minute)
+	now := start.Add(time.Hour)
 
 	md.dispatch(context.Background(), t.TempDir(), now)
 	md.drain(context.Background())
 
+	dispatched := 0
 	for _, name := range names {
-		if got := len(trackingBeads(t, store, "order-run:"+name)); got != 1 {
-			t.Fatalf("order %s tracking beads = %d after one steady-state tick, want 1 (uncapped)", name, got)
+		if got := len(trackingBeads(t, store, "order-run:"+name)); got > 0 {
+			dispatched++
 		}
+	}
+	if dispatched != orderDispatchMaxCreatesPerTick {
+		t.Fatalf("dispatched orders = %d, want cap %d", dispatched, orderDispatchMaxCreatesPerTick)
 	}
 }
 

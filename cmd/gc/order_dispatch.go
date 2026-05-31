@@ -76,15 +76,13 @@ const (
 	completedOrderTrackingCloseReason = "order dispatch completed: tracking bead lifecycle finished"
 )
 
-var orderDispatchMaxCreatesPerTick = 4
+var orderDispatchMaxCreatesPerTick = 1
 
-// orderDispatchStartupThrottleWindow bounds how long after controller start the
-// per-tick create cap (orderDispatchMaxCreatesPerTick) is enforced. The cap
-// exists to spread the startup tracking-bead write burst; once the city reaches
-// steady state the bounded set of due orders must fire on cadence, so the cap is
-// lifted after this window. Backpressure on Dolt contention is still provided by
-// the tracking write budget and return-on-write-failure paths.
-var orderDispatchStartupThrottleWindow = 2 * time.Minute
+// orderDispatchTrackingWriteBudget is longer than the generic runtime-write
+// default because one due order produces a small write chain: reservation,
+// outcome labels, then close. The per-tick create cap below keeps caller latency
+// bounded without opening a startup or steady-state write storm.
+var orderDispatchTrackingWriteBudget = 5 * time.Second
 
 func orderRunLabel(scopedName string) string {
 	return "order-run:" + scopedName
@@ -667,23 +665,11 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 	}
 }
 
-// effectiveCreateCap returns the per-tick tracking-bead create cap that
-// applies right now. The cap is a STARTUP throttle, not an always-on limit:
-// it spreads the boot-time write burst, then lifts once the city reaches
-// steady state so the bounded set of due orders fires on cadence.
-//
-//   - cap disabled (<= 0): always 0 (no throttle).
-//   - within the startup grace window after construction: the configured cap.
-//   - after the window (steady state): 0 (uncapped).
-//
-// A zero startedAt (test dispatchers that don't set it) is treated as "still
-// in startup" so the cap stays enforced — preserving deterministic test
-// behavior and erring toward throttling when the start time is unknown.
-func (m *memoryOrderDispatcher) effectiveCreateCap(now time.Time) int {
+// effectiveCreateCap returns the per-tick tracking-bead create cap. The cap is
+// steady-state backpressure: live Dolt can absorb one order write chain per tick
+// reliably, while round-robin rotation keeps due orders from starving.
+func (m *memoryOrderDispatcher) effectiveCreateCap(_ time.Time) int {
 	if orderDispatchMaxCreatesPerTick <= 0 {
-		return 0
-	}
-	if !m.startedAt.IsZero() && now.Sub(m.startedAt) >= orderDispatchStartupThrottleWindow {
 		return 0
 	}
 	return orderDispatchMaxCreatesPerTick
@@ -765,7 +751,7 @@ func (m *memoryOrderDispatcher) reserveOrderForDispatch(ctx context.Context, sto
 			"gc.idempotency_key":               reservation.Hash,
 		},
 	}
-	policy := beads.RuntimeWritePolicy(beads.WriteClassReservation, "order.dispatch.tracking-reservation", reservation.Hash)
+	policy := orderDispatchTrackingWritePolicy(beads.WriteClassReservation, "order.dispatch.tracking-reservation", reservation.Hash)
 	created, err := beads.RuntimeCreate(ctx, store, bead, policy)
 	if err == nil {
 		run.TrackingReserved = true
@@ -796,6 +782,12 @@ func (m *memoryOrderDispatcher) reserveOrderForDispatch(ctx context.Context, sto
 func orderTrackingReservationNotStarted(err error) bool {
 	var degraded *beads.DegradedWriteError
 	return errors.As(err, &degraded) && degraded.Outcome == beads.WriteOutcomeNotStarted
+}
+
+func orderDispatchTrackingWritePolicy(class beads.WriteClass, caller, idempotencyKey string) beads.WritePolicy {
+	policy := beads.RuntimeWritePolicy(class, caller, idempotencyKey)
+	policy.Timeout = orderDispatchTrackingWriteBudget
+	return policy
 }
 
 func (m *memoryOrderDispatcher) controllerStartID() string {
@@ -1433,7 +1425,7 @@ func (m *memoryOrderDispatcher) closeOrderTrackingRuntime(ctx context.Context, s
 	}
 	_, err := beads.RuntimeCloseAll(ctx, store, []string{run.TrackingID}, map[string]string{
 		"close_reason": completedOrderTrackingCloseReason,
-	}, beads.RuntimeWritePolicy(beads.WriteClassAuditRepair, "order.dispatch.tracking-close", run.TrackingID))
+	}, orderDispatchTrackingWritePolicy(beads.WriteClassAuditRepair, "order.dispatch.tracking-close", run.TrackingID))
 	return err
 }
 
@@ -1441,7 +1433,7 @@ func (m *memoryOrderDispatcher) runtimeTrackingUpdate(ctx context.Context, store
 	if id == "" {
 		return fmt.Errorf("runtime tracking update: empty id")
 	}
-	policy := beads.RuntimeWritePolicy(class, caller, idempotencyKey)
+	policy := orderDispatchTrackingWritePolicy(class, caller, idempotencyKey)
 	return beads.RuntimeUpdate(ctx, store, id, opts, policy)
 }
 
