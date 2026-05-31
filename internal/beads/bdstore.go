@@ -228,6 +228,8 @@ type BdStore struct {
 
 const bdTransientWriteAttempts = 3
 
+const runtimeWriteCloseAllCompositeBudgetCap = 15 * time.Second
+
 // NewBdStore creates a BdStore rooted at dir using the given runner.
 func NewBdStore(dir string, runner CommandRunner) *BdStore {
 	return NewBdStoreWithPrefix(dir, runner, "")
@@ -1505,10 +1507,11 @@ func (s *BdStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata ma
 	if len(ids) == 0 {
 		return 0, nil
 	}
+	preCloseMetadata := metadataExcludingCloseReason(metadata)
 	policy = normalizeWritePolicy(policy)
+	policy = runtimeWriteCloseAllCompositePolicy(policy, len(ids), len(preCloseMetadata) > 0)
 	objectKey := strings.Join(ids, ",")
 	value, err := s.runtimeWriteManager().do(ctx, policy, "close-all", objectKey, func(writeCtx context.Context) (any, error) {
-		preCloseMetadata := metadataExcludingCloseReason(metadata)
 		if len(preCloseMetadata) > 0 {
 			for _, id := range ids {
 				args := bdUpdateArgs(id, UpdateOpts{Metadata: preCloseMetadata})
@@ -1538,6 +1541,20 @@ func (s *BdStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata ma
 		return 0, degradedWrite(policy, s.RuntimeWriteStoreKey(), "close-all", WriteOutcomeFailed, errors.New("runtime close-all returned non-int result"))
 	}
 	return n, nil
+}
+
+func runtimeWriteCloseAllCompositePolicy(policy WritePolicy, idCount int, hasPreCloseMetadata bool) WritePolicy {
+	if !hasPreCloseMetadata || idCount <= 0 || policy.Timeout <= 0 {
+		return policy
+	}
+	compositeTimeout := time.Duration(idCount+1) * policy.Timeout
+	if compositeTimeout > runtimeWriteCloseAllCompositeBudgetCap {
+		compositeTimeout = runtimeWriteCloseAllCompositeBudgetCap
+	}
+	if compositeTimeout > policy.Timeout {
+		policy.Timeout = compositeTimeout
+	}
+	return policy
 }
 
 // RuntimePing verifies bd write-health with a short runtime budget.

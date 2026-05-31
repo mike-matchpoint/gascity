@@ -494,6 +494,47 @@ func TestBdStoreRuntimeWriteExecutionBudgetStartsWhenDequeued(t *testing.T) {
 	}
 }
 
+func TestBdStoreRuntimeCloseAllCompositeBudgetCoversMetadataAndClose(t *testing.T) {
+	var mu sync.Mutex
+	var calls []string
+	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(ctx context.Context, _ string, _ string, args ...string) ([]byte, error) {
+		if len(args) == 0 {
+			return nil, errors.New("empty bd args")
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(25 * time.Millisecond):
+		}
+		mu.Lock()
+		calls = append(calls, args[0])
+		mu.Unlock()
+		return []byte(`[]`), nil
+	})
+
+	policy := RuntimeWritePolicy(WriteClassHotState, "test.close-budget", "session:gc-1:close")
+	policy.Timeout = 40 * time.Millisecond
+	n, err := store.RuntimeCloseAll(context.Background(), []string{"gc-1"}, map[string]string{
+		"state":        "drained",
+		"closed_at":    "2026-05-31T08:15:53Z",
+		"close_reason": "session drained: pool slot retired by reconciler",
+	}, policy)
+	if err != nil {
+		t.Fatalf("RuntimeCloseAll: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("closed = %d, want 1", n)
+	}
+
+	mu.Lock()
+	got := append([]string(nil), calls...)
+	mu.Unlock()
+	want := []string{"update", "close"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("bd calls = %v, want %v", got, want)
+	}
+}
+
 func TestBdStoreRuntimeWriteCircuitBreakerOpensAfterTimeouts(t *testing.T) {
 	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(ctx context.Context, _ string, _ string, _ ...string) ([]byte, error) {
 		<-ctx.Done()
