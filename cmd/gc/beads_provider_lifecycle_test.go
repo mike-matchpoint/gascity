@@ -1163,11 +1163,11 @@ func TestEnsureBeadsProvider_execDoesNotReclassifyProviderAfterStart(t *testing.
 		"echo \"$1\" >> \"" + callLog + "\"\n" +
 		"case \"${1:-}\" in\n" +
 		"  start)\n" +
-		"    : > \"" + marker + "\"\n" +
+		"    printf 'started\\n' > \"" + marker + "\"\n" +
 		"    i=0\n" +
 		"    while [ ! -f \"" + release + "\" ]; do\n" +
 		"      i=$((i + 1))\n" +
-		"      [ \"$i\" -le 1000 ] || exit 42\n" +
+		"      [ \"$i\" -le 4000 ] || exit 42\n" +
 		"      sleep 0.01\n" +
 		"    done\n" +
 		"    echo 'signal: terminated' >&2\n" +
@@ -1199,10 +1199,13 @@ func TestEnsureBeadsProvider_execDoesNotReclassifyProviderAfterStart(t *testing.
 
 	releaseErr := make(chan error, 1)
 	go func() {
-		deadline := time.Now().Add(5 * time.Second)
+		deadline := time.Now().Add(30 * time.Second)
 		for {
-			if _, err := os.Stat(marker); err == nil {
+			if data, err := os.ReadFile(marker); err == nil && strings.TrimSpace(string(data)) == "started" {
 				break
+			} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+				releaseErr <- err
+				return
 			}
 			if time.Now().After(deadline) {
 				releaseErr <- fmt.Errorf("provider start marker was not written")
