@@ -67,6 +67,12 @@ dolt    %d user   12u  IPv4 0x1234      0t0  TCP *:3306 (LISTEN)
 }
 
 func TestProcessCWDFromLsofParsesNameRecord(t *testing.T) {
+	oldTimeout := lsofCommandTimeout
+	lsofCommandTimeout = 20 * time.Second
+	t.Cleanup(func() {
+		lsofCommandTimeout = oldTimeout
+	})
+
 	binDir := t.TempDir()
 	lsofPath := filepath.Join(binDir, "lsof")
 	if err := os.WriteFile(lsofPath, []byte("#!/bin/sh\nprintf 'p123\\nfcwd\\nn/private/var/folders/example/.beads/dolt\\n'\n"), 0o755); err != nil {

@@ -1439,6 +1439,12 @@ func TestInitRunDoltConfigGetReportsExitStderrAsProbeError(t *testing.T) {
 }
 
 func TestInitRunDoltConfigGetTreatsSilentEmptyExitAsMissingKey(t *testing.T) {
+	oldTimeout := initRunVersionTimeout
+	initRunVersionTimeout = 20 * time.Second
+	t.Cleanup(func() {
+		initRunVersionTimeout = oldTimeout
+	})
+
 	binDir := t.TempDir()
 	doltPath := filepath.Join(binDir, "dolt")
 	if err := os.WriteFile(doltPath, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
