@@ -223,25 +223,49 @@ func lifecycleTimerBlocker(metadata map[string]string, now time.Time) string {
 	}
 }
 
-func isDrainAckStopPending(session beads.Bead) bool {
-	return strings.TrimSpace(session.Metadata["state"]) == string(sessionpkg.StateDraining) &&
-		strings.TrimSpace(session.Metadata["state_reason"]) == sessionpkg.DrainAckStopPendingReason
+func isProviderStopPending(session beads.Bead) bool {
+	if strings.TrimSpace(session.Metadata["state"]) != string(sessionpkg.StateDraining) {
+		return false
+	}
+	switch strings.TrimSpace(session.Metadata["state_reason"]) {
+	case sessionpkg.DrainAckStopPendingReason, sessionpkg.OneShotEmptyStopPendingReason:
+		return true
+	default:
+		return false
+	}
 }
 
-func markDrainAckStopPending(session *beads.Bead, store beads.Store, clk clock.Clock, stderr io.Writer) bool {
+func providerStopPendingBoundary(session beads.Bead) sessionpkg.StopBoundary {
+	if strings.TrimSpace(session.Metadata["state_reason"]) == sessionpkg.OneShotEmptyStopPendingReason {
+		return sessionpkg.StopBoundaryForce
+	}
+	return sessionpkg.StopBoundaryAgentAck
+}
+
+func markProviderStopPending(session *beads.Bead, store beads.Store, clk clock.Clock, reason string, stderr io.Writer) bool {
 	if session == nil || store == nil || session.ID == "" {
 		return false
 	}
 	if stderr == nil {
 		stderr = io.Discard
 	}
-	batch := sessionpkg.DrainAckStopPendingPatch(clk.Now().UTC())
-	if err := runtimeSetSessionMetadataBatch(context.Background(), store, session.ID, batch, "session.drain-ack-stop-pending"); err != nil {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = sessionpkg.DrainAckStopPendingReason
+	}
+	action := "session.provider-stop-pending"
+	label := "provider stop-pending"
+	if reason == sessionpkg.DrainAckStopPendingReason {
+		action = "session.drain-ack-stop-pending"
+		label = "drain-ack stop-pending"
+	}
+	batch := sessionpkg.ProviderStopPendingPatch(clk.Now().UTC(), reason)
+	if err := runtimeSetSessionMetadataBatch(context.Background(), store, session.ID, batch, action); err != nil {
 		name := strings.TrimSpace(session.Metadata["session_name"])
 		if name == "" {
 			name = session.ID
 		}
-		fmt.Fprintf(stderr, "session reconciler: marking drain-ack stop-pending %s: %v\n", name, err) //nolint:errcheck
+		fmt.Fprintf(stderr, "session reconciler: marking %s %s: %v\n", label, name, err) //nolint:errcheck
 		return false
 	}
 	if session.Metadata == nil {
@@ -251,6 +275,10 @@ func markDrainAckStopPending(session *beads.Bead, store beads.Store, clk clock.C
 		session.Metadata[key] = value
 	}
 	return true
+}
+
+func markDrainAckStopPending(session *beads.Bead, store beads.Store, clk clock.Clock, stderr io.Writer) bool {
+	return markProviderStopPending(session, store, clk, sessionpkg.DrainAckStopPendingReason, stderr)
 }
 
 func clearDrainTrackerForStopPending(session *beads.Bead, dt *drainTracker) {
@@ -292,6 +320,50 @@ func queueDrainAckAsyncStop(cityPath string, store beads.Store, sp runtime.Provi
 			fmt.Fprintf(stderr, "session reconciler: async drain-ack stop %s: %v\n", name, err) //nolint:errcheck
 		}
 	}()
+}
+
+func emptyOneShotPoolStopCandidate(target wakeTarget, cfg *config.City, sp runtime.Provider, poolDesired map[string]int, decision AwakeDecision, eval wakeEvaluation) (string, bool) {
+	if target.session == nil || !target.alive || decision.ShouldWake || eval.HasAssignedWork || len(eval.Reasons) > 0 {
+		return "", false
+	}
+	switch strings.TrimSpace(decision.Reason) {
+	case "held", "quarantined":
+		return "", false
+	}
+	if strings.TrimSpace(target.session.Metadata["pending_create_claim"]) != "" ||
+		strings.TrimSpace(target.session.Metadata["wait_hold"]) == boolMetadata(true) ||
+		strings.TrimSpace(target.session.Metadata["pin_awake"]) == boolMetadata(true) {
+		return "", false
+	}
+	template := strings.TrimSpace(target.tp.TemplateName)
+	if template == "" {
+		template = normalizedSessionTemplate(*target.session, cfg)
+	}
+	if template == "" {
+		template = strings.TrimSpace(target.session.Metadata["template"])
+	}
+	if template == "" || poolDesired[template] > 0 {
+		return "", false
+	}
+	agentCfg := findAgentByTemplate(cfg, template)
+	if agentCfg == nil || strings.TrimSpace(agentCfg.Lifecycle) != config.AgentLifecycleOneShot {
+		return "", false
+	}
+	if isNamedSessionBead(*target.session) || isManualSessionBeadForAgent(*target.session, agentCfg) || !isPoolManagedSessionBead(*target.session) {
+		return "", false
+	}
+	if !isEphemeralSessionBeadForAgent(*target.session, agentCfg) {
+		return "", false
+	}
+	name := strings.TrimSpace(target.session.Metadata["session_name"])
+	if name == "" || pendingInteractionReady(sp, name) {
+		return "", false
+	}
+	attached, err := workerSessionTargetAttachedWithConfig("", nil, sp, nil, name)
+	if err != nil || attached {
+		return "", false
+	}
+	return template, true
 }
 
 func recordDrainAckAssignedWorkEvent(
@@ -360,8 +432,17 @@ func finalizeDrainAckStoppedSession(
 	if boundary == "" {
 		boundary = sessionpkg.StopBoundaryAgentAck
 	}
+	stopPendingReason := strings.TrimSpace(session.Metadata["state_reason"])
+	stopEventReason := "drain acknowledged"
+	stopContinuationReason := "drain-ack"
+	artifactStopLabel := "drain-acked"
+	if stopPendingReason == sessionpkg.OneShotEmptyStopPendingReason {
+		stopEventReason = "one-shot empty"
+		stopContinuationReason = "one-shot-empty"
+		artifactStopLabel = "provider stop-pending"
+	}
 	if err := stopVisibleRuntimeArtifactBeforeDrainAckFinalization(sp, name); err != nil {
-		fmt.Fprintf(stderr, "session reconciler: stopping drain-acked runtime artifact %s: %v\n", name, err) //nolint:errcheck
+		fmt.Fprintf(stderr, "session reconciler: stopping %s runtime artifact %s: %v\n", artifactStopLabel, name, err) //nolint:errcheck
 		return
 	}
 	recordStopped := func() {
@@ -372,8 +453,8 @@ func finalizeDrainAckStoppedSession(
 			Type:    events.SessionStopped,
 			Actor:   "gc",
 			Subject: template,
-			Message: "drain acknowledged by agent",
-			Payload: api.SessionLifecyclePayloadJSON(session.ID, template, "drain acknowledged"),
+			Message: stopEventReason,
+			Payload: api.SessionLifecyclePayloadJSON(session.ID, template, stopEventReason),
 		})
 	}
 	hasAssignedWork, assignedErr := sessionHasOpenAssignedWorkForReachableStore(cityPath, cfg, store, rigStores, *session)
@@ -422,7 +503,7 @@ func finalizeDrainAckStoppedSession(
 			hasAssignedWork = true
 		}
 	}
-	stop := stopContinuationInputForSession(*session, nil, "drain-ack", boundary)
+	stop := stopContinuationInputForSession(*session, nil, stopContinuationReason, boundary)
 	batch := sessionpkg.AcknowledgeDrainContinuationPatch(clk.Now().UTC(), session.Metadata["wake_mode"] == "fresh", stop)
 	if hasAssignedWork {
 		stop.Reason = "idle"
@@ -446,7 +527,7 @@ func finalizeDrainAckStoppedSession(
 		dt.remove(session.ID)
 	}
 	recordStopped()
-	if hasAssignedWork {
+	if hasAssignedWork && stopPendingReason != sessionpkg.OneShotEmptyStopPendingReason {
 		recordDrainAckAssignedWorkEvent(cityPath, cfg, store, rigStores, *session, template, template, name, rec, stderr)
 	}
 }
@@ -508,7 +589,7 @@ func reconcileDrainAckStopPending(
 	rec events.Recorder,
 	stderr io.Writer,
 ) bool {
-	if session == nil || !isDrainAckStopPending(*session) {
+	if session == nil || !isProviderStopPending(*session) {
 		return false
 	}
 	name := strings.TrimSpace(session.Metadata["session_name"])
@@ -520,7 +601,7 @@ func reconcileDrainAckStopPending(
 	finalizeDrainAckStoppedSession(
 		cityPath, cfg, sp, store, rigStores, session, tp.TemplateName,
 		!desired || isPoolManagedSessionBead(*session),
-		sessionpkg.StopBoundaryAgentAck,
+		providerStopPendingBoundary(*session),
 		dops, dt, clk, rec, stderr,
 	)
 	return true
@@ -546,7 +627,7 @@ func finalizeDrainAckStopPendingSessions(
 	finalized := 0
 	for i := range sessions {
 		session := &sessions[i]
-		if !isDrainAckStopPending(*session) {
+		if !isProviderStopPending(*session) {
 			continue
 		}
 		name := strings.TrimSpace(session.Metadata["session_name"])
@@ -562,7 +643,7 @@ func finalizeDrainAckStopPendingSessions(
 			cityPath, cfg, sp, store, rigStores, session,
 			normalizedSessionTemplate(*session, cfg),
 			isPoolManagedSessionBead(*session),
-			sessionpkg.StopBoundaryAgentAck,
+			providerStopPendingBoundary(*session),
 			dops, dt, clk, rec, stderr,
 		)
 		finalized++
@@ -2441,6 +2522,38 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		}
 
 		if !shouldWake && target.alive {
+			if storeQueryPartial {
+				if trace != nil {
+					trace.recordDecision("reconciler.session.drain", target.tp.TemplateName, target.session.Metadata["session_name"], "store-query-partial", "defer", nil, nil, "")
+				}
+				continue
+			}
+			if template, ok := emptyOneShotPoolStopCandidate(target, cfg, sp, poolDesired, decision, eval); ok {
+				hasAssignedWork, assignedErr := sessionHasOpenAssignedWorkForReachableStore(cityPath, cfg, store, rigStores, *target.session)
+				if assignedErr != nil {
+					fmt.Fprintf(stderr, "session reconciler: checking assigned work before empty one-shot stop %s: %v\n", target.session.Metadata["session_name"], assignedErr) //nolint:errcheck
+					if trace != nil {
+						trace.recordDecision("reconciler.session.one_shot_empty", template, target.session.Metadata["session_name"], "assigned-work-query-error", "defer", traceRecordPayload{
+							"error": assignedErr.Error(),
+						}, nil, "")
+					}
+					continue
+				}
+				if hasAssignedWork {
+					if trace != nil {
+						trace.recordDecision("reconciler.session.one_shot_empty", template, target.session.Metadata["session_name"], "assigned-work", "defer", nil, nil, "")
+					}
+					continue
+				}
+				if markProviderStopPending(target.session, store, clk, sessionpkg.OneShotEmptyStopPendingReason, stderr) {
+					clearDrainTrackerForStopPending(target.session, dt)
+					queueDrainAckAsyncStop(cityPath, store, sp, cfg, target.session.ID, target.session.Metadata["session_name"], asyncStopTracker, stderr)
+					if trace != nil {
+						trace.recordDecision("reconciler.session.one_shot_empty", template, target.session.Metadata["session_name"], "one-shot-empty", "stop_pending", nil, nil, "")
+					}
+				}
+				continue
+			}
 			// No reason to be awake — begin drain.
 			intent := target.session.Metadata["sleep_intent"]
 			var reason string

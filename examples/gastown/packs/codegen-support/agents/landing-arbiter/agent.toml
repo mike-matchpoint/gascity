@@ -10,6 +10,7 @@
 # source of truth and survive city reloads.
 scope = "rig"
 provider = "claude"
+lifecycle = "one_shot"
 wake_mode = "fresh"
 idle_timeout = "1h"
 nudge = "Check for pending owned-convoy landing-failure bugs and process them."

@@ -2689,6 +2689,178 @@ func TestReconcileSessionBeads_DrainedPoolSessionStoreQueryPartialStaysOpen(t *t
 	}
 }
 
+func TestReconcileSessionBeads_EmptyOneShotPoolSessionStopsAndCloses(t *testing.T) {
+	env := newReconcilerTestEnv()
+	env.cfg = &config.City{
+		Agents: []config.Agent{{
+			Name:              "worker",
+			Lifecycle:         config.AgentLifecycleOneShot,
+			MinActiveSessions: intPtr(0),
+			MaxActiveSessions: intPtr(2),
+		}},
+	}
+	env.addDesired("worker-live", "worker", true)
+	session := env.createSessionBead("worker-live", "worker")
+	env.markSessionActive(&session)
+	env.setSessionMetadata(&session, map[string]string{
+		"pool_slot":            "1",
+		poolManagedMetadataKey: boolMetadata(true),
+		"session_origin":       "ephemeral",
+	})
+
+	woken := env.reconcileWithPoolDesired([]beads.Bead{session}, map[string]int{"worker": 0})
+	if woken != 0 {
+		t.Fatalf("woken = %d, want 0", woken)
+	}
+	got, err := env.store.Get(session.ID)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", session.ID, err)
+	}
+	if got.Metadata["state"] != string(sessionpkg.StateDraining) {
+		t.Fatalf("state = %q, want draining", got.Metadata["state"])
+	}
+	if got.Metadata["state_reason"] != sessionpkg.OneShotEmptyStopPendingReason {
+		t.Fatalf("state_reason = %q, want %q", got.Metadata["state_reason"], sessionpkg.OneShotEmptyStopPendingReason)
+	}
+
+	final := env.reconcileStopPendingToTerminal(t, env.sp, got, nil, map[string]bool{"worker": true})
+	if final.Status != "closed" {
+		t.Fatalf("status = %q, want closed: metadata=%v", final.Status, final.Metadata)
+	}
+	if final.Metadata["close_reason"] != "session drained: pool slot retired by reconciler" {
+		t.Fatalf("close_reason = %q, want pool slot retired", final.Metadata["close_reason"])
+	}
+	if env.sp.IsRunning("worker-live") {
+		t.Fatal("worker-live should be stopped after empty one-shot convergence")
+	}
+}
+
+func TestReconcileSessionBeads_EmptyOneShotPoolSessionKeepsAssignedWork(t *testing.T) {
+	env := newReconcilerTestEnv()
+	env.cfg = &config.City{
+		Agents: []config.Agent{{
+			Name:              "worker",
+			Lifecycle:         config.AgentLifecycleOneShot,
+			MinActiveSessions: intPtr(0),
+			MaxActiveSessions: intPtr(2),
+		}},
+	}
+	env.addDesired("worker-live", "worker", true)
+	session := env.createSessionBead("worker-live", "worker")
+	env.markSessionActive(&session)
+	env.setSessionMetadata(&session, map[string]string{
+		"pool_slot":            "1",
+		poolManagedMetadataKey: boolMetadata(true),
+		"session_origin":       "ephemeral",
+	})
+	_ = createInProgressTaskWithWorkDir(t, env.store, session.ID, "")
+
+	woken := env.reconcileWithPoolDesired([]beads.Bead{session}, map[string]int{"worker": 0})
+	if woken != 0 {
+		t.Fatalf("woken = %d, want 0", woken)
+	}
+	got, err := env.store.Get(session.ID)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", session.ID, err)
+	}
+	if got.Metadata["state_reason"] == sessionpkg.OneShotEmptyStopPendingReason {
+		t.Fatalf("assigned one-shot session was marked stop-pending: metadata=%v", got.Metadata)
+	}
+	if !env.sp.IsRunning("worker-live") {
+		t.Fatal("assigned one-shot session should still be running")
+	}
+}
+
+func TestReconcileSessionBeads_EmptyOneShotPoolSessionDefersWhenStoreQueryPartial(t *testing.T) {
+	env := newReconcilerTestEnv()
+	env.cfg = &config.City{
+		Agents: []config.Agent{{
+			Name:              "worker",
+			Lifecycle:         config.AgentLifecycleOneShot,
+			MinActiveSessions: intPtr(0),
+			MaxActiveSessions: intPtr(2),
+		}},
+	}
+	env.addDesired("worker-live", "worker", true)
+	session := env.createSessionBead("worker-live", "worker")
+	env.markSessionActive(&session)
+	env.setSessionMetadata(&session, map[string]string{
+		"pool_slot":            "1",
+		poolManagedMetadataKey: boolMetadata(true),
+		"session_origin":       "ephemeral",
+	})
+
+	woken := reconcileSessionBeadsAtPath(
+		context.Background(),
+		"",
+		[]beads.Bead{session},
+		env.desiredState,
+		configuredSessionNames(env.cfg, "", env.store),
+		env.cfg,
+		env.sp,
+		env.store,
+		nil,
+		nil,
+		nil,
+		nil,
+		env.dt,
+		map[string]int{"worker": 0},
+		true, // storeQueryPartial
+		nil,
+		"",
+		nil,
+		env.clk,
+		env.rec,
+		0,
+		0,
+		&env.stdout,
+		&env.stderr,
+	)
+	if woken != 0 {
+		t.Fatalf("woken = %d, want 0", woken)
+	}
+	got, err := env.store.Get(session.ID)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", session.ID, err)
+	}
+	if got.Metadata["state_reason"] == sessionpkg.OneShotEmptyStopPendingReason {
+		t.Fatalf("partial store query must not stop one-shot session: metadata=%v", got.Metadata)
+	}
+	if !env.sp.IsRunning("worker-live") {
+		t.Fatal("partial store query must leave provider runtime running")
+	}
+}
+
+func TestReconcileSessionBeads_EmptyPoolSessionWithoutOneShotUsesNormalDrain(t *testing.T) {
+	env := newReconcilerTestEnv()
+	env.cfg = &config.City{
+		Agents: []config.Agent{{Name: "worker", MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(2)}},
+	}
+	env.addDesired("worker-live", "worker", true)
+	session := env.createSessionBead("worker-live", "worker")
+	env.markSessionActive(&session)
+	env.setSessionMetadata(&session, map[string]string{
+		"pool_slot":            "1",
+		poolManagedMetadataKey: boolMetadata(true),
+		"session_origin":       "ephemeral",
+	})
+
+	woken := env.reconcileWithPoolDesired([]beads.Bead{session}, map[string]int{"worker": 0})
+	if woken != 0 {
+		t.Fatalf("woken = %d, want 0", woken)
+	}
+	got, err := env.store.Get(session.ID)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", session.ID, err)
+	}
+	if got.Metadata["state_reason"] == sessionpkg.OneShotEmptyStopPendingReason {
+		t.Fatalf("long-lived pool session used one-shot stop path: metadata=%v", got.Metadata)
+	}
+	if !env.sp.IsRunning("worker-live") {
+		t.Fatal("long-lived pool session should not be force-stopped by one-shot convergence")
+	}
+}
+
 // stopFailProvider wraps a Fake but makes Stop always fail.
 // The session remains running (IsRunning returns true).
 type stopFailProvider struct {

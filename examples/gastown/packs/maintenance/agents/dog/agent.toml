@@ -1,5 +1,6 @@
 scope = "city"
 fallback = true
+lifecycle = "one_shot"
 nudge = "Check your hook for work assignments."
 idle_timeout = "2h"
 min_active_sessions = 0

@@ -4,6 +4,7 @@
 # Lives long enough to run the formula, then exits.
 scope = "rig"
 provider = "codex"
+lifecycle = "one_shot"
 wake_mode = "fresh"
 idle_timeout = "1h"
 nudge = "Check your hook for a spec-cartographer molecule, then execute it."

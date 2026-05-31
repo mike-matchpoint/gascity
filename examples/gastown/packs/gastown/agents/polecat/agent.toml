@@ -1,4 +1,5 @@
 scope = "rig"
+lifecycle = "one_shot"
 wake_mode = "fresh"
 work_dir = ".gc/worktrees/{{.Rig}}/polecats/{{.AgentBase}}"
 nudge = "Run gc hook; it checks assigned work first, then routed pool work."

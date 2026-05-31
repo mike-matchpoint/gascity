@@ -430,15 +430,27 @@ func BeginDrainPatch(now time.Time, reason string) MetadataPatch {
 // running asynchronously and waiting for controller finalization.
 const DrainAckStopPendingReason = "drain-ack-stop-pending"
 
+// OneShotEmptyStopPendingReason marks a one-shot pool runtime that has no
+// remaining demand or assigned work and whose provider stop is running
+// asynchronously before controller finalization.
+const OneShotEmptyStopPendingReason = "one-shot-empty-stop-pending"
+
+// ProviderStopPendingPatch records that a provider stop is in progress. The
+// caller supplies the stop-pending reason so controller-initiated stops do not
+// masquerade as agent drain acknowledgements.
+func ProviderStopPendingPatch(now time.Time, reason string) MetadataPatch {
+	patch := BeginDrainPatch(now, reason)
+	patch["pending_create_claim"] = ""
+	patch["pending_create_started_at"] = ""
+	return patch
+}
+
 // DrainAckStopPendingPatch records that a drain-acked session has moved into
 // durable stop-pending state. The provider stop itself is asynchronous; the
 // controller finalizes the bead with the normal drain completion patches after
 // observing the runtime stopped.
 func DrainAckStopPendingPatch(now time.Time) MetadataPatch {
-	patch := BeginDrainPatch(now, DrainAckStopPendingReason)
-	patch["pending_create_claim"] = ""
-	patch["pending_create_started_at"] = ""
-	return patch
+	return ProviderStopPendingPatch(now, DrainAckStopPendingReason)
 }
 
 // SleepPatch records a non-terminal sleep/drain result.
