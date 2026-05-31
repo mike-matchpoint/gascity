@@ -25,12 +25,15 @@ type Provider struct {
 }
 
 var (
-	_ runtime.Provider                      = (*Provider)(nil)
-	_ runtime.DeadRuntimeSessionChecker     = (*Provider)(nil)
-	_ runtime.InteractionProvider           = (*Provider)(nil)
-	_ runtime.InterruptBoundaryWaitProvider = (*Provider)(nil)
-	_ runtime.InterruptedTurnResetProvider  = (*Provider)(nil)
-	_ runtime.TransportCapabilityProvider   = (*Provider)(nil)
+	_ runtime.Provider                             = (*Provider)(nil)
+	_ runtime.DeadRuntimeSessionChecker            = (*Provider)(nil)
+	_ runtime.InteractionProvider                  = (*Provider)(nil)
+	_ runtime.InterruptBoundaryWaitProvider        = (*Provider)(nil)
+	_ runtime.InterruptedTurnResetProvider         = (*Provider)(nil)
+	_ runtime.TransportCapabilityProvider          = (*Provider)(nil)
+	_ runtime.ProviderRuntimeIdentityReporter      = (*Provider)(nil)
+	_ runtime.ProviderRuntimeCompatibilityObserver = (*Provider)(nil)
+	_ runtime.RuntimeArtifactLister                = (*Provider)(nil)
 )
 
 // New creates a composite provider. defaultSP handles sessions not
@@ -192,6 +195,31 @@ func (p *Provider) IsDeadRuntimeSession(name string) (bool, error) {
 	return providerDeadRuntimeSession(p.acpSP, name)
 }
 
+// DesiredProviderRuntimeIdentity delegates to the routed backend when it can
+// report provider substrate identity.
+func (p *Provider) DesiredProviderRuntimeIdentity(ctx context.Context, name string, cfg runtime.Config) (runtime.ProviderRuntimeIdentity, error) {
+	reporter, ok := p.route(name).(runtime.ProviderRuntimeIdentityReporter)
+	if !ok {
+		return runtime.ProviderRuntimeIdentity{}, nil
+	}
+	return reporter.DesiredProviderRuntimeIdentity(ctx, name, cfg)
+}
+
+// ObserveRuntimeCompatibility delegates to the routed backend when it can
+// compare visible runtime artifacts with the desired provider substrate.
+func (p *Provider) ObserveRuntimeCompatibility(ctx context.Context, name string, cfg runtime.Config) (runtime.CompatibilityObservation, error) {
+	observer, ok := p.route(name).(runtime.ProviderRuntimeCompatibilityObserver)
+	if !ok {
+		return runtime.CompatibilityObservation{
+			Supported:  false,
+			Exists:     false,
+			Compatible: true,
+			Reason:     "unsupported",
+		}, nil
+	}
+	return observer.ObserveRuntimeCompatibility(ctx, name, cfg)
+}
+
 func providerDeadRuntimeSession(sp runtime.Provider, name string) (bool, error) {
 	checker, ok := sp.(runtime.DeadRuntimeSessionChecker)
 	if !ok {
@@ -308,6 +336,17 @@ func (p *Provider) ListRunning(prefix string) ([]string, error) {
 	return runtime.MergeBackendListResults(
 		runtime.BackendListResult{Label: "default", Names: defaultList, Err: dErr},
 		runtime.BackendListResult{Label: "acp", Names: acpList, Err: aErr},
+	)
+}
+
+// ListRuntimeArtifacts queries both backends so cleanup can see durable
+// artifacts even when the route table is stale after controller restart.
+func (p *Provider) ListRuntimeArtifacts(prefix string) ([]runtime.RuntimeArtifact, error) {
+	defaultArtifacts, dErr := runtime.ListRuntimeArtifacts(p.defaultSP, prefix)
+	acpArtifacts, aErr := runtime.ListRuntimeArtifacts(p.acpSP, prefix)
+	return runtime.MergeBackendArtifactResults(
+		runtime.BackendArtifactResult{Label: "default", Artifacts: defaultArtifacts, Err: dErr},
+		runtime.BackendArtifactResult{Label: "acp", Artifacts: acpArtifacts, Err: aErr},
 	)
 }
 

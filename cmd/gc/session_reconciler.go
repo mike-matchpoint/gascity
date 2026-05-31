@@ -334,6 +334,7 @@ func recordDrainAckAssignedWorkEvent(
 func finalizeDrainAckStoppedSession(
 	cityPath string,
 	cfg *config.City,
+	sp runtime.Provider,
 	store beads.Store,
 	rigStores map[string]beads.Store,
 	session *beads.Bead,
@@ -358,6 +359,10 @@ func finalizeDrainAckStoppedSession(
 	}
 	if boundary == "" {
 		boundary = sessionpkg.StopBoundaryAgentAck
+	}
+	if err := stopVisibleRuntimeArtifactBeforeDrainAckFinalization(sp, name); err != nil {
+		fmt.Fprintf(stderr, "session reconciler: stopping drain-acked runtime artifact %s: %v\n", name, err) //nolint:errcheck
+		return
 	}
 	recordStopped := func() {
 		if rec == nil {
@@ -446,6 +451,47 @@ func finalizeDrainAckStoppedSession(
 	}
 }
 
+func stopVisibleRuntimeArtifactBeforeDrainAckFinalization(sp runtime.Provider, name string) error {
+	name = strings.TrimSpace(name)
+	if sp == nil || name == "" {
+		return nil
+	}
+	if _, ok := sp.(runtime.RuntimeArtifactLister); !ok {
+		return nil
+	}
+	artifacts, err := runtime.ListRuntimeArtifacts(sp, name)
+	partialList := runtime.IsPartialListError(err)
+	if err != nil && !partialList {
+		return err
+	}
+	visible := false
+	for _, artifact := range artifacts {
+		if strings.TrimSpace(artifact.Name) == name {
+			visible = true
+			break
+		}
+	}
+	if !visible {
+		if partialList {
+			return err
+		}
+		return nil
+	}
+	if deadChecker, ok := sp.(runtime.DeadRuntimeSessionChecker); ok {
+		dead, err := deadChecker.IsDeadRuntimeSession(name)
+		if err != nil {
+			return err
+		}
+		if !dead {
+			return fmt.Errorf("runtime artifact %q is visible but not confirmed dead", name)
+		}
+	}
+	if err := sp.Stop(name); err != nil && !runtime.IsSessionGone(err) {
+		return err
+	}
+	return nil
+}
+
 func reconcileDrainAckStopPending(
 	cityPath string,
 	cfg *config.City,
@@ -472,7 +518,7 @@ func reconcileDrainAckStopPending(
 		return true
 	}
 	finalizeDrainAckStoppedSession(
-		cityPath, cfg, store, rigStores, session, tp.TemplateName,
+		cityPath, cfg, sp, store, rigStores, session, tp.TemplateName,
 		!desired || isPoolManagedSessionBead(*session),
 		sessionpkg.StopBoundaryAgentAck,
 		dops, dt, clk, rec, stderr,
@@ -513,7 +559,7 @@ func finalizeDrainAckStopPendingSessions(
 		// state=drained: open pool session beads occupy slots in the next demand
 		// calculation, while closed beads remain only as lifecycle history.
 		finalizeDrainAckStoppedSession(
-			cityPath, cfg, store, rigStores, session,
+			cityPath, cfg, sp, store, rigStores, session,
 			normalizedSessionTemplate(*session, cfg),
 			isPoolManagedSessionBead(*session),
 			sessionpkg.StopBoundaryAgentAck,
@@ -1420,7 +1466,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 							template = session.Metadata["template"]
 						}
 						finalizeDrainAckStoppedSession(
-							cityPath, cfg, store, rigStores, session, template,
+							cityPath, cfg, sp, store, rigStores, session, template,
 							true, sessionpkg.StopBoundaryAgentAck, dops, dt, clk, rec, stderr,
 						)
 						continue
@@ -1675,7 +1721,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 						finalizeDT = nil
 					}
 					finalizeDrainAckStoppedSession(
-						cityPath, cfg, store, rigStores, session, tp.TemplateName,
+						cityPath, cfg, sp, store, rigStores, session, tp.TemplateName,
 						isPoolManagedSessionBead(*session),
 						drainAckStopBoundary(*session, reconcilerOwnedAck),
 						dops, finalizeDT,

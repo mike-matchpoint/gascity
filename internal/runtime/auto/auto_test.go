@@ -45,6 +45,35 @@ func (p *deadRuntimeCheckProvider) IsDeadRuntimeSession(name string) (bool, erro
 	return p.dead[name], nil
 }
 
+type providerRuntimeCapabilityProvider struct {
+	*runtime.Fake
+	desired     runtime.ProviderRuntimeIdentity
+	compat      runtime.CompatibilityObservation
+	artifacts   []runtime.RuntimeArtifact
+	desiredSeen []string
+	compatSeen  []string
+}
+
+func (p *providerRuntimeCapabilityProvider) DesiredProviderRuntimeIdentity(_ context.Context, name string, _ runtime.Config) (runtime.ProviderRuntimeIdentity, error) {
+	p.desiredSeen = append(p.desiredSeen, name)
+	return p.desired, nil
+}
+
+func (p *providerRuntimeCapabilityProvider) ObserveRuntimeCompatibility(_ context.Context, name string, _ runtime.Config) (runtime.CompatibilityObservation, error) {
+	p.compatSeen = append(p.compatSeen, name)
+	return p.compat, nil
+}
+
+func (p *providerRuntimeCapabilityProvider) ListRuntimeArtifacts(prefix string) ([]runtime.RuntimeArtifact, error) {
+	var out []runtime.RuntimeArtifact
+	for _, artifact := range p.artifacts {
+		if prefix == "" || strings.HasPrefix(artifact.Name, prefix) {
+			out = append(out, artifact)
+		}
+	}
+	return out, nil
+}
+
 func TestRouteDefaultAndACP(t *testing.T) {
 	defaultSP := runtime.NewFake()
 	acpSP := runtime.NewFake()
@@ -78,6 +107,63 @@ func TestUnroute(t *testing.T) {
 	p.Unroute("agent-x")
 	if got := p.route("agent-x"); got != defaultSP {
 		t.Fatal("should route to default after unroute")
+	}
+}
+
+func TestProviderRuntimeCapabilitiesDelegateToRoutedBackend(t *testing.T) {
+	defaultSP := &providerRuntimeCapabilityProvider{
+		Fake:    runtime.NewFake(),
+		desired: runtime.ProviderRuntimeIdentity{Fingerprint: "default-fingerprint", Version: "k8s-v3"},
+		compat: runtime.CompatibilityObservation{
+			Supported:  true,
+			Exists:     true,
+			Compatible: false,
+			Reason:     "runtime-image-mismatch",
+		},
+	}
+	acpSP := &providerRuntimeCapabilityProvider{Fake: runtime.NewFake()}
+	p := New(defaultSP, acpSP)
+
+	desired, err := p.DesiredProviderRuntimeIdentity(context.Background(), "agent", runtime.Config{})
+	if err != nil {
+		t.Fatalf("DesiredProviderRuntimeIdentity: %v", err)
+	}
+	if desired.Fingerprint != "default-fingerprint" {
+		t.Fatalf("desired identity = %#v, want default fingerprint", desired)
+	}
+	compat, err := p.ObserveRuntimeCompatibility(context.Background(), "agent", runtime.Config{})
+	if err != nil {
+		t.Fatalf("ObserveRuntimeCompatibility: %v", err)
+	}
+	if compat.Reason != "runtime-image-mismatch" {
+		t.Fatalf("compat = %#v, want default mismatch", compat)
+	}
+	if len(acpSP.desiredSeen) != 0 || len(acpSP.compatSeen) != 0 {
+		t.Fatalf("acp capability calls = desired %v compat %v, want none", acpSP.desiredSeen, acpSP.compatSeen)
+	}
+}
+
+func TestListRuntimeArtifactsMergesBothBackends(t *testing.T) {
+	defaultSP := &providerRuntimeCapabilityProvider{
+		Fake:      runtime.NewFake(),
+		artifacts: []runtime.RuntimeArtifact{{Name: "default-1", SessionID: "default-session"}},
+	}
+	acpSP := &providerRuntimeCapabilityProvider{
+		Fake:      runtime.NewFake(),
+		artifacts: []runtime.RuntimeArtifact{{Name: "acp-1", SessionID: "acp-session"}},
+	}
+	p := New(defaultSP, acpSP)
+
+	artifacts, err := p.ListRuntimeArtifacts("")
+	if err != nil {
+		t.Fatalf("ListRuntimeArtifacts: %v", err)
+	}
+	got := map[string]string{}
+	for _, artifact := range artifacts {
+		got[artifact.Name] = artifact.SessionID
+	}
+	if got["default-1"] != "default-session" || got["acp-1"] != "acp-session" {
+		t.Fatalf("artifacts = %#v, want default and acp artifacts", got)
 	}
 }
 

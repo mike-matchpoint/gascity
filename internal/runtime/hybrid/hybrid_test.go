@@ -179,6 +179,98 @@ type runtimeNoInteractionProvider struct {
 	runtime.Provider
 }
 
+type providerRuntimeCapabilityProvider struct {
+	*runtime.Fake
+	desired     runtime.ProviderRuntimeIdentity
+	compat      runtime.CompatibilityObservation
+	artifacts   []runtime.RuntimeArtifact
+	desiredSeen []string
+	compatSeen  []string
+}
+
+func (p *providerRuntimeCapabilityProvider) DesiredProviderRuntimeIdentity(_ context.Context, name string, _ runtime.Config) (runtime.ProviderRuntimeIdentity, error) {
+	p.desiredSeen = append(p.desiredSeen, name)
+	return p.desired, nil
+}
+
+func (p *providerRuntimeCapabilityProvider) ObserveRuntimeCompatibility(_ context.Context, name string, _ runtime.Config) (runtime.CompatibilityObservation, error) {
+	p.compatSeen = append(p.compatSeen, name)
+	return p.compat, nil
+}
+
+func (p *providerRuntimeCapabilityProvider) ListRuntimeArtifacts(prefix string) ([]runtime.RuntimeArtifact, error) {
+	var out []runtime.RuntimeArtifact
+	for _, artifact := range p.artifacts {
+		if prefix == "" || strings.HasPrefix(artifact.Name, prefix) {
+			out = append(out, artifact)
+		}
+	}
+	return out, nil
+}
+
+func TestProviderRuntimeCapabilitiesDelegateToRoutedBackend(t *testing.T) {
+	local := &providerRuntimeCapabilityProvider{Fake: runtime.NewFake()}
+	remote := &providerRuntimeCapabilityProvider{
+		Fake:    runtime.NewFake(),
+		desired: runtime.ProviderRuntimeIdentity{Fingerprint: "remote-fingerprint", Version: "k8s-v3"},
+		compat: runtime.CompatibilityObservation{
+			Supported:  true,
+			Exists:     true,
+			Compatible: false,
+			Reason:     "runtime-image-mismatch",
+		},
+	}
+	h := New(local, remote, isRemote)
+
+	desired, err := h.DesiredProviderRuntimeIdentity(context.Background(), "polecat-1", runtime.Config{})
+	if err != nil {
+		t.Fatalf("DesiredProviderRuntimeIdentity: %v", err)
+	}
+	if desired.Fingerprint != "remote-fingerprint" {
+		t.Fatalf("desired identity = %#v, want remote fingerprint", desired)
+	}
+	compat, err := h.ObserveRuntimeCompatibility(context.Background(), "polecat-1", runtime.Config{})
+	if err != nil {
+		t.Fatalf("ObserveRuntimeCompatibility: %v", err)
+	}
+	if compat.Reason != "runtime-image-mismatch" {
+		t.Fatalf("compat = %#v, want remote mismatch", compat)
+	}
+	if len(local.desiredSeen) != 0 || len(local.compatSeen) != 0 {
+		t.Fatalf("local capability calls = desired %v compat %v, want none", local.desiredSeen, local.compatSeen)
+	}
+	if got := remote.desiredSeen; len(got) != 1 || got[0] != "polecat-1" {
+		t.Fatalf("remote desired calls = %v, want [polecat-1]", got)
+	}
+	if got := remote.compatSeen; len(got) != 1 || got[0] != "polecat-1" {
+		t.Fatalf("remote compat calls = %v, want [polecat-1]", got)
+	}
+}
+
+func TestListRuntimeArtifactsMergesBothBackends(t *testing.T) {
+	local := &providerRuntimeCapabilityProvider{
+		Fake:      runtime.NewFake(),
+		artifacts: []runtime.RuntimeArtifact{{Name: "gc-demo--refinery", SessionID: "local-session"}},
+	}
+	remote := &providerRuntimeCapabilityProvider{
+		Fake:      runtime.NewFake(),
+		artifacts: []runtime.RuntimeArtifact{{Name: "gc-demo--polecat-1", SessionID: "remote-session"}},
+	}
+	h := New(local, remote, isRemote)
+
+	artifacts, err := h.ListRuntimeArtifacts("gc-demo-")
+	if err != nil {
+		t.Fatalf("ListRuntimeArtifacts: %v", err)
+	}
+	got := map[string]string{}
+	for _, artifact := range artifacts {
+		got[artifact.Name] = artifact.SessionID
+	}
+	if got["gc-demo--refinery"] != "local-session" || got["gc-demo--polecat-1"] != "remote-session" {
+		t.Fatalf("artifacts = %#v, want local and remote artifacts", got)
+	}
+}
+
 type deadRuntimeCheckProvider struct {
 	*runtime.Fake
 	dead   map[string]bool

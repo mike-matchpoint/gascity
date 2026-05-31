@@ -5442,7 +5442,7 @@ func TestCleanupDeadRuntimeSessionCorpsesUsesPartialListResults(t *testing.T) {
 	if sp.stopCalls["worker"] != 1 {
 		t.Fatalf("Stop calls = %d, want 1", sp.stopCalls["worker"])
 	}
-	if !strings.Contains(stderr.String(), "listing runtime sessions partially failed") {
+	if !strings.Contains(stderr.String(), "listing runtime artifacts partially failed") {
 		t.Fatalf("stderr = %q, want partial-list warning", stderr.String())
 	}
 }
@@ -5503,6 +5503,70 @@ func TestCleanupDeadRuntimeSessionCorpsesSkipsLifecycleOwnedBeads(t *testing.T) 
 		if sp.stopCalls[name] != 0 {
 			t.Fatalf("Stop(%s) calls = %d, want 0", name, sp.stopCalls[name])
 		}
+	}
+}
+
+func TestCleanupDeadRuntimeSessionCorpsesUsesArtifactListForTerminalNamedSession(t *testing.T) {
+	sp := &runtimeArtifactListProvider{
+		deadRuntimeArtifactProvider: newDeadRuntimeArtifactProvider(),
+		artifacts: []runtime.RuntimeArtifact{{
+			Name: "named-worker",
+		}},
+	}
+	sp.dead["named-worker"] = true
+
+	snapshot := newSessionBeadSnapshot([]beads.Bead{{
+		ID:     "named",
+		Status: "open",
+		Metadata: map[string]string{
+			"session_name":                       "named-worker",
+			"state":                              string(session.StateAsleep),
+			"sleep_reason":                       "drained",
+			"last_stop_boundary":                 string(session.StopBoundaryAgentAck),
+			session.NamedSessionMetadataKey:      "true",
+			session.NamedSessionIdentityMetadata: "rig/worker",
+			session.NamedSessionModeMetadata:     "always",
+		},
+	}})
+
+	var stderr bytes.Buffer
+	got := cleanupDeadRuntimeSessionCorpses(snapshot, nil, sp, &stderr)
+	if got != 1 {
+		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 1; stderr=%q", got, stderr.String())
+	}
+	if sp.stopCalls["named-worker"] != 1 {
+		t.Fatalf("Stop calls = %d, want 1 for terminal named dead artifact", sp.stopCalls["named-worker"])
+	}
+}
+
+func TestCleanupDeadRuntimeSessionCorpsesSkipsActiveNamedArtifact(t *testing.T) {
+	sp := &runtimeArtifactListProvider{
+		deadRuntimeArtifactProvider: newDeadRuntimeArtifactProvider(),
+		artifacts: []runtime.RuntimeArtifact{{
+			Name: "named-worker",
+		}},
+	}
+	sp.dead["named-worker"] = true
+
+	snapshot := newSessionBeadSnapshot([]beads.Bead{{
+		ID:     "named",
+		Status: "open",
+		Metadata: map[string]string{
+			"session_name":                       "named-worker",
+			"state":                              string(session.StateAwake),
+			session.NamedSessionMetadataKey:      "true",
+			session.NamedSessionIdentityMetadata: "rig/worker",
+			session.NamedSessionModeMetadata:     "always",
+		},
+	}})
+
+	var stderr bytes.Buffer
+	got := cleanupDeadRuntimeSessionCorpses(snapshot, nil, sp, &stderr)
+	if got != 0 {
+		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 0", got)
+	}
+	if sp.stopCalls["named-worker"] != 0 {
+		t.Fatalf("Stop calls = %d, want 0 for active named session", sp.stopCalls["named-worker"])
 	}
 }
 

@@ -1923,7 +1923,7 @@ func TestFinalizeDrainAckStoppedSessionDoesNotEmitEventsWhenFinalMetadataFails(t
 
 	failingStore := &failSetMetadataBatchStore{Store: env.store, err: errors.New("metadata write failed")}
 	finalizeDrainAckStoppedSession(
-		"", env.cfg, failingStore, nil, &session, "worker", false,
+		"", env.cfg, env.sp, failingStore, nil, &session, "worker", false,
 		sessionpkg.StopBoundaryAgentAck,
 		newFakeDrainOps(), env.dt, env.clk, env.rec, &env.stderr,
 	)
@@ -1951,7 +1951,7 @@ func TestFinalizeDrainAckStoppedSessionFallsThroughWhenCloseGateRacesWithAssignm
 
 	racingStore := &assignOnListStore{Store: env.store, sessionID: session.ID}
 	finalizeDrainAckStoppedSession(
-		"", env.cfg, racingStore, nil, &session, "worker", true,
+		"", env.cfg, env.sp, racingStore, nil, &session, "worker", true,
 		sessionpkg.StopBoundaryAgentAck,
 		newFakeDrainOps(), env.dt, env.clk, env.rec, &env.stderr,
 	)
@@ -1976,6 +1976,91 @@ func TestFinalizeDrainAckStoppedSessionFallsThroughWhenCloseGateRacesWithAssignm
 	}
 	if matches != 1 {
 		t.Fatalf("%s events = %d, want 1 after assignment race", events.SessionDrainAckedWithAssignedWork, matches)
+	}
+}
+
+func TestFinalizeDrainAckStoppedSessionStopsVisibleArtifactBeforeMetadata(t *testing.T) {
+	env := newReconcilerTestEnv()
+	env.cfg = &config.City{Agents: []config.Agent{{Name: "worker"}}}
+	fake := events.NewFake()
+	env.rec = fake
+
+	session := env.createSessionBead("worker", "worker")
+	patch := sessionpkg.DrainAckStopPendingPatch(env.clk.Now().UTC())
+	if err := env.store.SetMetadataBatch(session.ID, patch); err != nil {
+		t.Fatalf("SetMetadataBatch(stop-pending): %v", err)
+	}
+	session.Metadata = patch.Apply(session.Metadata)
+
+	sp := &runtimeArtifactListProvider{
+		deadRuntimeArtifactProvider: newDeadRuntimeArtifactProvider(),
+		artifacts: []runtime.RuntimeArtifact{{
+			Name: "worker",
+		}},
+	}
+	sp.dead["worker"] = true
+	finalizeDrainAckStoppedSession(
+		"", env.cfg, sp, env.store, nil, &session, "worker", false,
+		sessionpkg.StopBoundaryAgentAck,
+		newFakeDrainOps(), env.dt, env.clk, env.rec, &env.stderr,
+	)
+
+	if sp.stopCalls["worker"] != 1 {
+		t.Fatalf("Stop calls = %d, want 1 before final metadata", sp.stopCalls["worker"])
+	}
+	got, err := env.store.Get(session.ID)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", session.ID, err)
+	}
+	if got.Metadata["state"] != string(sessionpkg.StateDrained) || got.Metadata["last_stop_reason"] != "drain-ack" {
+		t.Fatalf("state=%q last_stop_reason=%q, want drained/drain-ack after artifact stop",
+			got.Metadata["state"], got.Metadata["last_stop_reason"])
+	}
+}
+
+func TestFinalizeDrainAckStoppedSessionPreservesStopPendingWhenArtifactStopFails(t *testing.T) {
+	env := newReconcilerTestEnv()
+	env.cfg = &config.City{Agents: []config.Agent{{Name: "worker"}}}
+	fake := events.NewFake()
+	env.rec = fake
+
+	session := env.createSessionBead("worker", "worker")
+	patch := sessionpkg.DrainAckStopPendingPatch(env.clk.Now().UTC())
+	if err := env.store.SetMetadataBatch(session.ID, patch); err != nil {
+		t.Fatalf("SetMetadataBatch(stop-pending): %v", err)
+	}
+	session.Metadata = patch.Apply(session.Metadata)
+
+	sp := &runtimeArtifactListProvider{
+		deadRuntimeArtifactProvider: newDeadRuntimeArtifactProvider(),
+		artifacts: []runtime.RuntimeArtifact{{
+			Name: "worker",
+		}},
+	}
+	sp.dead["worker"] = true
+	sp.stopErrs["worker"] = errors.New("delete pod failed")
+	finalizeDrainAckStoppedSession(
+		"", env.cfg, sp, env.store, nil, &session, "worker", false,
+		sessionpkg.StopBoundaryAgentAck,
+		newFakeDrainOps(), env.dt, env.clk, env.rec, &env.stderr,
+	)
+
+	if sp.stopCalls["worker"] != 1 {
+		t.Fatalf("Stop calls = %d, want 1", sp.stopCalls["worker"])
+	}
+	got, err := env.store.Get(session.ID)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", session.ID, err)
+	}
+	if got.Metadata["state"] != string(sessionpkg.StateDraining) ||
+		got.Metadata["state_reason"] != sessionpkg.DrainAckStopPendingReason {
+		t.Fatalf("metadata = %v, want drain-ack stop-pending preserved", got.Metadata)
+	}
+	if len(fake.Events) != 0 {
+		t.Fatalf("events emitted before artifact stop succeeded: %v", fake.Events)
+	}
+	if !strings.Contains(env.stderr.String(), "stopping drain-acked runtime artifact worker: delete pod failed") {
+		t.Fatalf("stderr = %q, want artifact stop failure diagnostic", env.stderr.String())
 	}
 }
 

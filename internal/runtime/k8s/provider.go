@@ -25,10 +25,11 @@ import (
 
 // Compile-time interface check.
 var (
-	_ runtime.Provider              = (*Provider)(nil)
-	_ runtime.DialogProvider        = (*Provider)(nil)
-	_ runtime.RuntimeArtifactLister = (*Provider)(nil)
-	_ runtime.InventoryProvider     = (*Provider)(nil)
+	_ runtime.Provider                  = (*Provider)(nil)
+	_ runtime.DialogProvider            = (*Provider)(nil)
+	_ runtime.RuntimeArtifactLister     = (*Provider)(nil)
+	_ runtime.InventoryProvider         = (*Provider)(nil)
+	_ runtime.DeadRuntimeSessionChecker = (*Provider)(nil)
 )
 
 const (
@@ -516,6 +517,37 @@ func (p *Provider) IsRunning(name string) bool {
 	_, err = p.ops.execInPod(ctx, podName, "agent",
 		[]string{"tmux", "has-session", "-t", tmuxSession}, nil)
 	return err == nil
+}
+
+// IsDeadRuntimeSession reports whether a provider-owned pod artifact is
+// visible but no longer hosts a live tmux session. K8s agent pods deliberately
+// keep their container alive after tmux exits so the provider can stage files
+// and inspect logs; destructive cleanup paths need this stronger proof instead
+// of treating every Running pod as live.
+func (p *Provider) IsDeadRuntimeSession(name string) (bool, error) {
+	ctx := context.Background()
+	pod, err := p.findPodObject(ctx, name, false)
+	if err != nil || pod == nil {
+		return false, err
+	}
+	if pod.DeletionTimestamp != nil {
+		return false, nil
+	}
+	switch pod.Status.Phase {
+	case corev1.PodSucceeded, corev1.PodFailed:
+		return true, nil
+	case corev1.PodRunning:
+		if _, err := p.ops.execInPod(ctx, pod.Name, "agent",
+			[]string{"tmux", "has-session", "-t", tmuxSession}, nil); err == nil {
+			return false, nil
+		}
+		if time.Since(pod.CreationTimestamp.Time) < startupGracePeriod {
+			return false, nil
+		}
+		return true, nil
+	default:
+		return false, nil
+	}
 }
 
 // IsAttached reports whether a user terminal is connected to the tmux
