@@ -125,6 +125,70 @@ interval = "30m"
 	}
 }
 
+func TestDoctorOrderFiringReadsRigLegacyCityHistory(t *testing.T) {
+	cityDir := t.TempDir()
+	rigDir := filepath.Join(cityDir, "rigs", "frontend")
+	if err := os.MkdirAll(filepath.Join(rigDir, "orders"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rigDir, "orders", "gate-sweep.toml"), []byte(`[order]
+exec = "true"
+trigger = "cooldown"
+interval = "30m"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := events.NewFileRecorder(filepath.Join(cityDir, ".gc", "events.jsonl"), io.Discard)
+	if err != nil {
+		t.Fatalf("NewFileRecorder: %v", err)
+	}
+	rec.Record(events.Event{Type: events.ControllerStarted, Ts: time.Now().Add(-2 * time.Hour)})
+	if err := rec.Close(); err != nil {
+		t.Fatalf("close recorder: %v", err)
+	}
+
+	rigStore := beads.NewMemStore()
+	legacyCityStore := beads.NewMemStore()
+	if _, err := legacyCityStore.Create(beads.Bead{
+		Title:  "legacy rig run",
+		Labels: []string{"order-run:gate-sweep:rig:frontend"},
+	}); err != nil {
+		t.Fatalf("create legacy order-run bead: %v", err)
+	}
+	cfg := &config.City{
+		Rigs: []config.Rig{{Name: "frontend", Path: rigDir}},
+		FormulaLayers: config.FormulaLayers{
+			City: []string{filepath.Join(cityDir, "formulas")},
+			Rigs: map[string][]string{
+				"frontend": {
+					filepath.Join(cityDir, "formulas"),
+					filepath.Join(rigDir, "formulas"),
+				},
+			},
+		},
+	}
+	opened := map[string]int{}
+	check := newRuntimeOrderFiringCurrentCheck(cfg, cityDir, func(path string) (beads.Store, error) {
+		opened[path]++
+		switch path {
+		case cityDir:
+			return legacyCityStore, nil
+		case rigDir:
+			return rigStore, nil
+		default:
+			t.Fatalf("unexpected store path %q", path)
+			return nil, nil
+		}
+	})
+	result := check.Run(&doctor.CheckContext{CityPath: cityDir})
+	if result.Status != doctor.StatusOK {
+		t.Fatalf("status = %v, want OK from legacy city store history; msg=%s details=%v", result.Status, result.Message, result.Details)
+	}
+	if opened[rigDir] == 0 || opened[cityDir] == 0 {
+		t.Fatalf("opened stores = %v, want both rig and legacy city stores", opened)
+	}
+}
+
 func TestDoctorSkipsDoltChecksDetectsBdRigUnderFileBackedCity(t *testing.T) {
 	cityDir := t.TempDir()
 	rigDir := filepath.Join(cityDir, "frontend")

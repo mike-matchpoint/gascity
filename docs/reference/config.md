@@ -443,6 +443,9 @@ OrdersConfig holds order settings.
 |-------|------|----------|---------|-------------|
 | `skip` | []string |  |  | Skip lists order names to exclude from scanning. |
 | `max_timeout` | string |  |  | MaxTimeout is an operator hard cap on per-order timeouts. No order gets more than this duration. Go duration string (e.g., "60s"). Empty means uncapped (no override). |
+| `max_dispatches_per_tick` | integer |  | `4` | MaxDispatchesPerTick caps total order dispatch reservations per controller tick. Nil uses the runtime default. Values &lt;= 0 disable the total cap. |
+| `max_exec_dispatches_per_tick` | integer |  | `4` | MaxExecDispatchesPerTick caps exec order dispatch reservations per tick. Nil uses the runtime default. Values &lt;= 0 disable the exec-specific cap. |
+| `max_formula_dispatches_per_tick` | integer |  | `1` | MaxFormulaDispatchesPerTick caps formula/wisp order dispatch reservations per tick. Nil uses the runtime default. Values &lt;= 0 disable the formula-specific cap. |
 | `overrides` | []OrderOverride |  |  | Overrides apply per-order field overrides after scanning. Each override targets an order by name and optionally by rig. |
 
 ## PackDefaults

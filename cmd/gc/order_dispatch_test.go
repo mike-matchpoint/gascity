@@ -1556,9 +1556,15 @@ func TestOrderDispatchSnapshotSlowListDefersOneOrderWithoutBlockingUnrelated(t *
 
 func TestOrderDispatchSnapshotManyOrdersDoesNotExhaustSharedStoreBudget(t *testing.T) {
 	oldMax := orderDispatchMaxCreatesPerTick
+	oldExecMax := orderDispatchMaxExecCreatesPerTick
+	oldFormulaMax := orderDispatchMaxFormulaCreatesPerTick
 	orderDispatchMaxCreatesPerTick = 0
+	orderDispatchMaxExecCreatesPerTick = 0
+	orderDispatchMaxFormulaCreatesPerTick = 0
 	t.Cleanup(func() {
 		orderDispatchMaxCreatesPerTick = oldMax
+		orderDispatchMaxExecCreatesPerTick = oldExecMax
+		orderDispatchMaxFormulaCreatesPerTick = oldFormulaMax
 	})
 
 	store := delayedOrderDispatchListStore{
@@ -1871,6 +1877,58 @@ func TestOrderDispatchLimitRotatesProductionStartAcrossTicks(t *testing.T) {
 	}
 	if got := len(trackingBeads(t, store, "order-run:ccc-third")); got != 0 {
 		t.Fatalf("third order tracking beads = %d, want 0 before third tick", got)
+	}
+}
+
+func TestOrderDispatchExecBudgetIndependentFromFormulaBudget(t *testing.T) {
+	oldMax := orderDispatchMaxCreatesPerTick
+	oldExecMax := orderDispatchMaxExecCreatesPerTick
+	oldFormulaMax := orderDispatchMaxFormulaCreatesPerTick
+	orderDispatchMaxCreatesPerTick = 4
+	orderDispatchMaxExecCreatesPerTick = 4
+	orderDispatchMaxFormulaCreatesPerTick = 1
+	t.Cleanup(func() {
+		orderDispatchMaxCreatesPerTick = oldMax
+		orderDispatchMaxExecCreatesPerTick = oldExecMax
+		orderDispatchMaxFormulaCreatesPerTick = oldFormulaMax
+	})
+
+	store := beads.NewMemStore()
+	ran := make(map[string]bool)
+	fakeExec := func(_ context.Context, command, _ string, _ []string) ([]byte, error) {
+		ran[command] = true
+		return []byte("ok\n"), nil
+	}
+	aa := []orders.Order{
+		{Name: "formula-a", Trigger: "cooldown", Interval: "1s", Formula: "missing-a"},
+		{Name: "formula-b", Trigger: "cooldown", Interval: "1s", Formula: "missing-b"},
+		{Name: "exec-a", Trigger: "cooldown", Interval: "1s", Exec: "exec-a"},
+		{Name: "exec-b", Trigger: "cooldown", Interval: "1s", Exec: "exec-b"},
+		{Name: "exec-c", Trigger: "cooldown", Interval: "1s", Exec: "exec-c"},
+	}
+	ad := buildOrderDispatcherFromListExec(aa, store, nil, fakeExec, nil)
+	md, ok := ad.(*memoryOrderDispatcher)
+	if !ok {
+		t.Fatalf("dispatcher type = %T, want *memoryOrderDispatcher", ad)
+	}
+	md.cfg = &config.City{}
+
+	md.dispatch(context.Background(), t.TempDir(), time.Now().Add(time.Hour))
+	md.drain(context.Background())
+
+	if got := len(trackingBeads(t, store, "order-run:formula-a")); got != 1 {
+		t.Fatalf("formula-a tracking beads = %d, want 1", got)
+	}
+	if got := len(trackingBeads(t, store, "order-run:formula-b")); got != 0 {
+		t.Fatalf("formula-b tracking beads = %d, want 0 after formula cap", got)
+	}
+	for _, name := range []string{"exec-a", "exec-b", "exec-c"} {
+		if !ran[name] {
+			t.Fatalf("%s did not run with exec budget available; ran=%v", name, ran)
+		}
+		if got := len(trackingBeads(t, store, "order-run:"+name)); got != 1 {
+			t.Fatalf("%s tracking beads = %d, want 1", name, got)
+		}
 	}
 }
 

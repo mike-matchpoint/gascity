@@ -1604,6 +1604,15 @@ type OrdersConfig struct {
 	// No order gets more than this duration. Go duration string (e.g., "60s").
 	// Empty means uncapped (no override).
 	MaxTimeout string `toml:"max_timeout,omitempty"`
+	// MaxDispatchesPerTick caps total order dispatch reservations per controller tick.
+	// Nil uses the runtime default. Values <= 0 disable the total cap.
+	MaxDispatchesPerTick *int `toml:"max_dispatches_per_tick,omitempty" jsonschema:"default=4"`
+	// MaxExecDispatchesPerTick caps exec order dispatch reservations per tick.
+	// Nil uses the runtime default. Values <= 0 disable the exec-specific cap.
+	MaxExecDispatchesPerTick *int `toml:"max_exec_dispatches_per_tick,omitempty" jsonschema:"default=4"`
+	// MaxFormulaDispatchesPerTick caps formula/wisp order dispatch reservations per tick.
+	// Nil uses the runtime default. Values <= 0 disable the formula-specific cap.
+	MaxFormulaDispatchesPerTick *int `toml:"max_formula_dispatches_per_tick,omitempty" jsonschema:"default=1"`
 	// Overrides apply per-order field overrides after scanning.
 	// Each override targets an order by name and optionally by rig.
 	Overrides []OrderOverride `toml:"overrides,omitempty"`
@@ -1662,6 +1671,37 @@ func (c OrdersConfig) MaxTimeoutDuration() time.Duration {
 		return 0
 	}
 	return d
+}
+
+// MaxDispatchesPerTickOrDefault returns the total order dispatch reservation
+// budget. Values <= 0 intentionally disable the cap for controlled operators
+// and tests; the formula-specific cap still guards wisp creation unless that
+// cap is also disabled.
+func (c OrdersConfig) MaxDispatchesPerTickOrDefault(defaultValue int) int {
+	if c.MaxDispatchesPerTick == nil {
+		return defaultValue
+	}
+	return *c.MaxDispatchesPerTick
+}
+
+// MaxExecDispatchesPerTickOrDefault returns the exec-order reservation budget.
+// Exec orders are maintenance/readiness tasks and do not instantiate wisps, so
+// they can safely have a higher independent budget than formula orders.
+func (c OrdersConfig) MaxExecDispatchesPerTickOrDefault(defaultValue int) int {
+	if c.MaxExecDispatchesPerTick == nil {
+		return defaultValue
+	}
+	return *c.MaxExecDispatchesPerTick
+}
+
+// MaxFormulaDispatchesPerTickOrDefault returns the formula/wisp reservation
+// budget. Keeping this budget small preserves spawn-storm protection while
+// allowing exec maintenance orders to stay current.
+func (c OrdersConfig) MaxFormulaDispatchesPerTickOrDefault(defaultValue int) int {
+	if c.MaxFormulaDispatchesPerTick == nil {
+		return defaultValue
+	}
+	return *c.MaxFormulaDispatchesPerTick
 }
 
 // DefaultAPIPort is the default TCP port for the API server.

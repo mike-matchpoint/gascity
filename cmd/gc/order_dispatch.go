@@ -76,7 +76,11 @@ const (
 	completedOrderTrackingCloseReason = "order dispatch completed: tracking bead lifecycle finished"
 )
 
-var orderDispatchMaxCreatesPerTick = 1
+var (
+	orderDispatchMaxCreatesPerTick        = 4
+	orderDispatchMaxExecCreatesPerTick    = 4
+	orderDispatchMaxFormulaCreatesPerTick = 1
+)
 
 // orderDispatchTrackingWriteBudget is longer than the generic runtime-write
 // default because one due order produces a small write chain: reservation,
@@ -336,10 +340,18 @@ type orderDispatchTickStats struct {
 	ordersConsidered      int
 	storesTouched         map[string]struct{}
 	dispatchesCreated     int
+	execDispatchesCreated int
+	wispDispatchesCreated int
 	ordersDeferred        int
 	deferReasons          map[string]int
 	trackingWriteFailures int
 	writeDegraded         int
+}
+
+type orderDispatchCreateCaps struct {
+	total int
+	exec  int
+	wisp  int
 }
 
 type orderDispatchRun struct {
@@ -562,8 +574,8 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 	snapshots := buildOrderDispatchSnapshots(snapshotCtx, snapshotInputs, now)
 	cancel()
 
-	limit := m.effectiveCreateCap(now)
-	candidates, rotateStart := m.rotateDispatchCandidates(candidates, limit)
+	limits := m.effectiveCreateCaps(now)
+	candidates, rotateStart := m.rotateDispatchCandidates(candidates, limits.total)
 	candidateCount := len(candidates)
 	advanceTo := rotateStart
 	for j, candidate := range candidates {
@@ -630,7 +642,8 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 		if m.degradedCadenceSuppresses(scoped, a, now) {
 			continue
 		}
-		if m.dispatchCreateLimitReached(stats, limit) {
+		limitKind := m.dispatchCreateLimitReached(stats, candidate, limits)
+		if limitKind == "total" {
 			// Cap reached before dispatching this due candidate. Resume the
 			// round-robin here next tick so this order — and the ones after
 			// it — get first crack at the budget, instead of being starved
@@ -639,6 +652,9 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 				m.nextCandidateStart = (rotateStart + j) % candidateCount
 			}
 			return
+		}
+		if limitKind != "" {
+			continue
 		}
 
 		eventSeq, err := m.eventReservationSeq(a)
@@ -651,7 +667,7 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 			continue
 		}
 		m.rememberLastRun(scoped, candidate.gateStoreKeys, reservedAt)
-		stats.dispatchesCreated++
+		stats.recordDispatchCreated(a)
 		if candidateCount > 0 {
 			advanceTo = (rotateStart + j + 1) % candidateCount
 		}
@@ -671,11 +687,18 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 	}
 }
 
-func (m *memoryOrderDispatcher) effectiveCreateCap(_ time.Time) int {
-	if orderDispatchMaxCreatesPerTick <= 0 {
-		return 0
+func (m *memoryOrderDispatcher) effectiveCreateCaps(_ time.Time) orderDispatchCreateCaps {
+	caps := orderDispatchCreateCaps{
+		total: orderDispatchMaxCreatesPerTick,
+		exec:  orderDispatchMaxExecCreatesPerTick,
+		wisp:  orderDispatchMaxFormulaCreatesPerTick,
 	}
-	return orderDispatchMaxCreatesPerTick
+	if m != nil && m.cfg != nil {
+		caps.total = m.cfg.Orders.MaxDispatchesPerTickOrDefault(caps.total)
+		caps.exec = m.cfg.Orders.MaxExecDispatchesPerTickOrDefault(caps.exec)
+		caps.wisp = m.cfg.Orders.MaxFormulaDispatchesPerTickOrDefault(caps.wisp)
+	}
+	return caps
 }
 
 // rotateDispatchCandidates rotates candidates so the order at the persistent
@@ -700,11 +723,27 @@ func (m *memoryOrderDispatcher) rotateDispatchCandidates(candidates []orderDispa
 	return rotated, start
 }
 
-func (m *memoryOrderDispatcher) dispatchCreateLimitReached(stats *orderDispatchTickStats, limit int) bool {
-	if m == nil || stats == nil || limit <= 0 {
-		return false
+func (m *memoryOrderDispatcher) dispatchCreateLimitReached(stats *orderDispatchTickStats, candidate orderDispatchCandidate, limits orderDispatchCreateCaps) string {
+	if m == nil || stats == nil {
+		return ""
 	}
-	return stats.dispatchesCreated >= limit
+	if orderDispatchCapReached(stats.dispatchesCreated, limits.total) {
+		return "total"
+	}
+	if candidate.order.IsExec() {
+		if orderDispatchCapReached(stats.execDispatchesCreated, limits.exec) {
+			return "exec"
+		}
+		return ""
+	}
+	if orderDispatchCapReached(stats.wispDispatchesCreated, limits.wisp) {
+		return "wisp"
+	}
+	return ""
+}
+
+func orderDispatchCapReached(used, limit int) bool {
+	return limit > 0 && used >= limit
 }
 
 func (m *memoryOrderDispatcher) eventReservationSeq(a orders.Order) (uint64, error) {
@@ -826,6 +865,18 @@ func (s *orderDispatchTickStats) recordDeferred(reason string) {
 		s.deferReasons = make(map[string]int)
 	}
 	s.deferReasons[reason]++
+}
+
+func (s *orderDispatchTickStats) recordDispatchCreated(a orders.Order) {
+	if s == nil {
+		return
+	}
+	s.dispatchesCreated++
+	if a.IsExec() {
+		s.execDispatchesCreated++
+		return
+	}
+	s.wispDispatchesCreated++
 }
 
 func (s *orderDispatchTickStats) recordTrackingWriteFailure() {

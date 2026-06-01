@@ -1577,6 +1577,21 @@
           "type": "string",
           "description": "MaxTimeout is an operator hard cap on per-order timeouts.\nNo order gets more than this duration. Go duration string (e.g., \"60s\").\nEmpty means uncapped (no override)."
         },
+        "max_dispatches_per_tick": {
+          "type": "integer",
+          "description": "MaxDispatchesPerTick caps total order dispatch reservations per controller tick.\nNil uses the runtime default. Values \u003c= 0 disable the total cap.",
+          "default": 4
+        },
+        "max_exec_dispatches_per_tick": {
+          "type": "integer",
+          "description": "MaxExecDispatchesPerTick caps exec order dispatch reservations per tick.\nNil uses the runtime default. Values \u003c= 0 disable the exec-specific cap.",
+          "default": 4
+        },
+        "max_formula_dispatches_per_tick": {
+          "type": "integer",
+          "description": "MaxFormulaDispatchesPerTick caps formula/wisp order dispatch reservations per tick.\nNil uses the runtime default. Values \u003c= 0 disable the formula-specific cap.",
+          "default": 1
+        },
         "overrides": {
           "items": {
             "$ref": "#/$defs/OrderOverride"

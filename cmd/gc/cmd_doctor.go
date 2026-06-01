@@ -310,38 +310,40 @@ func buildDoctorChecks(cityPath string, cfg *config.City, cfgErr error, opts bui
 
 func newRuntimeOrderFiringCurrentCheck(cfg *config.City, cityPath string, storeFactory func(string) (beads.Store, error)) *doctor.OrderFiringCurrentCheck {
 	check := doctor.NewOrderFiringCurrentCheck(cfg, cityPath)
-	storesByPath := map[string]beads.Store{}
-	rigPaths := map[string]string{}
-	if cfg != nil {
-		for _, rig := range cfg.Rigs {
-			if strings.TrimSpace(rig.Name) == "" || strings.TrimSpace(rig.Path) == "" {
-				continue
-			}
-			rigPaths[rig.Name] = rig.Path
+	storesByKey := map[string]beads.Store{}
+	openCached := func(target execStoreTarget) (beads.Store, error) {
+		key := orderStoreTargetKey(target)
+		if store, ok := storesByKey[key]; ok {
+			return store, nil
 		}
+		store, err := storeFactory(target.ScopeRoot)
+		if err != nil {
+			return nil, err
+		}
+		storesByKey[key] = store
+		return store, nil
 	}
 	check.WithLastRunResolver(func(order orderstore.Order) (time.Time, error) {
 		if storeFactory == nil {
 			return time.Time{}, nil
 		}
-		storePath := cityPath
-		if order.Rig != "" {
-			path, ok := rigPaths[order.Rig]
-			if !ok {
-				return time.Time{}, fmt.Errorf("rig %q path unavailable", order.Rig)
-			}
-			storePath = path
+		target, err := resolveOrderStoreTarget(cityPath, cfg, order)
+		if err != nil {
+			return time.Time{}, err
 		}
-		store, ok := storesByPath[storePath]
-		if !ok {
-			var err error
-			store, err = storeFactory(storePath)
+		primary, err := openCached(target)
+		if err != nil {
+			return time.Time{}, err
+		}
+		stores := []beads.Store{primary}
+		if legacyOrderCityFallbackNeeded(cityPath, target) {
+			legacy, err := openCached(legacyOrderCityTarget(cityPath, cfg))
 			if err != nil {
 				return time.Time{}, err
 			}
-			storesByPath[storePath] = store
+			stores = append(stores, legacy)
 		}
-		return orderstore.RuntimeLastRunFuncForStore(store, doctorOrderLastRunReadTimeout, "doctor.order-firing")(order.ScopedName())
+		return orderstore.RuntimeLastRunAcrossStores(doctorOrderLastRunReadTimeout, "doctor.order-firing", stores...)(order.ScopedName())
 	})
 	return check
 }
