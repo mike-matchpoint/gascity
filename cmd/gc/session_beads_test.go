@@ -332,6 +332,69 @@ func TestSyncSessionBeads_CreatesNewBeads(t *testing.T) {
 	}
 }
 
+func TestSyncSessionBeads_DoesNotRecreateClosedManualDesiredState(t *testing.T) {
+	cityPath := t.TempDir()
+	store := beads.NewMemStore()
+	clk := &clock.Fake{Time: time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)}
+	sp := runtime.NewFake()
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Agents: []config.Agent{{
+			Name:              "worker",
+			StartCommand:      "true",
+			MinActiveSessions: intPtr(0),
+			MaxActiveSessions: intPtr(2),
+			ScaleCheck:        "printf 0",
+		}},
+	}
+
+	closed, err := store.Create(beads.Bead{
+		Title:  "debug worker",
+		Type:   sessionBeadType,
+		Labels: []string{sessionBeadLabel, "template:worker"},
+		Metadata: map[string]string{
+			"agent_name":     "debug.worker",
+			"alias":          "debug.worker",
+			"template":       "worker",
+			"session_name":   "s-debug-worker",
+			"session_origin": "manual",
+			"state":          "creating",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create manual bead: %v", err)
+	}
+
+	result := buildDesiredState("test-city", cityPath, clk.Now(), cfg, sp, store, io.Discard)
+	ds := result.State
+	if got, ok := ds["s-debug-worker"]; !ok {
+		t.Fatalf("desired state missing manual session; keys=%v", mapKeys(ds))
+	} else if !got.ManualSession {
+		t.Fatalf("desired manual session flag = false, want true: %+v", got)
+	}
+	if err := store.Close(closed.ID); err != nil {
+		t.Fatalf("close manual bead: %v", err)
+	}
+
+	var stderr bytes.Buffer
+	syncSessionBeads(cityPath, store, ds, sp, allConfiguredDS(ds), cfg, clk, &stderr, false)
+	if stderr.Len() > 0 {
+		t.Fatalf("unexpected stderr: %s", stderr.String())
+	}
+
+	open, err := store.ListByLabel(sessionBeadLabel, 0)
+	if err != nil {
+		t.Fatalf("listing open session beads: %v", err)
+	}
+	if len(open) != 0 {
+		t.Fatalf("open session beads = %d, want none after closed manual desired state", len(open))
+	}
+	all := allSessionBeads(t, store)
+	if len(all) != 1 || all[0].ID != closed.ID || all[0].Status != "closed" {
+		t.Fatalf("session beads after sync = %#v, want only original closed manual bead", all)
+	}
+}
+
 func TestSyncSessionBeads_CreatesNonActiveBeadWithPendingCreateStartedAt(t *testing.T) {
 	store := beads.NewMemStore()
 	clk := &clock.Fake{Time: time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)}

@@ -1025,6 +1025,12 @@ func syncSessionBeadsWithSnapshotAndRigStores(
 			}
 		}
 		if !exists {
+			if tp.ManualSession {
+				// Manual desired entries are recovered from existing open session
+				// beads. If the bead disappeared after desired-state was built,
+				// the user closed it; the controller must not mint a replacement.
+				continue
+			}
 			// Create a new session bead.
 			createState := state
 			if createState != "active" {
