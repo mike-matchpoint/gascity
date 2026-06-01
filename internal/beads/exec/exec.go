@@ -157,6 +157,14 @@ func (s *Store) runtimeWriteExecutor() *beads.RuntimeWriteExecutor {
 	return beads.NewRuntimeWriteExecutor(s.runtimeStoreKey())
 }
 
+// RuntimeWriteManagerStatsForClass returns runtime writer state for one class.
+func (s *Store) RuntimeWriteManagerStatsForClass(class beads.WriteClass) beads.RuntimeWriteClassStats {
+	if s == nil {
+		return beads.RuntimeWriteClassStats{Class: beads.RuntimeWritePolicy(class, "", "").Class}
+	}
+	return s.runtimeWriteExecutor().StatsForClass(class)
+}
+
 func execRuntimeEnvFingerprint(env map[string]string) string {
 	if len(env) == 0 {
 		return ""

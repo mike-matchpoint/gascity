@@ -355,6 +355,14 @@ type orderDispatchCreateCaps struct {
 	wisp  int
 }
 
+type orderDispatchRuntimeWriteStatsStore interface {
+	RuntimeWriteManagerStatsForClass(beads.WriteClass) beads.RuntimeWriteClassStats
+}
+
+type orderDispatchBackingStore interface {
+	Backing() beads.Store
+}
+
 type orderDispatchRun struct {
 	TrackingID       string
 	LeaseID          string
@@ -576,7 +584,7 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 	cancel()
 
 	limits := m.effectiveCreateCaps(now)
-	candidates, rotateStart := m.rotateDispatchCandidates(candidates, limits.total)
+	candidates, rotateStart := m.rotateDispatchCandidates(candidates)
 	candidateCount := len(candidates)
 	advanceTo := rotateStart
 	for j, candidate := range candidates {
@@ -643,6 +651,11 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 		if m.degradedCadenceSuppresses(scoped, a, now) {
 			continue
 		}
+		if writerStats, ok := orderDispatchRuntimeWriterStats(candidate.store, beads.WriteClassReservation); ok && orderDispatchRuntimeWriterBackpressured(writerStats) {
+			stats.recordDeferred("runtime_writer_backpressure")
+			logDispatchError(m.stderr, "gc: order dispatch: deferring %s because runtime writer class %s is backpressured: active=%d queue_depth=%d queue_limit=%d breaker=%s oldest_queue_age=%s", scoped, writerStats.Class, writerStats.Active, writerStats.QueueDepth, writerStats.QueueLimit, writerStats.BreakerState, writerStats.OldestQueueAge)
+			continue
+		}
 		limitKind := m.dispatchCreateLimitReached(stats, candidate, limits)
 		if limitKind == "total" {
 			// Cap reached before dispatching this due candidate. Resume the
@@ -707,10 +720,9 @@ func (m *memoryOrderDispatcher) effectiveCreateCaps(_ time.Time) orderDispatchCr
 // and the original index that now leads (rotateStart). It does NOT advance the
 // cursor — the dispatch loop owns cursor bookkeeping so it can resume exactly
 // after the last candidate that consumed budget (or at the one blocked by the
-// cap), which is what keeps front-of-list orders from starving. When the cap
-// is disabled (limit <= 0) rotation is a no-op.
-func (m *memoryOrderDispatcher) rotateDispatchCandidates(candidates []orderDispatchCandidate, limit int) ([]orderDispatchCandidate, int) {
-	if m == nil || m.cfg == nil || len(candidates) <= 1 || limit <= 0 {
+// cap/backpressure), which is what keeps front-of-list orders from starving.
+func (m *memoryOrderDispatcher) rotateDispatchCandidates(candidates []orderDispatchCandidate) ([]orderDispatchCandidate, int) {
+	if m == nil || m.cfg == nil || len(candidates) <= 1 {
 		return candidates, 0
 	}
 	n := len(candidates)
@@ -745,6 +757,31 @@ func (m *memoryOrderDispatcher) dispatchCreateLimitReached(stats *orderDispatchT
 
 func orderDispatchCapReached(used, limit int) bool {
 	return limit > 0 && used >= limit
+}
+
+func orderDispatchRuntimeWriterStats(store beads.Store, class beads.WriteClass) (beads.RuntimeWriteClassStats, bool) {
+	for store != nil {
+		if statsStore, ok := store.(orderDispatchRuntimeWriteStatsStore); ok {
+			return statsStore.RuntimeWriteManagerStatsForClass(class), true
+		}
+		backing, ok := store.(orderDispatchBackingStore)
+		if !ok {
+			break
+		}
+		next := backing.Backing()
+		if next == nil || next == store {
+			break
+		}
+		store = next
+	}
+	return beads.RuntimeWriteClassStats{}, false
+}
+
+func orderDispatchRuntimeWriterBackpressured(stats beads.RuntimeWriteClassStats) bool {
+	if stats.BreakerState != "" && stats.BreakerState != beads.RuntimeWriteBreakerClosed {
+		return true
+	}
+	return stats.QueueLimit > 0 && stats.QueueDepth >= stats.QueueLimit
 }
 
 func (m *memoryOrderDispatcher) eventReservationSeq(a orders.Order) (uint64, error) {

@@ -117,6 +117,22 @@ type notStartedOrderTrackingStore struct {
 	createResult beads.Bead
 }
 
+type backpressuredOrderTrackingStore struct {
+	orderDispatchTestRuntimeStore
+
+	stats        beads.RuntimeWriteClassStats
+	statsByClass map[beads.WriteClass]beads.RuntimeWriteClassStats
+	seen         []beads.WriteClass
+}
+
+type oneCreateThenBackpressuredOrderTrackingStore struct {
+	orderDispatchTestRuntimeStore
+
+	mu              sync.Mutex
+	createsThisTick int
+	createSequence  []string
+}
+
 type rowCapRuntimeListStore struct {
 	beads.Store
 }
@@ -310,6 +326,50 @@ func (s notStartedOrderTrackingStore) RuntimeCreate(_ context.Context, _ beads.B
 		Outcome:   beads.WriteOutcomeNotStarted,
 		Err:       errors.New("runtime write circuit breaker open"),
 	}
+}
+
+func (s *backpressuredOrderTrackingStore) RuntimeWriteManagerStatsForClass(class beads.WriteClass) beads.RuntimeWriteClassStats {
+	s.seen = append(s.seen, class)
+	if s.statsByClass != nil {
+		if stats, ok := s.statsByClass[class]; ok {
+			return stats
+		}
+	}
+	return s.stats
+}
+
+func (s *oneCreateThenBackpressuredOrderTrackingStore) RuntimeWriteManagerStatsForClass(class beads.WriteClass) beads.RuntimeWriteClassStats {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.createsThisTick == 0 {
+		return beads.RuntimeWriteClassStats{Class: class, QueueLimit: 1, BreakerState: beads.RuntimeWriteBreakerClosed}
+	}
+	return beads.RuntimeWriteClassStats{
+		Class:        class,
+		BreakerState: beads.RuntimeWriteBreakerClosed,
+		QueueDepth:   1,
+		QueueLimit:   1,
+	}
+}
+
+func (s *oneCreateThenBackpressuredOrderTrackingStore) RuntimeCreate(ctx context.Context, b beads.Bead, policy beads.WritePolicy) (beads.Bead, error) {
+	s.mu.Lock()
+	s.createsThisTick++
+	s.createSequence = append(s.createSequence, strings.TrimPrefix(b.Title, "order:"))
+	s.mu.Unlock()
+	return s.orderDispatchTestRuntimeStore.RuntimeCreate(ctx, b, policy)
+}
+
+func (s *oneCreateThenBackpressuredOrderTrackingStore) resetTick() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.createsThisTick = 0
+}
+
+func (s *oneCreateThenBackpressuredOrderTrackingStore) sequence() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.createSequence...)
 }
 
 func (s orderDispatchTestRuntimeStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
@@ -2040,6 +2100,147 @@ func TestOrderDispatchLimitRemainsActiveAfterStartup(t *testing.T) {
 	}
 	if dispatched != orderDispatchMaxCreatesPerTick {
 		t.Fatalf("dispatched orders = %d, want cap %d", dispatched, orderDispatchMaxCreatesPerTick)
+	}
+}
+
+func TestOrderDispatchDefersReservationsWhenRuntimeWriterBackpressured(t *testing.T) {
+	store := &backpressuredOrderTrackingStore{
+		orderDispatchTestRuntimeStore: orderDispatchTestRuntimeStore{Store: beads.NewMemStore()},
+		stats: beads.RuntimeWriteClassStats{
+			Class:        beads.WriteClassReservation,
+			BreakerState: beads.RuntimeWriteBreakerClosed,
+			QueueDepth:   1,
+			QueueLimit:   1,
+		},
+	}
+	ran := false
+	fakeExec := func(_ context.Context, _, _ string, _ []string) ([]byte, error) {
+		ran = true
+		return []byte("ok\n"), nil
+	}
+	rec := &memRecorder{}
+	ad := buildOrderDispatcherFromListExec([]orders.Order{{
+		Name:     "needs-writer-capacity",
+		Trigger:  "cooldown",
+		Interval: "1s",
+		Exec:     "echo ok",
+	}}, store, nil, fakeExec, rec)
+	md := ad.(*memoryOrderDispatcher)
+	md.storeFn = func(execStoreTarget) (beads.Store, error) {
+		return store, nil
+	}
+
+	ad.dispatch(context.Background(), t.TempDir(), time.Now().Add(time.Hour))
+	ad.drain(context.Background())
+
+	if ran {
+		t.Fatal("order ran while runtime writer was backpressured")
+	}
+	if got := len(trackingBeads(t, store, "order-run:needs-writer-capacity")); got != 0 {
+		t.Fatalf("tracking beads = %d, want none while runtime writer is backpressured", got)
+	}
+	event, ok := rec.orderDispatchTickEvent()
+	if !ok {
+		t.Fatal("missing order dispatch tick event")
+	}
+	var payload events.OrderDispatchTickPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatalf("decode tick payload: %v; raw=%s", err, event.Payload)
+	}
+	if payload.DispatchesCreated != 0 || payload.OrdersDeferred != 1 {
+		t.Fatalf("tick payload = %+v, want one runtime-writer deferral and no dispatch", payload)
+	}
+	if got := payload.DeferReasons["runtime_writer_backpressure"]; got != 1 {
+		t.Fatalf("runtime_writer_backpressure defer reason = %d, want 1; payload=%+v", got, payload)
+	}
+	if payload.TrackingWriteFails != 0 || payload.WriteDegraded != 0 {
+		t.Fatalf("tick payload = %+v, want no attempted/degraded tracking write", payload)
+	}
+	if len(store.seen) != 1 || store.seen[0] != beads.WriteClassReservation {
+		t.Fatalf("runtime writer classes queried = %v, want [%s]", store.seen, beads.WriteClassReservation)
+	}
+}
+
+func TestOrderDispatchDoesNotDeferReservationsForUnrelatedWriterClassPressure(t *testing.T) {
+	store := &backpressuredOrderTrackingStore{
+		orderDispatchTestRuntimeStore: orderDispatchTestRuntimeStore{Store: beads.NewMemStore()},
+		statsByClass: map[beads.WriteClass]beads.RuntimeWriteClassStats{
+			beads.WriteClassReservation: {
+				Class:        beads.WriteClassReservation,
+				QueueLimit:   1,
+				BreakerState: beads.RuntimeWriteBreakerClosed,
+			},
+			beads.WriteClassMaintenance: {
+				Class:        beads.WriteClassMaintenance,
+				BreakerState: beads.RuntimeWriteBreakerOpen,
+				QueueDepth:   1,
+				QueueLimit:   1,
+			},
+		},
+	}
+	ran := false
+	fakeExec := func(_ context.Context, _, _ string, _ []string) ([]byte, error) {
+		ran = true
+		return []byte("ok\n"), nil
+	}
+	ad := buildOrderDispatcherFromListExec([]orders.Order{{
+		Name:     "reservation-class-healthy",
+		Trigger:  "cooldown",
+		Interval: "1s",
+		Exec:     "echo ok",
+	}}, store, nil, fakeExec, nil)
+	md := ad.(*memoryOrderDispatcher)
+	md.storeFn = func(execStoreTarget) (beads.Store, error) {
+		return store, nil
+	}
+
+	ad.dispatch(context.Background(), t.TempDir(), time.Now().Add(time.Hour))
+	ad.drain(context.Background())
+
+	if !ran {
+		t.Fatal("order did not run even though reservation writer class was healthy")
+	}
+	if got := len(trackingBeads(t, store, "order-run:reservation-class-healthy")); got != 1 {
+		t.Fatalf("tracking beads = %d, want one reservation when unrelated writer class is backpressured", got)
+	}
+	if len(store.seen) != 1 || store.seen[0] != beads.WriteClassReservation {
+		t.Fatalf("runtime writer classes queried = %v, want [%s]", store.seen, beads.WriteClassReservation)
+	}
+}
+
+func TestOrderDispatchRotatesAfterBackpressureDefersRemainder(t *testing.T) {
+	store := &oneCreateThenBackpressuredOrderTrackingStore{
+		orderDispatchTestRuntimeStore: orderDispatchTestRuntimeStore{Store: beads.NewMemStore()},
+	}
+	fakeExec := func(_ context.Context, _, _ string, _ []string) ([]byte, error) {
+		return []byte("ok\n"), nil
+	}
+	aa := []orders.Order{
+		{Name: "aaa-first", Trigger: "cooldown", Interval: "1s", Exec: "aaa-first"},
+		{Name: "bbb-second", Trigger: "cooldown", Interval: "1s", Exec: "bbb-second"},
+		{Name: "ccc-third", Trigger: "cooldown", Interval: "1s", Exec: "ccc-third"},
+	}
+	ad := buildOrderDispatcherFromListExec(aa, store, nil, fakeExec, nil)
+	md, ok := ad.(*memoryOrderDispatcher)
+	if !ok {
+		t.Fatalf("dispatcher type = %T, want *memoryOrderDispatcher", ad)
+	}
+	md.storeFn = func(execStoreTarget) (beads.Store, error) {
+		return store, nil
+	}
+
+	start := time.Date(2026, 5, 28, 1, 0, 0, 0, time.UTC)
+	md.startedAt = start
+	base := start.Add(time.Hour)
+
+	for tick := 0; tick < 3; tick++ {
+		store.resetTick()
+		md.dispatch(context.Background(), t.TempDir(), base.Add(time.Duration(tick)*10*time.Second))
+		md.drain(context.Background())
+	}
+
+	if got, want := strings.Join(store.sequence(), ","), "aaa-first,bbb-second,ccc-third"; got != want {
+		t.Fatalf("dispatch sequence = %q, want %q", got, want)
 	}
 }
 

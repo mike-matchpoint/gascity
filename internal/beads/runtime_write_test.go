@@ -79,7 +79,7 @@ func TestBdStoreRuntimeCreateTimeoutReturnsDegradedWithinBudget(t *testing.T) {
 	if runnerCalls.Load() != 1 {
 		t.Fatalf("runner calls = %d, want 1", runnerCalls.Load())
 	}
-	waitForRuntimeWriteManagerIdle(t, store, time.Second)
+	waitForRuntimeWriteManagerIdle(t, store)
 }
 
 func TestRuntimeWriteBypassesCachingStoreRefresh(t *testing.T) {
@@ -540,11 +540,7 @@ func TestBdStoreRuntimeWriteCircuitBreakerOpensAfterTimeouts(t *testing.T) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	})
-	for i := 0; i < 3; i++ {
-		policy := RuntimeWritePolicy(WriteClassAuditRepair, "test.breaker", "key-"+string(rune('0'+i)))
-		policy.Timeout = 5 * time.Millisecond
-		_ = store.RuntimeUpdate(context.Background(), "gc-1", UpdateOpts{Metadata: map[string]string{"i": "1"}}, policy)
-	}
+	openRuntimeWriteBreakerWithTimeouts(t, store, WriteClassAuditRepair, "test.breaker")
 	var stats RuntimeWriteManagerStats
 	for range 100 {
 		stats = store.RuntimeWriteManagerStats()
@@ -555,6 +551,108 @@ func TestBdStoreRuntimeWriteCircuitBreakerOpensAfterTimeouts(t *testing.T) {
 	}
 	if stats.BreakerState != RuntimeWriteBreakerOpen {
 		t.Fatalf("breaker state = %q, want open (stats=%+v)", stats.BreakerState, stats)
+	}
+}
+
+func TestBdStoreRuntimeWriteQueuedTimeoutDoesNotRunExpiredJob(t *testing.T) {
+	holdStarted := make(chan struct{})
+	releaseHold := make(chan struct{})
+	var holdOnce sync.Once
+	var createCalls atomic.Int64
+	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(ctx context.Context, _ string, _ string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "create" {
+			createCalls.Add(1)
+			return []byte(`{"id":"gc-order-queued-timeout","title":"late","status":"open","created_at":"2026-05-31T00:00:00Z"}`), nil
+		}
+		holdOnce.Do(func() { close(holdStarted) })
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-releaseHold:
+			return []byte(`[]`), nil
+		}
+	})
+	holdPolicy := RuntimeWritePolicy(WriteClassAuditRepair, "test.hold", "hold")
+	holdPolicy.Timeout = 5 * time.Second
+	holdErr := make(chan error, 1)
+	go func() {
+		holdErr <- store.RuntimeUpdate(context.Background(), "gc-order-queued-timeout", UpdateOpts{Metadata: map[string]string{"hold": "true"}}, holdPolicy)
+	}()
+	select {
+	case <-holdStarted:
+	case <-time.After(time.Second):
+		t.Fatal("hold update did not start")
+	}
+
+	policy := RuntimeWritePolicy(WriteClassReservation, "test.queued-timeout", "queued-timeout")
+	policy.Timeout = 20 * time.Millisecond
+	_, err := store.RuntimeCreate(context.Background(), Bead{ID: "gc-order-queued-timeout", Title: "late"}, policy)
+	var degraded *DegradedWriteError
+	if !errors.As(err, &degraded) || degraded.Outcome != WriteOutcomeNotStarted {
+		t.Fatalf("RuntimeCreate error = %#v, want not-started degraded write", err)
+	}
+	close(releaseHold)
+	if err := <-holdErr; err != nil {
+		t.Fatalf("hold RuntimeUpdate: %v", err)
+	}
+	waitForRuntimeWriteManagerIdle(t, store)
+	if got := createCalls.Load(); got != 0 {
+		t.Fatalf("create calls = %d, want expired queued create removed before execution", got)
+	}
+}
+
+func TestBdStoreRuntimeWriteNearDeadlineJobDoesNotStart(t *testing.T) {
+	holdStarted := make(chan struct{})
+	releaseHold := make(chan struct{})
+	var createCalls atomic.Int64
+	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(_ context.Context, _ string, _ string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "update" {
+			close(holdStarted)
+			<-releaseHold
+			return []byte(`[]`), nil
+		}
+		if len(args) > 0 && args[0] == "create" {
+			createCalls.Add(1)
+			return []byte(`{"id":"gc-order-near-deadline","title":"late","status":"open","created_at":"2026-05-31T00:00:00Z"}`), nil
+		}
+		return []byte(`[]`), nil
+	})
+	holdPolicy := RuntimeWritePolicy(WriteClassAuditRepair, "test.hold", "hold-near-deadline")
+	holdPolicy.Timeout = 5 * time.Second
+	holdErr := make(chan error, 1)
+	go func() {
+		holdErr <- store.RuntimeUpdate(context.Background(), "gc-hold", UpdateOpts{Metadata: map[string]string{"hold": "true"}}, holdPolicy)
+	}()
+	select {
+	case <-holdStarted:
+	case <-time.After(time.Second):
+		t.Fatal("hold update did not start")
+	}
+
+	policy := RuntimeWritePolicy(WriteClassReservation, "test.near-deadline", "near-deadline")
+	policy.Timeout = 600 * time.Millisecond
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := store.RuntimeCreate(context.Background(), Bead{ID: "gc-order-near-deadline", Title: "late"}, policy)
+		errCh <- err
+	}()
+	waitForRuntimeWriteQueueDepth(t, store, 1)
+	time.Sleep(3350 * time.Millisecond)
+	close(releaseHold)
+	if err := <-holdErr; err != nil {
+		t.Fatalf("hold RuntimeUpdate: %v", err)
+	}
+	err := <-errCh
+	var degraded *DegradedWriteError
+	if !errors.As(err, &degraded) || degraded.Outcome != WriteOutcomeNotStarted {
+		t.Fatalf("RuntimeCreate error = %#v, want not-started degraded write", err)
+	}
+	if !strings.Contains(err.Error(), "start budget exhausted") {
+		t.Fatalf("RuntimeCreate error = %v, want start budget exhausted detail", err)
+	}
+	waitForRuntimeWriteManagerIdle(t, store)
+	if got := createCalls.Load(); got != 0 {
+		t.Fatalf("create calls = %d, want near-deadline queued create removed before execution", got)
 	}
 }
 
@@ -580,8 +678,14 @@ func TestBdStoreRuntimeUpdateRetriesTransientWriteError(t *testing.T) {
 		t.Fatalf("read trace: %v", err)
 	}
 	trace := string(traceBytes)
-	if !strings.Contains(trace, "outcome=success") {
-		t.Fatalf("trace missing success outcome:\n%s", trace)
+	for _, want := range []string{
+		"outcome=success",
+		"transient_retries=1",
+		"last_transient_err=",
+	} {
+		if !strings.Contains(trace, want) {
+			t.Fatalf("trace missing %q:\n%s", want, trace)
+		}
 	}
 	if strings.Contains(trace, "outcome=failed") || strings.Contains(trace, "outcome=ambiguous-timeout") {
 		t.Fatalf("trace recorded transient retry as degraded:\n%s", trace)
@@ -608,30 +712,34 @@ func TestBdStoreRuntimeGetIndexedNotFoundIsNonDegraded(t *testing.T) {
 	}
 }
 
-func TestBdStoreRuntimeWriteHotStateSuccessClosesOpenBreaker(t *testing.T) {
+func TestBdStoreRuntimeWriteHotStateOpenBreakerDoesNotRejectReservation(t *testing.T) {
 	var fail atomic.Bool
 	fail.Store(true)
-	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(ctx context.Context, _ string, _ string, _ ...string) ([]byte, error) {
-		if fail.Load() {
+	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(ctx context.Context, _ string, _ string, args ...string) ([]byte, error) {
+		if fail.Load() && len(args) >= 3 && args[0] == "update" {
 			<-ctx.Done()
 			return nil, ctx.Err()
 		}
+		if len(args) > 0 && args[0] == "create" {
+			return []byte(`{"id":"gc-order-class-isolated","title":"isolated","status":"open","created_at":"2026-05-31T00:00:00Z"}`), nil
+		}
 		return []byte(`[]`), nil
 	})
-	for i := 0; i < 3; i++ {
-		policy := RuntimeWritePolicy(WriteClassAuditRepair, "test.breaker", "key-"+string(rune('0'+i)))
-		policy.Timeout = 5 * time.Millisecond
-		_ = store.RuntimeUpdate(context.Background(), "gc-1", UpdateOpts{Metadata: map[string]string{"i": "1"}}, policy)
-	}
-	waitForRuntimeWriteManagerState(t, store, RuntimeWriteBreakerOpen)
+	openRuntimeWriteBreakerWithTimeouts(t, store, WriteClassHotState, "test.hot-breaker")
 
 	fail.Store(false)
-	policy := RuntimeWritePolicy(WriteClassHotState, "test.recover-hot", "session:gc-1")
+	policy := RuntimeWritePolicy(WriteClassReservation, "test.reservation-isolated", "reservation")
 	policy.Timeout = time.Second
-	if err := store.RuntimeUpdate(context.Background(), "gc-1", UpdateOpts{Metadata: map[string]string{"state": "running"}}, policy); err != nil {
-		t.Fatalf("hot-state RuntimeUpdate: %v", err)
+	if _, err := store.RuntimeCreate(context.Background(), Bead{ID: "gc-order-class-isolated", Title: "isolated"}, policy); err != nil {
+		t.Fatalf("reservation RuntimeCreate after hot-state breaker opened: %v", err)
 	}
-	waitForRuntimeWriteManagerState(t, store, RuntimeWriteBreakerClosed)
+	waitForRuntimeWriteManagerState(t, store, RuntimeWriteBreakerOpen)
+	if stats := store.RuntimeWriteManagerStatsForClass(WriteClassHotState); stats.BreakerState != RuntimeWriteBreakerOpen {
+		t.Fatalf("hot-state class breaker = %q, want open", stats.BreakerState)
+	}
+	if stats := store.RuntimeWriteManagerStatsForClass(WriteClassReservation); stats.BreakerState != RuntimeWriteBreakerClosed {
+		t.Fatalf("reservation class breaker = %q, want closed despite hot-state breaker", stats.BreakerState)
+	}
 }
 
 func TestBdStoreRuntimeWriteOpenBreakerAdmitsTimedRecoveryProbe(t *testing.T) {
@@ -647,16 +755,11 @@ func TestBdStoreRuntimeWriteOpenBreakerAdmitsTimedRecoveryProbe(t *testing.T) {
 		}
 		return []byte(`[]`), nil
 	})
-	for i := 0; i < 3; i++ {
-		policy := RuntimeWritePolicy(WriteClassAuditRepair, "test.breaker", "key-"+string(rune('0'+i)))
-		policy.Timeout = 5 * time.Millisecond
-		_ = store.RuntimeUpdate(context.Background(), "gc-1", UpdateOpts{Metadata: map[string]string{"i": "1"}}, policy)
-	}
-	waitForRuntimeWriteManagerState(t, store, RuntimeWriteBreakerOpen)
+	openRuntimeWriteBreakerWithTimeouts(t, store, WriteClassReservation, "test.breaker")
 
 	manager := store.runtimeWriteManager()
 	manager.mu.Lock()
-	manager.breakerOpened = time.Now().Add(-RuntimeWriteBreakerRecoveryAfter - time.Second)
+	manager.breakerForClassLocked(WriteClassReservation).opened = time.Now().Add(-RuntimeWriteBreakerRecoveryAfter - time.Second)
 	manager.mu.Unlock()
 	fail.Store(false)
 
@@ -1064,8 +1167,9 @@ func TestBdStoreRuntimeWriteManagerDegradationWritesDefaultAndEnvTrace(t *testin
 
 	manager := store.runtimeWriteManager()
 	manager.mu.Lock()
-	manager.breakerState = RuntimeWriteBreakerOpen
-	manager.breakerOpened = time.Now()
+	breaker := manager.breakerForClassLocked(WriteClassAuditRepair)
+	breaker.state = RuntimeWriteBreakerOpen
+	breaker.opened = time.Now()
 	manager.mu.Unlock()
 
 	policy := RuntimeWritePolicy(WriteClassAuditRepair, "test.manager-trace", "blocked")
@@ -1164,8 +1268,9 @@ func waitForRuntimeWriteTestPID(t *testing.T, path string) string {
 	return ""
 }
 
-func waitForRuntimeWriteManagerIdle(t *testing.T, store *BdStore, timeout time.Duration) {
+func waitForRuntimeWriteManagerIdle(t *testing.T, store *BdStore) {
 	t.Helper()
+	const timeout = time.Second
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		stats := store.RuntimeWriteManagerStats()
@@ -1200,6 +1305,18 @@ func waitForRuntimeWriteCollapsed(t *testing.T, store *BdStore, want int64) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("runtime write collapsed < %d after wait: %+v", want, store.RuntimeWriteManagerStats())
+}
+
+func openRuntimeWriteBreakerWithTimeouts(t *testing.T, store *BdStore, class WriteClass, caller string) {
+	t.Helper()
+	for i := 0; i < 3; i++ {
+		suffix := string(rune('0' + i))
+		policy := RuntimeWritePolicy(class, caller, caller+"-"+suffix)
+		policy.Timeout = 5 * time.Millisecond
+		_ = store.RuntimeUpdate(context.Background(), "gc-"+suffix, UpdateOpts{Metadata: map[string]string{"i": suffix}}, policy)
+		waitForRuntimeWriteManagerIdle(t, store)
+	}
+	waitForRuntimeWriteManagerState(t, store, RuntimeWriteBreakerOpen)
 }
 
 func waitForRuntimeWriteManagerState(t *testing.T, store *BdStore, want RuntimeWriteBreakerState) {

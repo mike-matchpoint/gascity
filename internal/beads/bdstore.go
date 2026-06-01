@@ -1528,6 +1528,14 @@ func (s *BdStore) RuntimeWriteManagerStats() RuntimeWriteManagerStats {
 	return s.runtimeWriteManager().stats()
 }
 
+// RuntimeWriteManagerStatsForClass returns runtime writer state for one class.
+func (s *BdStore) RuntimeWriteManagerStatsForClass(class WriteClass) RuntimeWriteClassStats {
+	if s == nil {
+		return RuntimeWriteClassStats{Class: normalizeWritePolicy(WritePolicy{Class: class}).Class}
+	}
+	return s.runtimeWriteManager().statsForClass(class)
+}
+
 func (s *BdStore) runtimeWriteManager() *runtimeWriteManager {
 	return runtimeWriteManagerForKey(s.RuntimeWriteStoreKey(), RuntimeWriteQueueWaitBudget)
 }
@@ -1697,26 +1705,30 @@ func (s *BdStore) runRuntimeBD(ctx context.Context, policy WritePolicy, operatio
 	}
 	var out []byte
 	var err error
+	transientRetries := 0
+	lastTransientErr := ""
 	for attempt := 1; attempt <= bdTransientWriteAttempts; attempt++ {
 		out, err = s.runRuntimeBDCommand(ctx, args...)
 		if err != nil {
 			wrapped := s.runtimeCommandError(ctx, policy, operation, err)
 			if runtimeWriteShouldRetry(ctx, wrapped) && attempt < bdTransientWriteAttempts {
+				transientRetries++
+				lastTransientErr = err.Error()
 				if !sleepRuntimeWriteRetry(ctx, attempt) {
 					timeoutErr := s.runtimeCommandError(ctx, policy, operation, ctx.Err())
-					s.traceRuntimeWrite(policy, operation, args, time.Since(start), timeoutErr)
+					s.traceRuntimeWriteWithRetries(policy, operation, args, time.Since(start), timeoutErr, transientRetries, lastTransientErr)
 					return out, timeoutErr
 				}
 				continue
 			}
-			s.traceRuntimeWrite(policy, operation, args, time.Since(start), wrapped)
+			s.traceRuntimeWriteWithRetries(policy, operation, args, time.Since(start), wrapped, transientRetries, lastTransientErr)
 			return out, wrapped
 		}
-		s.traceRuntimeWrite(policy, operation, args, time.Since(start), nil)
+		s.traceRuntimeWriteWithRetries(policy, operation, args, time.Since(start), nil, transientRetries, lastTransientErr)
 		return out, nil
 	}
 	err = s.runtimeCommandError(ctx, policy, operation, err)
-	s.traceRuntimeWrite(policy, operation, args, time.Since(start), err)
+	s.traceRuntimeWriteWithRetries(policy, operation, args, time.Since(start), err, transientRetries, lastTransientErr)
 	return out, err
 }
 
@@ -1778,6 +1790,10 @@ func (s *BdStore) runtimeCommandError(ctx context.Context, policy WritePolicy, o
 }
 
 func (s *BdStore) traceRuntimeWrite(policy WritePolicy, operation string, args []string, duration time.Duration, err error) {
+	s.traceRuntimeWriteWithRetries(policy, operation, args, duration, err, 0, "")
+}
+
+func (s *BdStore) traceRuntimeWriteWithRetries(policy WritePolicy, operation string, args []string, duration time.Duration, err error, transientRetries int, lastTransientErr string) {
 	subcommand := ""
 	if len(args) > 0 {
 		subcommand = args[0]
@@ -1791,7 +1807,11 @@ func (s *BdStore) traceRuntimeWrite(policy WritePolicy, operation string, args [
 	if s != nil {
 		storeKey = s.RuntimeWriteStoreKey()
 	}
-	line := fmt.Sprintf("%s runtime_write caller=%s class=%s op=%s command=bd:%s args=%q duration=%s timeout=%s outcome=%s store_key=%s err=%q\n",
+	retryFields := ""
+	if transientRetries > 0 {
+		retryFields = fmt.Sprintf(" transient_retries=%d last_transient_err=%q", transientRetries, lastTransientErr)
+	}
+	line := fmt.Sprintf("%s runtime_write caller=%s class=%s op=%s command=bd:%s args=%q duration=%s timeout=%s outcome=%s store_key=%s%s err=%q\n",
 		time.Now().UTC().Format(time.RFC3339Nano),
 		strings.TrimSpace(policy.Caller),
 		policy.Class,
@@ -1802,6 +1822,7 @@ func (s *BdStore) traceRuntimeWrite(policy WritePolicy, operation string, args [
 		policy.Timeout,
 		outcome,
 		storeKey,
+		retryFields,
 		errMsg)
 	for _, path := range s.runtimeWriteTracePaths() {
 		appendRuntimeWriteTraceLine(path, line)

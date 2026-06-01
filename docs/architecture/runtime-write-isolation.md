@@ -1,6 +1,8 @@
 # Runtime Write Isolation
 
 Status: active for the runtime write isolation cutover started 2026-05-30.
+Order-firing stabilization validated on 2026-06-01 with a 60 minute live soak
+after a 10 minute reload warmup.
 
 GasCity runtime loops must keep controller progress bounded even when the
 Beads CLI or Dolt is slow. Beads remains the durable source of truth for work,
@@ -11,11 +13,11 @@ adapter around existing Beads CLI commands for hot runtime callers.
 
 | Class | Budget | Route | Fallback | Failure behavior |
 | --- | ---: | --- | --- | --- |
-| `hot-state` | 2s caller | runtime writer | none | report degraded state, keep controller loop alive |
-| `reservation` | 1s caller | runtime writer with deterministic ID/idempotency | none | defer unsafe action on ambiguous or failed reservation |
-| `cursor-reservation` | 1s caller | runtime writer with deterministic cursor key | none | defer event action before execution |
-| `post-action-critical` | 2s caller | runtime writer and compensator | none | record ambiguous/failed write for bounded repair |
-| `audit-repair` | 1s caller | runtime writer queue | none | pause or retry through compensation |
+| `hot-state` | 10s caller | runtime writer | none | report degraded state, keep controller loop alive |
+| `reservation` | 10s caller | runtime writer with deterministic ID/idempotency | none | defer unsafe action on ambiguous or failed reservation |
+| `cursor-reservation` | 10s caller | runtime writer with deterministic cursor key | none | defer event action before execution |
+| `post-action-critical` | 30s caller | runtime writer and compensator | none | record ambiguous/failed write for bounded repair |
+| `audit-repair` | 10s caller | runtime writer queue | none | pause or retry through compensation |
 | `foreground-authoritative` | command timeout | existing `Store` methods and Beads CLI | allowed | return command error after operator budget |
 | `maintenance` | explicit deadline | serialized maintenance/operator path | allowed outside hot ticks | retry/report through maintenance state |
 
@@ -54,11 +56,17 @@ Each canonical store key owns one runtime write manager. The manager provides:
   `ambiguous-timeout`, `failed`, `partial`, and `unsupported`.
 - per-store stats for queue depth, drops, collapses, timeouts, failures,
   completions, oldest backlog age, and breaker state.
-- a circuit breaker that opens after repeated runtime write timeouts or
-  failures. While open, audit and maintenance compensation are refused,
-  tracking-required work defers, hot-state writes may still report state, and
-  a bounded `RuntimePing` recovery probe can close the breaker after Beads
-  write health recovers.
+- per-class stats for queue depth, active count, queue limit, oldest backlog
+  age, and breaker state. Runtime callers that only depend on one write class
+  must use class-scoped stats so unrelated maintenance, post-action, or
+  hot-state pressure does not block safer reservation writes.
+- per-class circuit breakers that open after repeated runtime write timeouts or
+  failures for that class. A hot-state breaker must not reject reservation
+  writes, and a maintenance/audit breaker must not make order dispatch look
+  wedged when the reservation class is healthy.
+- a bounded queue-wait window before a runtime write is reported as
+  `not-started`, plus a pre-start guard that skips queued jobs whose remaining
+  caller budget is too small to safely launch `bd`.
 
 Runtime write methods deliberately unwrap `CachingStore` before writing. Hot
 writes must not invoke `CachingStore` post-write `Get` readbacks or silently
@@ -76,6 +84,40 @@ store key without logging raw metadata payloads.
 Doctor and status surfaces should prefer these runtime writer stats and
 degradation records over foreground Beads probes so diagnostics do not wedge
 behind the same Beads/Dolt stall they are reporting.
+
+Recovered transient Beads/Dolt write conflicts must be recorded as a single
+logical successful runtime write with retry metadata, not as an intermediate
+degraded result followed by success. This preserves operator visibility into
+retry pressure without creating false doctor/status degradation when the write
+eventually lands.
+
+## Order Dispatch Contract
+
+The order dispatcher may throttle tracking reservations per tick to keep reload
+bursts and steady-state Dolt write pressure bounded. Dispatch candidates must
+continue rotating across ticks so front-of-list orders cannot starve under
+partial writer pressure or per-tick caps.
+
+Order dispatch backpressure is scoped to the reservation writer class only. A
+dispatch tick may defer tracking-required orders when the reservation class
+breaker is open or its class queue is full. It must not defer orders because an
+unrelated write class is active, queued, or degraded.
+
+Order tracking post-action writes are allowed to outlive the action execution
+context. Once an order action has started, recording the execution result and
+closing the tracking bead are completion/audit work and should not be canceled
+just because the action context expired.
+
+Live soak acceptance for this cutover is:
+
+- Warmup: allow the existing reload gate and `order-firing-current` warning for
+  the first 10 minutes after restart.
+- Steady state: for the remaining soak, `gc doctor` must return no
+  `order-firing-current` overdue flags, order dispatch wedge counters must stay
+  at zero, and order dispatch must continue creating tracking rows.
+- Failure: any post-warmup overdue order flag, dispatch wedge event, dispatch
+  wedge tick, or reservation-class backpressure deferral that turns into stale
+  orders blocks cutover.
 
 ## Regression Rules
 
