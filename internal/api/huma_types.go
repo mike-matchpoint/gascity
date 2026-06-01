@@ -190,10 +190,12 @@ type HealthOutput struct {
 
 // StatusAgentCounts holds agent state counts for the status endpoint.
 type StatusAgentCounts struct {
-	Total       int `json:"total" doc:"Total number of agents."`
-	Running     int `json:"running" doc:"Number of running agents."`
-	Suspended   int `json:"suspended" doc:"Number of suspended agents."`
-	Quarantined int `json:"quarantined" doc:"Number of quarantined agents."`
+	Total           int `json:"total" doc:"Total number of agents."`
+	Running         int `json:"running" doc:"Number of running agents."`
+	Suspended       int `json:"suspended" doc:"Number of suspended agents."`
+	Quarantined     int `json:"quarantined" doc:"Number of quarantined agents."`
+	ExpectedRunning int `json:"expected_running" doc:"Number of agents expected to have resident running sessions."`
+	RunningExpected int `json:"running_expected" doc:"Number of expected resident sessions currently running."`
 }
 
 // StatusRigCounts holds rig state counts for the status endpoint.

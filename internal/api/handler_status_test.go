@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/session"
 )
@@ -83,6 +84,55 @@ func TestHandleStatusEnriched(t *testing.T) {
 	// Rig counts.
 	if resp.Rigs.Total != 1 {
 		t.Errorf("Rigs.Total = %d, want 1", resp.Rigs.Total)
+	}
+}
+
+func TestHandleStatusExpectedRunningCountsResidentSingleton(t *testing.T) {
+	state := newFakeState(t)
+	h := newTestCityHandler(t, state)
+
+	req := httptest.NewRequest("GET", cityURL(state, "/status"), nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var resp statusResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Agents.ExpectedRunning != 1 || resp.Agents.RunningExpected != 0 {
+		t.Fatalf("Agents = %+v, want expected_running=1 running_expected=0", resp.Agents)
+	}
+}
+
+func TestHandleStatusExpectedRunningCountsIdleOneShotPools(t *testing.T) {
+	state := newFakeState(t)
+	state.cfg.Rigs = nil
+	state.cfg.NamedSessions = nil
+	state.cfg.Agents = []config.Agent{
+		{Name: "dog", Lifecycle: config.AgentLifecycleOneShot, MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(3)},
+		{Name: "execution-monitor", Lifecycle: config.AgentLifecycleOneShot, MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(2)},
+	}
+	h := newTestCityHandler(t, state)
+
+	req := httptest.NewRequest("GET", cityURL(state, "/status"), nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var resp statusResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Agents.Total != 5 || resp.Agents.Running != 0 {
+		t.Fatalf("Agents = %+v, want total=5 running=0", resp.Agents)
+	}
+	if resp.Agents.ExpectedRunning != 0 || resp.Agents.RunningExpected != 0 {
+		t.Fatalf("Agents = %+v, want zero expected residents for idle one-shot pools", resp.Agents)
 	}
 }
 

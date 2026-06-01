@@ -89,6 +89,83 @@ func TestCityStatusJSONUsesEmptyCollectionsWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestCityStatusJSONDoesNotDegradeIdleOneShotDemandPools(t *testing.T) {
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "city"},
+		Agents: []config.Agent{
+			{Name: "dog", Lifecycle: config.AgentLifecycleOneShot, MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(3)},
+			{Name: "execution-monitor", Lifecycle: config.AgentLifecycleOneShot, MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(2)},
+		},
+	}
+
+	snapshot := collectCityStatusSnapshot(runtime.NewFake(), cfg, "/tmp/city", nil, io.Discard)
+	snapshot.Controller.Running = true
+	status := cityStatusJSONFromSnapshot(snapshot, snapshot.Summary)
+
+	if status.Summary.TotalAgents != 5 || status.Summary.RunningAgents != 0 {
+		t.Fatalf("summary = %+v, want total=5 running=0", status.Summary)
+	}
+	if status.Summary.ExpectedRunningAgents != 0 || status.Summary.RunningExpectedAgents != 0 {
+		t.Fatalf("expected-running summary = %+v, want zero expected residents", status.Summary)
+	}
+	if status.Health.Degraded {
+		t.Fatalf("Health.Degraded = true, want false for idle one-shot demand pools; signals=%v", status.Health.Signals)
+	}
+	if hasHealthSignal(status, "no_agents_running") {
+		t.Fatalf("signals = %v, want no no_agents_running signal", status.Health.Signals)
+	}
+}
+
+func TestCityStatusJSONDegradesWhenResidentAgentsMissing(t *testing.T) {
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "city"},
+		Agents:    []config.Agent{{Name: "mayor", MaxActiveSessions: intPtr(1)}},
+	}
+
+	snapshot := collectCityStatusSnapshot(runtime.NewFake(), cfg, "/tmp/city", nil, io.Discard)
+	snapshot.Controller.Running = true
+	status := cityStatusJSONFromSnapshot(snapshot, snapshot.Summary)
+
+	if status.Summary.ExpectedRunningAgents != 1 || status.Summary.RunningExpectedAgents != 0 {
+		t.Fatalf("expected-running summary = %+v, want expected=1 running_expected=0", status.Summary)
+	}
+	if !status.Health.Degraded {
+		t.Fatalf("Health.Degraded = false, want true when resident agent is absent")
+	}
+	if !hasHealthSignal(status, "no_agents_running") {
+		t.Fatalf("signals = %v, want no_agents_running", status.Health.Signals)
+	}
+}
+
+func TestCityStatusJSONDegradesWhenWarmPoolMinimumMissing(t *testing.T) {
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "city"},
+		Agents: []config.Agent{{
+			Name: "worker", MinActiveSessions: intPtr(1), MaxActiveSessions: intPtr(3),
+		}},
+	}
+
+	snapshot := collectCityStatusSnapshot(runtime.NewFake(), cfg, "/tmp/city", nil, io.Discard)
+	snapshot.Controller.Running = true
+	status := cityStatusJSONFromSnapshot(snapshot, snapshot.Summary)
+
+	if status.Summary.ExpectedRunningAgents != 1 || status.Summary.RunningExpectedAgents != 0 {
+		t.Fatalf("expected-running summary = %+v, want expected=1 running_expected=0", status.Summary)
+	}
+	if !hasHealthSignal(status, "no_agents_running") {
+		t.Fatalf("signals = %v, want no_agents_running for missing warm pool minimum", status.Health.Signals)
+	}
+}
+
+func hasHealthSignal(status StatusJSON, signal string) bool {
+	for _, got := range status.Health.Signals {
+		if got == signal {
+			return true
+		}
+	}
+	return false
+}
+
 func TestCityStatusObservationTargetUsesConfiguredNamedIdentity(t *testing.T) {
 	snapshot := newSessionBeadSnapshot([]beads.Bead{{
 		ID:     "gc-named",

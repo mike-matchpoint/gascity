@@ -6825,6 +6825,11 @@
       "StatusAgentCounts": {
         "additionalProperties": false,
         "properties": {
+          "expected_running": {
+            "description": "Number of agents expected to have resident running sessions.",
+            "format": "int64",
+            "type": "integer"
+          },
           "quarantined": {
             "description": "Number of quarantined agents.",
             "format": "int64",
@@ -6832,6 +6837,11 @@
           },
           "running": {
             "description": "Number of running agents.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "running_expected": {
+            "description": "Number of expected resident sessions currently running.",
             "format": "int64",
             "type": "integer"
           },
@@ -6850,7 +6860,9 @@
           "total",
           "running",
           "suspended",
-          "quarantined"
+          "quarantined",
+          "expected_running",
+          "running_expected"
         ],
         "type": "object"
       },

@@ -110,12 +110,13 @@ type cityStatusSnapshot struct {
 }
 
 type cityStatusAgentRow struct {
-	Agent       StatusAgentJSON
-	SessionName string
-	GroupName   string
-	ScaleLabel  string
-	Expanded    bool
-	DrainKnown  bool
+	Agent           StatusAgentJSON
+	SessionName     string
+	GroupName       string
+	ScaleLabel      string
+	Expanded        bool
+	DrainKnown      bool
+	ExpectedRunning bool
 }
 
 type cityStatusNamedSession struct {
@@ -256,6 +257,11 @@ func collectCityStatusSnapshotFromStoreSnapshot(
 	for _, a := range cfg.Agents {
 		suspended := a.Suspended || (a.Dir != "" && suspendedRigs[a.Dir])
 		sp0 := scaleParamsFor(&a)
+		expectedRunningSlots := a.ExpectedRunningSessions()
+		if suspended {
+			expectedRunningSlots = 0
+		}
+		snapshot.Summary.ExpectedRunningAgents += expectedRunningSlots
 		scope := "city"
 		if a.Dir != "" {
 			scope = "rig"
@@ -268,7 +274,7 @@ func collectCityStatusSnapshotFromStoreSnapshot(
 			}
 			scaleLabel := fmt.Sprintf("scaled (min=%d, %s)", sp0.Min, maxDisplay)
 			headerShown := false
-			for _, qualifiedInstance := range discoverPoolInstances(a.Name, a.Dir, sp0, &a, snapshot.CityName, cfg.Workspace.SessionTemplate, sp) {
+			for i, qualifiedInstance := range discoverPoolInstances(a.Name, a.Dir, sp0, &a, snapshot.CityName, cfg.Workspace.SessionTemplate, sp) {
 				target := statusObservationTargetForIdentity(statusSnapshot, snapshot.CityName, qualifiedInstance, cfg.Workspace.SessionTemplate)
 				_, instanceName := config.ParseQualifiedName(qualifiedInstance)
 				row := cityStatusAgentRow{
@@ -282,6 +288,7 @@ func collectCityStatusSnapshotFromStoreSnapshot(
 					GroupName:   a.QualifiedName(),
 					Expanded:    true,
 				}
+				row.ExpectedRunning = i < expectedRunningSlots
 				if !headerShown {
 					row.ScaleLabel = scaleLabel
 					headerShown = true
@@ -302,6 +309,7 @@ func collectCityStatusSnapshotFromStoreSnapshot(
 			GroupName:   a.QualifiedName(),
 			Expanded:    false,
 		}
+		row.ExpectedRunning = expectedRunningSlots > 0
 		plans = append(plans, agentPlan{row: row, target: target, suspended: suspended, rigDir: a.Dir})
 	}
 
@@ -324,6 +332,9 @@ func collectCityStatusSnapshotFromStoreSnapshot(
 		snapshot.Summary.TotalAgents++
 		if obs.Running {
 			snapshot.Summary.RunningAgents++
+		}
+		if p.row.ExpectedRunning && obs.Running {
+			snapshot.Summary.RunningExpectedAgents++
 		}
 		addRigCount(p.rigDir, p.suspended || obs.Suspended || p.target.suspended)
 	}
@@ -482,7 +493,7 @@ func cityStatusJSONFromSnapshot(snapshot cityStatusSnapshot, summary StatusSumma
 	if !snapshot.Controller.Running {
 		signals = append(signals, "controller_not_running")
 	}
-	if snapshot.Summary.TotalAgents > 0 && snapshot.Summary.RunningAgents == 0 {
+	if summary.ExpectedRunningAgents > 0 && summary.RunningExpectedAgents == 0 {
 		signals = append(signals, "no_agents_running")
 	}
 	if snapshot.Summary.DoltContention != nil && !snapshot.Summary.DoltContention.Healthy() {

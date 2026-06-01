@@ -80,13 +80,15 @@ type StatusRigJSON struct {
 
 // StatusSummaryJSON is the agent count summary in JSON output.
 type StatusSummaryJSON struct {
-	TotalAgents       int                           `json:"total_agents"`
-	RunningAgents     int                           `json:"running_agents"`
-	ActiveSessions    int                           `json:"active_sessions,omitempty"`
-	SuspendedSessions int                           `json:"suspended_sessions,omitempty"`
-	StoreHealth       *StoreHealth                  `json:"store_health,omitempty"`
-	DoltContention    *doctor.DoltContentionSummary `json:"dolt_contention,omitempty"`
-	RuntimeWrite      *doctor.RuntimeWriteSummary   `json:"runtime_write,omitempty"`
+	TotalAgents           int                           `json:"total_agents"`
+	RunningAgents         int                           `json:"running_agents"`
+	ExpectedRunningAgents int                           `json:"expected_running_agents,omitempty"`
+	RunningExpectedAgents int                           `json:"running_expected_agents,omitempty"`
+	ActiveSessions        int                           `json:"active_sessions,omitempty"`
+	SuspendedSessions     int                           `json:"suspended_sessions,omitempty"`
+	StoreHealth           *StoreHealth                  `json:"store_health,omitempty"`
+	DoltContention        *doctor.DoltContentionSummary `json:"dolt_contention,omitempty"`
+	RuntimeWrite          *doctor.RuntimeWriteSummary   `json:"runtime_write,omitempty"`
 }
 
 // StoreHealth is the JSON shape of the Dolt bead store health block
@@ -263,11 +265,13 @@ func snapshotFromStatusView(cityPath string, v api.StatusView) cityStatusSnapsho
 		Suspended:  v.Suspended,
 		Controller: controllerStatusForCity(cityPath),
 		Summary: StatusSummaryJSON{
-			TotalAgents:       v.Summary.TotalAgents,
-			RunningAgents:     v.Summary.RunningAgents,
-			ActiveSessions:    v.SessionCounts.Active,
-			SuspendedSessions: v.SessionCounts.Suspended,
-			RuntimeWrite:      runtimeWriteSummaryFromStatusView(v.RuntimeWrite),
+			TotalAgents:           v.Summary.TotalAgents,
+			RunningAgents:         v.Summary.RunningAgents,
+			ExpectedRunningAgents: v.Summary.ExpectedRunningAgents,
+			RunningExpectedAgents: v.Summary.RunningExpectedAgents,
+			ActiveSessions:        v.SessionCounts.Active,
+			SuspendedSessions:     v.SessionCounts.Suspended,
+			RuntimeWrite:          runtimeWriteSummaryFromStatusView(v.RuntimeWrite),
 		},
 	}
 	for _, a := range v.Agents {

@@ -92,12 +92,18 @@ func (s *Server) buildStatusBody() StatusBody {
 		if rigName != "" {
 			scope = "rig"
 		}
+		agentSuspended := a.Suspended || (rigName != "" && suspendedRigs[rigName])
+		expectedRunningSlots := a.ExpectedRunningSessions()
+		if agentSuspended {
+			expectedRunningSlots = 0
+		}
+		ac.ExpectedRunning += expectedRunningSlots
 		expanded := expandAgent(a, cityName, sessTmpl, sp)
 		expanded = appendUnlimitedPoolSessionBeads(expanded, a, cityName, sessTmpl, sessionSnapshot)
 		isPool := len(expanded) > 1 || a.SupportsInstanceExpansion()
 		groupName := a.QualifiedName()
 		scaleLabelEmitted := false
-		for _, ea := range expanded {
+		for i, ea := range expanded {
 			ac.Total++
 			if rigName != "" {
 				perRigAgentTotals[rigName]++
@@ -109,6 +115,7 @@ func (s *Server) buildStatusBody() StatusBody {
 				rawRunning++
 			}
 			suspended := ea.suspended || a.Suspended || (rigName != "" && suspendedRigs[rigName]) || (hasInfo && info.state == session.StateSuspended)
+			expectedRunning := i < expectedRunningSlots
 			if suspended && rigName != "" {
 				perRigAgentsSuspended[rigName]++
 			}
@@ -119,6 +126,9 @@ func (s *Server) buildStatusBody() StatusBody {
 				ac.Quarantined++
 			case running:
 				ac.Running++
+			}
+			if expectedRunning && running {
+				ac.RunningExpected++
 			}
 
 			detail := StatusAgentDetail{

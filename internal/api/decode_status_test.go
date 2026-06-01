@@ -30,7 +30,7 @@ func TestStatusViewFromGen_ValidResponse(t *testing.T) {
 		Version:   &version,
 		UptimeSec: 42,
 		Suspended: false,
-		Agents:    genclient.StatusAgentCounts{Total: 2, Running: 1},
+		Agents:    genclient.StatusAgentCounts{Total: 2, Running: 1, ExpectedRunning: 1, RunningExpected: 1},
 		Rigs:      genclient.StatusRigCounts{Total: 1, Suspended: 0},
 		Work:      genclient.StatusWorkCounts{},
 		Mail:      genclient.StatusMailCounts{},
@@ -83,6 +83,9 @@ func TestStatusViewFromGen_ValidResponse(t *testing.T) {
 	}
 	if got.Summary.TotalAgents != 2 || got.Summary.RunningAgents != 1 {
 		t.Errorf("Summary = %+v", got.Summary)
+	}
+	if got.Summary.ExpectedRunningAgents != 1 || got.Summary.RunningExpectedAgents != 1 {
+		t.Errorf("expected-running Summary = %+v", got.Summary)
 	}
 	if len(got.Agents) != 1 || got.Agents[0].QualifiedName != "mayor" {
 		t.Errorf("Agents = %+v", got.Agents)

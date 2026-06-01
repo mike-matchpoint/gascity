@@ -2967,6 +2967,28 @@ func (a *Agent) EffectiveMinActiveSessions() int {
 	return 0
 }
 
+// ExpectedRunningSessions returns the number of resident sessions this agent
+// configuration expects status/health checks to find when it is not suspended.
+// Demand-driven pools with no configured minimum are healthy while idle; fixed
+// singleton agents are expected to have one resident session unless they are
+// explicitly configured as empty-capacity or zero-minimum one-shot workers.
+func (a *Agent) ExpectedRunningSessions() int {
+	if a == nil {
+		return 0
+	}
+	if m := a.EffectiveMaxActiveSessions(); m != nil && *m == 0 {
+		return 0
+	}
+	minSessions := a.EffectiveMinActiveSessions()
+	if a.SupportsInstanceExpansion() {
+		return minSessions
+	}
+	if strings.TrimSpace(a.Lifecycle) == AgentLifecycleOneShot && minSessions == 0 {
+		return 0
+	}
+	return 1
+}
+
 // SupportsGenericEphemeralSessions reports whether the template may satisfy
 // generic controller demand with ephemeral sessions.
 func (a *Agent) SupportsGenericEphemeralSessions() bool {

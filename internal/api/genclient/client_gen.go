@@ -2726,11 +2726,17 @@ type Status struct {
 
 // StatusAgentCounts defines model for StatusAgentCounts.
 type StatusAgentCounts struct {
+	// ExpectedRunning Number of agents expected to have resident running sessions.
+	ExpectedRunning int64 `json:"expected_running"`
+
 	// Quarantined Number of quarantined agents.
 	Quarantined int64 `json:"quarantined"`
 
 	// Running Number of running agents.
 	Running int64 `json:"running"`
+
+	// RunningExpected Number of expected resident sessions currently running.
+	RunningExpected int64 `json:"running_expected"`
 
 	// Suspended Number of suspended agents.
 	Suspended int64 `json:"suspended"`

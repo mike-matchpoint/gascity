@@ -2159,6 +2159,48 @@ func TestEffectiveScalingExplicit(t *testing.T) {
 	}
 }
 
+func TestAgentExpectedRunningSessions(t *testing.T) {
+	tests := []struct {
+		name string
+		a    Agent
+		want int
+	}{
+		{
+			name: "fixed singleton expects one resident session",
+			a:    Agent{Name: "mayor", MaxActiveSessions: ptrInt(1)},
+			want: 1,
+		},
+		{
+			name: "demand driven pool with zero minimum expects no idle residents",
+			a:    Agent{Name: "polecat", MinActiveSessions: ptrInt(0), MaxActiveSessions: ptrInt(3)},
+		},
+		{
+			name: "warm pool expects configured minimum residents",
+			a:    Agent{Name: "worker", MinActiveSessions: ptrInt(2), MaxActiveSessions: ptrInt(5)},
+			want: 2,
+		},
+		{
+			name: "one shot pool with zero minimum expects no idle residents",
+			a:    Agent{Name: "execution-monitor", Lifecycle: AgentLifecycleOneShot, MinActiveSessions: ptrInt(0), MaxActiveSessions: ptrInt(2)},
+		},
+		{
+			name: "one shot singleton with zero minimum expects no idle resident",
+			a:    Agent{Name: "probe", Lifecycle: AgentLifecycleOneShot, MaxActiveSessions: ptrInt(1)},
+		},
+		{
+			name: "disabled capacity expects no resident",
+			a:    Agent{Name: "disabled", MaxActiveSessions: ptrInt(0)},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.a.ExpectedRunningSessions(); got != tt.want {
+				t.Fatalf("ExpectedRunningSessions() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestAgentUsesCanonicalSingletonPoolIdentity(t *testing.T) {
 	tests := []struct {
 		name string

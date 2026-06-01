@@ -17,8 +17,10 @@ func statusViewFromGen(body *genclient.StatusBody) StatusView {
 		UptimeSec: int(body.UptimeSec),
 		Suspended: body.Suspended,
 		Summary: StatusSummaryView{
-			TotalAgents:   int(body.Agents.Total),
-			RunningAgents: int(body.Agents.Running),
+			TotalAgents:           int(body.Agents.Total),
+			RunningAgents:         int(body.Agents.Running),
+			ExpectedRunningAgents: int(body.Agents.ExpectedRunning),
+			RunningExpectedAgents: int(body.Agents.RunningExpected),
 		},
 	}
 	if body.Version != nil {

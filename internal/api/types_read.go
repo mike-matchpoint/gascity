@@ -130,8 +130,10 @@ type StatusRuntimeWriteView struct {
 // StatusSummaryView captures the aggregate counts the renderer uses for the
 // "N/M agents running" and "Sessions: ..." lines.
 type StatusSummaryView struct {
-	TotalAgents   int
-	RunningAgents int
+	TotalAgents           int
+	RunningAgents         int
+	ExpectedRunningAgents int
+	RunningExpectedAgents int
 }
 
 // cacheAgeFromResponse extracts the CachingStore age from the response's
