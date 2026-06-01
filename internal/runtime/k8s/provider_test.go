@@ -424,6 +424,71 @@ func TestIsDeadRuntimeSessionYoungDeadTmuxPodStillInitializing(t *testing.T) {
 	}
 }
 
+func TestIsDeadRuntimeSessionOldPendingPodTrue(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+
+	fake.pods["gc-test-agent"] = &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "gc-test-agent",
+			Labels:            map[string]string{"app": "gc-agent", "gc-session": "gc-test-agent"},
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-startupGracePeriod - time.Minute)),
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodPending},
+	}
+
+	dead, err := p.IsDeadRuntimeSession("gc-test-agent")
+	if err != nil {
+		t.Fatalf("IsDeadRuntimeSession: %v", err)
+	}
+	if !dead {
+		t.Fatal("IsDeadRuntimeSession = false, want true for old pending pod")
+	}
+}
+
+func TestIsDeadRuntimeSessionYoungPendingPodStillInitializing(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+
+	fake.pods["gc-test-agent"] = &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "gc-test-agent",
+			Labels:            map[string]string{"app": "gc-agent", "gc-session": "gc-test-agent"},
+			CreationTimestamp: metav1.Now(),
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodPending},
+	}
+
+	dead, err := p.IsDeadRuntimeSession("gc-test-agent")
+	if err != nil {
+		t.Fatalf("IsDeadRuntimeSession: %v", err)
+	}
+	if dead {
+		t.Fatal("IsDeadRuntimeSession = true, want false while pending pod is still inside startup grace")
+	}
+}
+
+func TestIsDeadRuntimeSessionPendingPodWithUnknownAgeStillInitializing(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+
+	fake.pods["gc-test-agent"] = &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "gc-test-agent",
+			Labels: map[string]string{"app": "gc-agent", "gc-session": "gc-test-agent"},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodPending},
+	}
+
+	dead, err := p.IsDeadRuntimeSession("gc-test-agent")
+	if err != nil {
+		t.Fatalf("IsDeadRuntimeSession: %v", err)
+	}
+	if dead {
+		t.Fatal("IsDeadRuntimeSession = true, want false for pending pod with unknown age")
+	}
+}
+
 func TestIsDeadRuntimeSessionLiveTmuxFalse(t *testing.T) {
 	fake := newFakeK8sOps()
 	p := newProviderWithOps(fake)

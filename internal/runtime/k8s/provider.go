@@ -568,7 +568,9 @@ func (p *Provider) IsRunning(name string) bool {
 // visible but no longer hosts a live tmux session. K8s agent pods deliberately
 // keep their container alive after tmux exits so the provider can stage files
 // and inspect logs; destructive cleanup paths need this stronger proof instead
-// of treating every Running pod as live.
+// of treating every Running pod as live. Pending pods past the startup grace
+// window are also dead runtime artifacts: they never reached tmux and cannot be
+// resumed, so leaving them visible blocks the same session name from converging.
 func (p *Provider) IsDeadRuntimeSession(name string) (bool, error) {
 	ctx := context.Background()
 	pod, err := p.findPodObject(ctx, name, false)
@@ -580,6 +582,11 @@ func (p *Provider) IsDeadRuntimeSession(name string) (bool, error) {
 	}
 	switch pod.Status.Phase {
 	case corev1.PodSucceeded, corev1.PodFailed:
+		return true, nil
+	case corev1.PodPending:
+		if pod.CreationTimestamp.IsZero() || time.Since(pod.CreationTimestamp.Time) < startupGracePeriod {
+			return false, nil
+		}
 		return true, nil
 	case corev1.PodRunning:
 		if _, err := p.ops.execInPod(ctx, pod.Name, "agent",
