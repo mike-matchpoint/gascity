@@ -21,17 +21,23 @@ const (
 
 	// Short-interval cooldown orders can drift while the controller is doing
 	// startup reconciliation or serial order-trigger work. Keep that visible as
-	// a warning, but do not make doctor red unless the gap proves the scheduler
-	// has been stalled for multiple minutes.
-	orderFiringCooldownErrorFloor = 5 * time.Minute
+	// a warning after normal dispatch jitter has had time to clear, but do not
+	// make doctor red unless the gap proves the scheduler has been stalled for
+	// multiple minutes.
+	orderFiringCooldownWarningFloor = 3 * time.Minute
+	orderFiringCooldownErrorFloor   = 5 * time.Minute
 )
 
 // OrderFiringCurrentCheck reports scheduled orders whose last firing is stale.
 type OrderFiringCurrentCheck struct {
-	cfg      *config.City
-	cityPath string
-	clock    func() time.Time
+	cfg             *config.City
+	cityPath        string
+	clock           func() time.Time
+	lastRunForOrder OrderFiringLastRunFunc
 }
+
+// OrderFiringLastRunFunc returns the last durable order-run time for an order.
+type OrderFiringLastRunFunc func(orders.Order) (time.Time, error)
 
 // NewOrderFiringCurrentCheck creates a check for cron and cooldown order freshness.
 func NewOrderFiringCurrentCheck(cfg *config.City, cityPath string) *OrderFiringCurrentCheck {
@@ -45,13 +51,20 @@ func NewOrderFiringCurrentCheck(cfg *config.City, cityPath string) *OrderFiringC
 // Name returns the check identifier shown by gc doctor.
 func (c *OrderFiringCurrentCheck) Name() string { return orderFiringCurrentName }
 
+// WithLastRunResolver adds durable order-run history to the freshness check.
+func (c *OrderFiringCurrentCheck) WithLastRunResolver(fn OrderFiringLastRunFunc) *OrderFiringCurrentCheck {
+	c.lastRunForOrder = fn
+	return c
+}
+
 // CanFix reports whether the check can repair stale order firing state.
 func (c *OrderFiringCurrentCheck) CanFix() bool { return false }
 
 // Fix is a no-op because stale order remediation depends on the root cause.
 func (c *OrderFiringCurrentCheck) Fix(_ *CheckContext) error { return nil }
 
-// Run compares each cron or cooldown order with its order.fired history.
+// Run compares each cron or cooldown order with durable order-run history and
+// order.fired events.
 func (c *OrderFiringCurrentCheck) Run(ctx *CheckContext) *CheckResult {
 	result := &CheckResult{Name: c.Name()}
 	if c.cfg == nil {
@@ -115,7 +128,28 @@ func (c *OrderFiringCurrentCheck) Run(ctx *CheckContext) *CheckResult {
 			}
 			continue
 		}
-		status, detail := classifyOrderFiring(order, now, expected, latestOrderFiredAt(firedEvents, order.ScopedName()), startedAt)
+		lastRun := latestOrderFiredAt(firedEvents, order.ScopedName())
+		if c.lastRunForOrder != nil {
+			durableLastRun, err := c.lastRunForOrder(order)
+			if err != nil {
+				status := StatusError
+				detail := fmt.Sprintf("%s: cannot read order history: %v", orderDisplayName(order), err)
+				if runtimeBackpressure.RecentDegraded > 0 {
+					status = StatusWarning
+					detail += " (" + orderRuntimeBackpressureDetail(runtimeBackpressure) + ")"
+				}
+				worst = worseStatus(worst, status)
+				result.Details = append(result.Details, detail)
+				if firstNonOK == "" {
+					firstNonOK = orderHistoryHintTarget(order)
+				}
+				continue
+			}
+			if durableLastRun.After(lastRun) {
+				lastRun = durableLastRun
+			}
+		}
+		status, detail := classifyOrderFiring(order, now, expected, lastRun, startedAt)
 		if status == StatusError && runtimeBackpressure.RecentDegraded > 0 {
 			status = StatusWarning
 			detail += " (" + orderRuntimeBackpressureDetail(runtimeBackpressure) + ")"
@@ -415,24 +449,34 @@ func classifyOrderFiring(order orders.Order, now time.Time, expected time.Durati
 		}
 		uptime := nonNegativeDuration(now.Sub(controllerStarted))
 		neverFiredErrorAfter := orderFiringNeverFiredErrorAfter(order, expected)
+		neverFiredWarningAfter := orderFiringWarningAfter(order, expected)
 		if uptime >= neverFiredErrorAfter {
 			return StatusError, fmt.Sprintf("%s: never fired since controller start %s ago", name, formatOrderFiringDuration(uptime))
 		}
-		if uptime >= expected+expected/2 {
+		if uptime >= neverFiredWarningAfter {
 			return StatusWarning, fmt.Sprintf("%s: never fired since controller start %s ago (within startup grace)", name, formatOrderFiringDuration(uptime))
 		}
 		return StatusOK, fmt.Sprintf("%s: never fired (controller running %s, within first cycle)", name, formatOrderFiringDuration(uptime))
 	}
 
 	age := nonNegativeDuration(now.Sub(lastFired))
+	warningAfter := orderFiringWarningAfter(order, expected)
 	switch {
 	case age >= errorAfter:
 		return StatusError, fmt.Sprintf("%s: last fired %s ago, expected every %s (CRITICAL: stale)", name, formatOrderFiringDuration(age), formatOrderFiringDuration(expected))
-	case age >= expected+expected/2:
+	case age >= warningAfter:
 		return StatusWarning, fmt.Sprintf("%s: last fired %s ago, expected every %s (overdue)", name, formatOrderFiringDuration(age), formatOrderFiringDuration(expected))
 	default:
 		return StatusOK, fmt.Sprintf("%s: last fired %s ago, expected every %s", name, formatOrderFiringDuration(age), formatOrderFiringDuration(expected))
 	}
+}
+
+func orderFiringWarningAfter(order orders.Order, expected time.Duration) time.Duration {
+	warningAfter := expected + expected/2
+	if order.Trigger == "cooldown" && warningAfter < orderFiringCooldownWarningFloor {
+		return orderFiringCooldownWarningFloor
+	}
+	return warningAfter
 }
 
 func orderFiringErrorAfter(order orders.Order, expected time.Duration) time.Duration {

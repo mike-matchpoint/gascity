@@ -1,6 +1,7 @@
 package exec //nolint:revive // internal package, always imported with alias
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -30,6 +31,29 @@ func storeTargetEnv(root string) map[string]string {
 		"GC_STORE_SCOPE":  "rig",
 		"GC_BEADS_PREFIX": "gc",
 	}
+}
+
+func waitForFile(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", path)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func fileSize(t *testing.T, path string) int64 {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Size()
 }
 
 func allOpsScript() string {
@@ -791,6 +815,26 @@ func TestListByLabel(t *testing.T) {
 	}
 }
 
+func TestRuntimeListByLabel(t *testing.T) {
+	dir := t.TempDir()
+	script := writeScript(t, dir, allOpsScript())
+	s := NewStore(script)
+
+	got, err := beads.RuntimeList(context.Background(), s, beads.ListQuery{
+		Label: "order-run:lint",
+		Limit: 10,
+	}, beads.RuntimeReadPolicy(beads.ReadClassHotAuthoritative, "test.exec-runtime-list"))
+	if err != nil {
+		t.Fatalf("RuntimeList: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("RuntimeList returned %d beads, want 1", len(got))
+	}
+	if got[0].Title != "labeled" {
+		t.Errorf("got[0].Title = %q, want %q", got[0].Title, "labeled")
+	}
+}
+
 func TestSetMetadata(t *testing.T) {
 	dir := t.TempDir()
 	outFile := filepath.Join(dir, "meta.txt")
@@ -813,6 +857,80 @@ esac
 	}
 	if string(data) != "mr" {
 		t.Errorf("metadata value = %q, want %q", string(data), "mr")
+	}
+}
+
+func TestRuntimeUpdate(t *testing.T) {
+	dir := t.TempDir()
+	outFile := filepath.Join(dir, "update.json")
+	script := writeScript(t, dir, `
+case "$1" in
+  update) cat > "`+outFile+`" ;;
+  *) exit 2 ;;
+esac
+`)
+	s := NewStore(script)
+	status := "in_progress"
+
+	err := beads.RuntimeUpdate(context.Background(), s, "EX-1", beads.UpdateOpts{Status: &status},
+		beads.RuntimeWritePolicy(beads.WriteClassHotState, "test.exec-runtime-update", "EX-1"))
+	if err != nil {
+		t.Fatalf("RuntimeUpdate: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"status":"in_progress"`) {
+		t.Fatalf("update stdin = %s, want status payload", data)
+	}
+	stats := beads.NewRuntimeWriteExecutor(s.RuntimeWriteStoreKey()).Stats()
+	if stats.Completed < 1 {
+		t.Fatalf("runtime writer completed = %d, want exec writes routed through shared manager", stats.Completed)
+	}
+}
+
+func TestRuntimeUpdateTimeoutKillsProcessGroupAndReportsAmbiguous(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow timeout/process-group test")
+	}
+	dir := t.TempDir()
+	childPIDPath := filepath.Join(dir, "child.pid")
+	heartbeatPath := filepath.Join(dir, "heartbeat")
+	script := writeScript(t, dir, `
+case "$1" in
+  update)
+    (while true; do echo tick >> "`+heartbeatPath+`"; sleep 0.05; done) &
+    echo $! > "`+childPIDPath+`"
+    sleep 10
+    ;;
+  *) exit 2 ;;
+esac
+`)
+	s := NewStore(script)
+	status := "in_progress"
+	policy := beads.RuntimeWritePolicy(beads.WriteClassHotState, "test.exec-runtime-timeout", "EX-1")
+	// Keep the timeout short relative to the script's 10s sleep, but long
+	// enough for process startup under the parallel fast test matrix.
+	policy.Timeout = 2 * time.Second
+
+	err := beads.RuntimeUpdate(context.Background(), s, "EX-1", beads.UpdateOpts{Status: &status}, policy)
+	var degraded *beads.DegradedWriteError
+	if !errors.As(err, &degraded) {
+		t.Fatalf("RuntimeUpdate err = %v, want degraded write", err)
+	}
+	if degraded.Outcome != beads.WriteOutcomeAmbiguousTimeout {
+		t.Fatalf("outcome = %s, want %s", degraded.Outcome, beads.WriteOutcomeAmbiguousTimeout)
+	}
+
+	waitForFile(t, childPIDPath, 3*time.Second)
+	waitForFile(t, heartbeatPath, 3*time.Second)
+	first := fileSize(t, heartbeatPath)
+	time.Sleep(300 * time.Millisecond)
+	second := fileSize(t, heartbeatPath)
+	if second != first {
+		t.Fatalf("child heartbeat grew after timeout: %d -> %d", first, second)
 	}
 }
 

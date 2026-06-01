@@ -23,6 +23,7 @@ const (
 	orderRuntimeLeaseVersion        = "v2"
 	orderRuntimeReservationTTL      = 2 * time.Minute
 	orderRuntimeLeaseHeartbeatEvery = 10 * time.Second
+	orderRuntimeLeaseRetention      = 10 * time.Minute
 )
 
 type orderRuntimeLeaseState string
@@ -216,7 +217,7 @@ func (s *orderRuntimeLeaseStore) markCompletedPendingCritical(leaseID, pending s
 		lease.CompletedAt = now
 		lease.PostActionCriticalPending = pending
 		lease.LastError = errorString(err)
-		lease.ExpiresAt = now.Add(30 * time.Minute)
+		lease.ExpiresAt = now.Add(24 * time.Hour)
 	})
 }
 
@@ -288,6 +289,7 @@ func (s *orderRuntimeLeaseStore) count() int {
 		return 0
 	}
 	defer unlock()
+	_ = s.sweepExpiredLocked(s.nowUTC())
 	leases, err := s.listLocked()
 	if err != nil {
 		return 0
@@ -353,10 +355,25 @@ func (s *orderRuntimeLeaseStore) sweepExpiredLocked(now time.Time) error {
 			continue
 		}
 		if lease.State == orderRuntimeLeaseAbandoned || lease.State == orderRuntimeLeaseExpired {
+			if s.shouldPruneTerminalLease(lease, now) {
+				if s.dir == "" {
+					delete(s.memory, lease.LeaseID)
+				} else if err := os.Remove(s.pathFor(lease.LeaseID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
+			}
 			continue
 		}
 		lease.State = orderRuntimeLeaseExpired
 		lease.LastError = "runtime lease expired"
+		if s.shouldPruneTerminalLease(lease, now) {
+			if s.dir == "" {
+				delete(s.memory, lease.LeaseID)
+			} else if err := os.Remove(s.pathFor(lease.LeaseID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			continue
+		}
 		if s.dir == "" {
 			s.memory[lease.LeaseID] = lease
 			continue
@@ -366,6 +383,17 @@ func (s *orderRuntimeLeaseStore) sweepExpiredLocked(now time.Time) error {
 		}
 	}
 	return nil
+}
+
+func (s *orderRuntimeLeaseStore) shouldPruneTerminalLease(lease orderRuntimeLease, now time.Time) bool {
+	pruneAfter := lease.CompletedAt
+	if pruneAfter.IsZero() {
+		pruneAfter = lease.ExpiresAt
+	}
+	if pruneAfter.IsZero() {
+		pruneAfter = lease.CreatedAt
+	}
+	return !pruneAfter.IsZero() && now.Sub(pruneAfter) >= orderRuntimeLeaseRetention
 }
 
 func (s *orderRuntimeLeaseStore) listLocked() ([]orderRuntimeLease, error) {
@@ -547,6 +575,9 @@ func orderTriggerFingerprint(a orders.Order, now time.Time, eventSeq uint64) str
 		}
 		return fmt.Sprintf("cooldown:%s:%d", interval, now.UnixNano()/interval.Nanoseconds())
 	case "cron":
+		if scheduledAt, ok, err := orders.CronLastMatch(a.Schedule, now, orders.CronCatchUpWindow); err == nil && ok {
+			return "cron:" + a.Schedule + ":" + scheduledAt.UTC().Format(time.RFC3339)
+		}
 		return "cron:" + a.Schedule + ":" + now.Truncate(time.Minute).Format(time.RFC3339)
 	case "event":
 		return fmt.Sprintf("event:%s:%d", a.On, eventSeq)

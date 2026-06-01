@@ -635,7 +635,8 @@ func (c *OrphanSessionsCheck) Fix(_ *CheckContext) error {
 
 // --- Data checks ---
 
-// BeadsStoreCheck verifies the bead store opens and Ping succeeds.
+// BeadsStoreCheck verifies the bead store opens, responds to a cheap ping, and
+// can hydrate row JSON through the normal list path.
 type BeadsStoreCheck struct {
 	cityPath string
 	newStore func(cityPath string) (beads.Store, error)
@@ -650,7 +651,9 @@ func NewBeadsStoreCheck(cityPath string, newStore func(string) (beads.Store, err
 // Name returns the check identifier.
 func (c *BeadsStoreCheck) Name() string { return "beads-store" }
 
-// Run opens the store and pings it to verify accessibility.
+// Run opens the store, pings it to verify accessibility, and then performs an
+// explicit hydration probe so row serialization failures remain visible without
+// being conflated with ping health.
 func (c *BeadsStoreCheck) Run(_ *CheckContext) *CheckResult {
 	r := &CheckResult{Name: c.Name()}
 	target, fixHint, active, err := validateBDStoreTarget(c.cityPath, c.cityPath)
@@ -684,8 +687,14 @@ func (c *BeadsStoreCheck) Run(_ *CheckContext) *CheckResult {
 		r.Message = fmt.Sprintf("store ping failed: %v", err)
 		return r
 	}
+	n, err := runBeadsStoreHydrationProbe(store)
+	if err != nil {
+		r.Status = StatusError
+		r.Message = fmt.Sprintf("store hydration failed: %v", err)
+		return r
+	}
 	r.Status = StatusOK
-	r.Message = "store accessible"
+	r.Message = fmt.Sprintf("store accessible; hydrated %d open row(s)", n)
 	return r
 }
 
@@ -695,7 +704,10 @@ func (c *BeadsStoreCheck) CanFix() bool { return false }
 // Fix is a no-op.
 func (c *BeadsStoreCheck) Fix(_ *CheckContext) error { return nil }
 
-var beadsStoreRuntimePingTimeout = 3 * time.Second
+var (
+	beadsStoreRuntimePingTimeout = 3 * time.Second
+	beadsStoreHydrationTimeout   = 10 * time.Second
+)
 
 func runBeadsStorePing(store beads.Store) error {
 	if store == nil {
@@ -727,6 +739,18 @@ func beadsStoreUsesRuntimePing(store beads.Store) bool {
 	default:
 		return false
 	}
+}
+
+func runBeadsStoreHydrationProbe(store beads.Store) (int, error) {
+	if store == nil {
+		return 0, errors.New("nil bead store")
+	}
+	hydrateCtx, cancel := context.WithTimeout(context.Background(), beadsStoreHydrationTimeout)
+	defer cancel()
+	policy := beads.RuntimeReadPolicy(beads.ReadClassHotDegradedOK, "doctor.beads-store.hydration")
+	policy.Timeout = beadsStoreHydrationTimeout
+	policy.MaxRows = 100000
+	return beads.RuntimeHydrationProbe(hydrateCtx, store, policy)
 }
 
 // BDSplitStoreCheck warns when legacy bd embedded/server store directories
@@ -1442,13 +1466,19 @@ func (c *RigBeadsCheck) Run(_ *CheckContext) *CheckResult {
 		r.Message = fmt.Sprintf("store open failed: %v", err)
 		return r
 	}
-	if err := store.Ping(); err != nil {
+	if err := runBeadsStorePing(store); err != nil {
 		r.Status = StatusError
 		r.Message = fmt.Sprintf("store ping failed: %v", err)
 		return r
 	}
+	n, err := runBeadsStoreHydrationProbe(store)
+	if err != nil {
+		r.Status = StatusError
+		r.Message = fmt.Sprintf("store hydration failed: %v", err)
+		return r
+	}
 	r.Status = StatusOK
-	r.Message = "store accessible"
+	r.Message = fmt.Sprintf("store accessible; hydrated %d open row(s)", n)
 	return r
 }
 

@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/processgroup"
 )
 
 // Store implements [beads.Store] by delegating each operation to a
@@ -41,12 +43,6 @@ func NewStore(script string) *Store {
 		script:  script,
 		timeout: 30 * time.Second,
 	}
-}
-
-// RuntimeHotFallbackDisabled prevents hot runtime read helpers from reaching
-// this fork/exec store through their generic foreground fallback path.
-func (s *Store) RuntimeHotFallbackDisabled() bool {
-	return true
 }
 
 func execProcessEnv(overrides map[string]string) []string {
@@ -77,19 +73,30 @@ func stripExecEnvKey(key string) bool {
 	return strings.HasPrefix(key, "BEADS_") || strings.HasPrefix(key, "GC_DOLT_")
 }
 
-// run executes the script with the given args, optionally piping stdinData
-// to its stdin. Returns the trimmed stdout on success.
+// run executes the script with the given args. Returns the trimmed stdout on
+// success.
 //
 // Exit code 2 is treated as success (unknown operation — forward compatible).
 // Any other non-zero exit code returns an error wrapping stderr.
-func (s *Store) run(stdinData []byte, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+func (s *Store) run(args ...string) (string, error) {
+	return s.runContext(context.Background(), nil, args...)
+}
+
+func (s *Store) runContext(ctx context.Context, stdinData []byte, args ...string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, s.script, args...)
 	// WaitDelay ensures Go forcibly closes I/O pipes after the context
 	// expires, even if grandchild processes still hold them open.
 	cmd.WaitDelay = 2 * time.Second
+	processgroup.StartCommandInNewGroup(cmd)
+	cmd.Cancel = func() error {
+		return processgroup.TerminateCommand(cmd, 0, 2*time.Second, processgroup.Options{})
+	}
 
 	cmd.Env = execProcessEnv(s.env)
 
@@ -117,6 +124,111 @@ func (s *Store) run(stdinData []byte, args ...string) (string, error) {
 	}
 
 	return strings.TrimRight(stdout.String(), "\n"), nil
+}
+
+func (s *Store) runtimeStoreKey() string {
+	if s == nil {
+		return ""
+	}
+	script := strings.TrimSpace(s.script)
+	absScript := script
+	if script != "" {
+		if abs, err := filepath.Abs(script); err == nil {
+			absScript = abs
+		}
+	}
+	root := strings.TrimSpace(s.env["GC_STORE_ROOT"])
+	if root == "" {
+		root = strings.TrimSpace(s.env["GC_CITY_PATH"])
+	}
+	if root == "" && absScript != "" {
+		root = filepath.Dir(absScript)
+	}
+	return beads.RuntimeStoreKey(root, "exec", absScript, execRuntimeEnvFingerprint(s.env))
+}
+
+// RuntimeWriteStoreKey returns the canonical key used by the shared bounded
+// runtime-write executor.
+func (s *Store) RuntimeWriteStoreKey() string {
+	return s.runtimeStoreKey()
+}
+
+func (s *Store) runtimeWriteExecutor() *beads.RuntimeWriteExecutor {
+	return beads.NewRuntimeWriteExecutor(s.runtimeStoreKey())
+}
+
+func execRuntimeEnvFingerprint(env map[string]string) string {
+	if len(env) == 0 {
+		return ""
+	}
+	allowed := map[string]bool{
+		"GC_CITY":          true,
+		"GC_DOLT_DATABASE": true,
+		"GC_PROVIDER":      true,
+		"GC_RIG":           true,
+		"GC_STORE_SCOPE":   true,
+	}
+	keys := make([]string, 0, len(allowed))
+	for key := range allowed {
+		if _, ok := env[key]; ok {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, key+"="+env[key])
+	}
+	return strings.Join(parts, "\x00")
+}
+
+func (s *Store) degradedRead(policy beads.ReadPolicy, op, coverage string, err error) error {
+	if err == nil {
+		err = errors.New("runtime read degraded")
+	}
+	return &beads.DegradedReadError{
+		Class:     policy.Class,
+		Caller:    policy.Caller,
+		Operation: op,
+		Route:     "exec",
+		Coverage:  coverage,
+		Err:       err,
+	}
+}
+
+func (s *Store) degradedWrite(policy beads.WritePolicy, op string, outcome beads.WriteOutcome, err error) error {
+	if err == nil {
+		err = errors.New("runtime write degraded")
+	}
+	return &beads.DegradedWriteError{
+		Class:          policy.Class,
+		Caller:         policy.Caller,
+		Operation:      op,
+		Outcome:        outcome,
+		IdempotencyKey: strings.TrimSpace(policy.IdempotencyKey),
+		StoreKey:       s.runtimeStoreKey(),
+		Err:            err,
+	}
+}
+
+func runtimeWriteOutcome(ctx context.Context, fallback beads.WriteOutcome) beads.WriteOutcome {
+	if ctx != nil && ctx.Err() != nil {
+		return beads.WriteOutcomeAmbiguousTimeout
+	}
+	return fallback
+}
+
+func contextWithTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if timeout <= 0 {
+		return context.WithCancel(ctx)
+	}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= timeout {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 // isNotFoundError reports whether an error from the script indicates a
@@ -205,6 +317,10 @@ func coerceMetadata(raw map[string]json.RawMessage) map[string]string {
 
 // Create persists a new bead: script create (stdin: JSON)
 func (s *Store) Create(b beads.Bead) (beads.Bead, error) {
+	return s.createContext(context.Background(), b)
+}
+
+func (s *Store) createContext(ctx context.Context, b beads.Bead) (beads.Bead, error) {
 	if b.Type == "" {
 		b.Type = "task"
 	}
@@ -212,7 +328,7 @@ func (s *Store) Create(b beads.Bead) (beads.Bead, error) {
 	if err != nil {
 		return beads.Bead{}, fmt.Errorf("exec beads create: marshaling: %w", err)
 	}
-	out, err := s.run(data, "create")
+	out, err := s.runContext(ctx, data, "create")
 	if err != nil {
 		return beads.Bead{}, fmt.Errorf("exec beads create: %w", err)
 	}
@@ -225,7 +341,11 @@ func (s *Store) Create(b beads.Bead) (beads.Bead, error) {
 
 // Get retrieves a bead by ID: script get <id>
 func (s *Store) Get(id string) (beads.Bead, error) {
-	out, err := s.run(nil, "get", id)
+	return s.getContext(context.Background(), id)
+}
+
+func (s *Store) getContext(ctx context.Context, id string) (beads.Bead, error) {
+	out, err := s.runContext(ctx, nil, "get", id)
 	if err != nil {
 		if isNotFoundError(err) {
 			return beads.Bead{}, fmt.Errorf("getting bead %q: %w", id, beads.ErrNotFound)
@@ -241,11 +361,15 @@ func (s *Store) Get(id string) (beads.Bead, error) {
 
 // Update modifies fields of an existing bead: script update <id> (stdin: JSON)
 func (s *Store) Update(id string, opts beads.UpdateOpts) error {
+	return s.updateContext(context.Background(), id, opts)
+}
+
+func (s *Store) updateContext(ctx context.Context, id string, opts beads.UpdateOpts) error {
 	data, err := marshalUpdate(opts)
 	if err != nil {
 		return fmt.Errorf("exec beads update: marshaling: %w", err)
 	}
-	_, err = s.run(data, "update", id)
+	_, err = s.runContext(ctx, data, "update", id)
 	if err != nil {
 		if isNotFoundError(err) {
 			return fmt.Errorf("updating bead %q: %w", id, beads.ErrNotFound)
@@ -257,7 +381,11 @@ func (s *Store) Update(id string, opts beads.UpdateOpts) error {
 
 // Close sets a bead's status to "closed": script close <id>
 func (s *Store) Close(id string) error {
-	_, err := s.run(nil, "close", id)
+	return s.closeContext(context.Background(), id)
+}
+
+func (s *Store) closeContext(ctx context.Context, id string) error {
+	_, err := s.runContext(ctx, nil, "close", id)
 	if err != nil {
 		if isNotFoundError(err) {
 			return fmt.Errorf("closing bead %q: %w", id, beads.ErrNotFound)
@@ -269,7 +397,7 @@ func (s *Store) Close(id string) error {
 
 // Reopen sets a bead's status to "open": script reopen <id>
 func (s *Store) Reopen(id string) error {
-	_, err := s.run(nil, "reopen", id)
+	_, err := s.run("reopen", id)
 	if err != nil {
 		if isNotFoundError(err) {
 			return fmt.Errorf("reopening bead %q: %w", id, beads.ErrNotFound)
@@ -295,6 +423,10 @@ func (s *Store) CloseAll(ids []string, metadata map[string]string) (int, error) 
 
 // List returns beads matching the query.
 func (s *Store) List(query beads.ListQuery) ([]beads.Bead, error) {
+	return s.listContext(context.Background(), query)
+}
+
+func (s *Store) listContext(ctx context.Context, query beads.ListQuery) ([]beads.Bead, error) {
 	if !query.HasFilter() && !query.AllowScan {
 		return nil, fmt.Errorf("exec beads list: %w", beads.ErrQueryRequiresScan)
 	}
@@ -305,9 +437,9 @@ func (s *Store) List(query beads.ListQuery) ([]beads.Bead, error) {
 	)
 	switch {
 	case query.ParentID != "":
-		out, err = s.run(nil, "children", query.ParentID)
+		out, err = s.runContext(ctx, nil, "children", query.ParentID)
 	case query.Label != "":
-		out, err = s.run(nil, "list-by-label", query.Label, "0")
+		out, err = s.runContext(ctx, nil, "list-by-label", query.Label, "0")
 	default:
 		args := []string{"list"}
 		if query.Status != "" {
@@ -322,7 +454,7 @@ func (s *Store) List(query beads.ListQuery) ([]beads.Bead, error) {
 		if query.Limit > 0 && query.CreatedBefore.IsZero() {
 			args = append(args, "--limit="+strconv.Itoa(query.Limit))
 		}
-		out, err = s.run(nil, args...)
+		out, err = s.runContext(ctx, nil, args...)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("exec beads list: %w", err)
@@ -348,7 +480,11 @@ func (s *Store) ListOpen(status ...string) ([]beads.Bead, error) {
 // Ready returns actionable open beads (excluding infrastructure types):
 // script ready
 func (s *Store) Ready(query ...beads.ReadyQuery) ([]beads.Bead, error) {
-	out, err := s.run(nil, "ready")
+	return s.readyContext(context.Background(), query...)
+}
+
+func (s *Store) readyContext(ctx context.Context, query ...beads.ReadyQuery) ([]beads.Bead, error) {
+	out, err := s.runContext(ctx, nil, "ready")
 	if err != nil {
 		return nil, fmt.Errorf("exec beads ready: %w", err)
 	}
@@ -416,7 +552,11 @@ func (s *Store) ListByMetadata(filters map[string]string, limit int, opts ...bea
 
 // SetMetadata sets a key-value metadata pair: script set-metadata <id> <key> (stdin: value)
 func (s *Store) SetMetadata(id, key, value string) error {
-	_, err := s.run([]byte(value), "set-metadata", id, key)
+	return s.setMetadataContext(context.Background(), id, key, value)
+}
+
+func (s *Store) setMetadataContext(ctx context.Context, id, key, value string) error {
+	_, err := s.runContext(ctx, []byte(value), "set-metadata", id, key)
 	if err != nil {
 		return fmt.Errorf("setting metadata on %q: %w", id, err)
 	}
@@ -444,13 +584,17 @@ func (s *Store) Tx(_ string, fn func(beads.Tx) error) error {
 
 // Delete permanently removes a bead by calling the "delete" subcommand.
 func (s *Store) Delete(id string) error {
-	_, err := s.run(nil, "delete", "--force", id)
+	_, err := s.run("delete", "--force", id)
 	return err
 }
 
 // Ping verifies the store script is accessible by running a list operation.
 func (s *Store) Ping() error {
-	_, err := s.run(nil, "list")
+	return s.pingContext(context.Background())
+}
+
+func (s *Store) pingContext(ctx context.Context) error {
+	_, err := s.runContext(ctx, nil, "list")
 	if err != nil {
 		return fmt.Errorf("exec store ping: %w", err)
 	}
@@ -459,7 +603,7 @@ func (s *Store) Ping() error {
 
 // DepAdd delegates dependency creation to the script's dep-add operation.
 func (s *Store) DepAdd(issueID, dependsOnID, depType string) error {
-	_, err := s.run(nil, "dep-add", issueID, dependsOnID, depType)
+	_, err := s.run("dep-add", issueID, dependsOnID, depType)
 	if err != nil {
 		return fmt.Errorf("adding dep %s→%s: %w", issueID, dependsOnID, err)
 	}
@@ -468,7 +612,7 @@ func (s *Store) DepAdd(issueID, dependsOnID, depType string) error {
 
 // DepRemove delegates dependency removal to the script's dep-remove operation.
 func (s *Store) DepRemove(issueID, dependsOnID string) error {
-	_, err := s.run(nil, "dep-remove", issueID, dependsOnID)
+	_, err := s.run("dep-remove", issueID, dependsOnID)
 	if err != nil {
 		return fmt.Errorf("removing dep %s→%s: %w", issueID, dependsOnID, err)
 	}
@@ -477,7 +621,7 @@ func (s *Store) DepRemove(issueID, dependsOnID string) error {
 
 // DepList delegates dependency listing to the script's dep-list operation.
 func (s *Store) DepList(id, direction string) ([]beads.Dep, error) {
-	out, err := s.run(nil, "dep-list", id, direction)
+	out, err := s.run("dep-list", id, direction)
 	if err != nil {
 		return nil, fmt.Errorf("listing deps for %q: %w", id, err)
 	}
@@ -491,5 +635,160 @@ func (s *Store) DepList(id, direction string) ([]beads.Dep, error) {
 	return deps, nil
 }
 
+// RuntimeCreate runs the exec provider create operation under the caller's
+// runtime context through the shared bounded writer.
+func (s *Store) RuntimeCreate(ctx context.Context, b beads.Bead, policy beads.WritePolicy) (beads.Bead, error) {
+	value, err := s.runtimeWriteExecutor().Do(ctx, policy, "create", b.ID, func(runCtx context.Context) (any, error) {
+		created, err := s.createContext(runCtx, b)
+		if err != nil {
+			return beads.Bead{}, s.degradedWrite(policy, "create", runtimeWriteOutcome(runCtx, beads.WriteOutcomeFailed), err)
+		}
+		return created, nil
+	})
+	if err != nil {
+		return beads.Bead{}, err
+	}
+	created, ok := value.(beads.Bead)
+	if !ok {
+		return beads.Bead{}, s.degradedWrite(policy, "create", beads.WriteOutcomeFailed, errors.New("runtime create returned non-bead result"))
+	}
+	return created, nil
+}
+
+// RuntimeGet runs the exec provider get operation under a runtime read budget.
+func (s *Store) RuntimeGet(ctx context.Context, id string, policy beads.ReadPolicy) (beads.Bead, error) {
+	ctx, cancel := contextWithTimeout(ctx, policy.Timeout)
+	defer cancel()
+	item, err := s.getContext(ctx, id)
+	if err != nil {
+		if errors.Is(err, beads.ErrNotFound) {
+			return beads.Bead{}, err
+		}
+		return beads.Bead{}, s.degradedRead(policy, "get", "", err)
+	}
+	return item, nil
+}
+
+// RuntimeList runs supported exec provider list operations under a runtime
+// read budget and enforces the policy row cap without falling back to another
+// store path.
+func (s *Store) RuntimeList(ctx context.Context, query beads.ListQuery, policy beads.ReadPolicy) ([]beads.Bead, error) {
+	ctx, cancel := contextWithTimeout(ctx, policy.Timeout)
+	defer cancel()
+	rows, err := s.listContext(ctx, query)
+	if err != nil {
+		return nil, s.degradedRead(policy, "list", "", err)
+	}
+	return s.enforceRuntimeRowCap(rows, policy, "list")
+}
+
+// RuntimeReady runs the exec provider ready operation under a runtime read
+// budget. Selector-ready callers can still use RuntimeList plus the shared
+// readiness evaluator when they need richer filtering.
+func (s *Store) RuntimeReady(ctx context.Context, query beads.ReadyQuery, policy beads.ReadPolicy) ([]beads.Bead, error) {
+	ctx, cancel := contextWithTimeout(ctx, policy.Timeout)
+	defer cancel()
+	rows, err := s.readyContext(ctx, query)
+	if err != nil {
+		return nil, s.degradedRead(policy, "ready", "", err)
+	}
+	return s.enforceRuntimeRowCap(rows, policy, "ready")
+}
+
+// RuntimeUpdate runs the exec provider update operation through the shared
+// bounded writer.
+func (s *Store) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
+	_, err := s.runtimeWriteExecutor().DoWithPayload(ctx, policy, "update", id, opts, beads.MergeRuntimeUpdatePayload, func(runCtx context.Context, payload any) (any, error) {
+		runOpts, _ := payload.(beads.UpdateOpts)
+		if err := s.updateContext(runCtx, id, runOpts); err != nil {
+			if errors.Is(err, beads.ErrNotFound) {
+				return nil, err
+			}
+			return nil, s.degradedWrite(policy, "update", runtimeWriteOutcome(runCtx, beads.WriteOutcomeFailed), err)
+		}
+		return nil, nil
+	})
+	if err != nil {
+		if errors.Is(err, beads.ErrNotFound) {
+			return err
+		}
+		return err
+	}
+	return nil
+}
+
+// RuntimeCloseAll closes beads sequentially through the shared bounded writer
+// and reports partial progress explicitly when later provider calls fail.
+func (s *Store) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy beads.WritePolicy) (int, error) {
+	value, err := s.runtimeWriteExecutor().Do(ctx, policy, "close-all", strings.Join(ids, ","), func(runCtx context.Context) (any, error) {
+		closed := 0
+		for _, id := range ids {
+			for k, v := range metadata {
+				if err := s.setMetadataContext(runCtx, id, k, v); err != nil {
+					outcome := beads.WriteOutcomeFailed
+					if closed > 0 {
+						outcome = beads.WriteOutcomePartial
+					}
+					outcome = runtimeWriteOutcome(runCtx, outcome)
+					return closed, s.degradedWrite(policy, "close-all.metadata", outcome, err)
+				}
+			}
+			if err := s.closeContext(runCtx, id); err != nil {
+				if errors.Is(err, beads.ErrNotFound) {
+					return closed, err
+				}
+				outcome := beads.WriteOutcomeFailed
+				if closed > 0 {
+					outcome = beads.WriteOutcomePartial
+				}
+				outcome = runtimeWriteOutcome(runCtx, outcome)
+				return closed, s.degradedWrite(policy, "close-all.close", outcome, err)
+			}
+			closed++
+		}
+		return closed, nil
+	})
+	if err != nil {
+		if closed, ok := value.(int); ok {
+			return closed, err
+		}
+		return 0, err
+	}
+	closed, ok := value.(int)
+	if !ok {
+		return 0, s.degradedWrite(policy, "close-all", beads.WriteOutcomeFailed, errors.New("runtime close-all returned non-int result"))
+	}
+	return closed, nil
+}
+
+// RuntimePing verifies provider availability through the shared bounded writer.
+func (s *Store) RuntimePing(ctx context.Context, policy beads.WritePolicy) error {
+	_, err := s.runtimeWriteExecutor().Do(ctx, policy, "ping", "ping", func(runCtx context.Context) (any, error) {
+		if err := s.pingContext(runCtx); err != nil {
+			return nil, s.degradedWrite(policy, "ping", runtimeWriteOutcome(runCtx, beads.WriteOutcomeFailed), err)
+		}
+		return nil, nil
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) enforceRuntimeRowCap(rows []beads.Bead, policy beads.ReadPolicy, op string) ([]beads.Bead, error) {
+	if policy.MaxRows <= 0 || len(rows) < policy.MaxRows {
+		return rows, nil
+	}
+	return rows, s.degradedRead(policy, op, "row-cap", fmt.Errorf("runtime read returned %d rows at cap %d", len(rows), policy.MaxRows))
+}
+
 // Compile-time interface check.
-var _ beads.Store = (*Store)(nil)
+var (
+	_ beads.Store = (*Store)(nil)
+	_ interface {
+		RuntimeCreate(context.Context, beads.Bead, beads.WritePolicy) (beads.Bead, error)
+		RuntimeUpdate(context.Context, string, beads.UpdateOpts, beads.WritePolicy) error
+		RuntimeCloseAll(context.Context, []string, map[string]string, beads.WritePolicy) (int, error)
+		RuntimePing(context.Context, beads.WritePolicy) error
+	} = (*Store)(nil)
+)

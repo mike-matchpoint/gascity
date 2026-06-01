@@ -43,6 +43,41 @@ func (s *droppingListStore) Get(id string) (Bead, error) {
 	return s.Store.Get(id)
 }
 
+func (s *droppingListStore) RuntimeGet(ctx context.Context, id string, policy ReadPolicy) (Bead, error) {
+	select {
+	case <-ctxDone(ctx):
+		return Bead{}, degradedRead(normalizeReadPolicy(policy), "get", "test", "", ctx.Err())
+	default:
+	}
+	return s.Get(id)
+}
+
+type noRuntimeGetDroppingStore struct {
+	Store
+	dropID   string
+	getCalls int
+}
+
+func (s *noRuntimeGetDroppingStore) List(query ListQuery) ([]Bead, error) {
+	all, err := s.Store.List(query)
+	if err != nil || s.dropID == "" {
+		return all, err
+	}
+	filtered := make([]Bead, 0, len(all))
+	for _, b := range all {
+		if b.ID == s.dropID {
+			continue
+		}
+		filtered = append(filtered, b)
+	}
+	return filtered, nil
+}
+
+func (s *noRuntimeGetDroppingStore) Get(id string) (Bead, error) {
+	s.getCalls++
+	return s.Store.Get(id)
+}
+
 func assertNotCached(t *testing.T, cache *CachingStore, id string) {
 	t.Helper()
 	cache.mu.RLock()
@@ -50,6 +85,41 @@ func assertNotCached(t *testing.T, cache *CachingStore, id string) {
 	cache.mu.RUnlock()
 	if ok {
 		t.Fatalf("cache still has bead %q after confirmed close", id)
+	}
+}
+
+func TestReconcileVerifyMissingDoesNotUseForegroundGetFallback(t *testing.T) {
+	t.Parallel()
+
+	mem := NewMemStore()
+	uncertain, err := mem.Create(Bead{Title: "Uncertain"})
+	if err != nil {
+		t.Fatalf("Create uncertain: %v", err)
+	}
+	backing := &noRuntimeGetDroppingStore{Store: mem}
+	var events []string
+	cache := NewCachingStoreForTest(backing, func(eventType, beadID string, _ json.RawMessage) {
+		events = append(events, eventType+":"+beadID)
+	})
+	if err := cache.Prime(context.Background()); err != nil {
+		t.Fatalf("Prime: %v", err)
+	}
+	backing.dropID = uncertain.ID
+	events = events[:0]
+
+	cache.runReconciliation()
+
+	if backing.getCalls != 0 {
+		t.Fatalf("foreground Get calls = %d, want 0", backing.getCalls)
+	}
+	for _, e := range events {
+		if e == "bead.closed:"+uncertain.ID {
+			t.Fatalf("emitted bead.closed without runtime verification; events = %v", events)
+		}
+	}
+	stats := cache.Stats()
+	if stats.ReconcileCloseDeferrals != 1 {
+		t.Fatalf("ReconcileCloseDeferrals = %d, want 1", stats.ReconcileCloseDeferrals)
 	}
 }
 

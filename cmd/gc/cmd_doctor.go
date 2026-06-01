@@ -6,12 +6,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/beads/contract"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/doctor"
 	"github.com/gastownhall/gascity/internal/fsys"
+	orderstore "github.com/gastownhall/gascity/internal/orders"
 	"github.com/spf13/cobra"
 )
 
@@ -128,11 +130,14 @@ type buildDoctorChecksOpts struct {
 	SkipManagedDoltCheck bool
 }
 
+const doctorOrderLastRunReadTimeout = 2 * time.Second
+
 func buildDoctorChecks(cityPath string, cfg *config.City, cfgErr error, opts buildDoctorChecksOpts) []doctor.Check {
 	var checks []doctor.Check
 	register := func(c doctor.Check) {
 		checks = append(checks, c)
 	}
+	storeFactory := openStoreForCity(cityPath)
 
 	managedDoltDataDir := filepath.Join(cityPath, ".beads", "dolt")
 	if layout, err := resolveManagedDoltRuntimeLayout(cityPath); err == nil {
@@ -167,7 +172,7 @@ func buildDoctorChecks(cityPath string, cfg *config.City, cfgErr error, opts bui
 		register(doctor.NewProviderParityCheck(cfg))
 		register(doctor.NewInstructionsFileCheck(cfg, cityPath))
 		register(doctor.NewSkillCollisionCheck(cfg, cityPath))
-		register(doctor.NewOrderFiringCurrentCheck(cfg, cityPath))
+		register(newRuntimeOrderFiringCurrentCheck(cfg, cityPath, storeFactory))
 		register(newCodexHooksDriftCheck(codexHookWorkDirs(cityPath, cfg)))
 		register(doctor.NewRigPackCoverageCheck(cfg, cityPath))
 		register(newMCPConfigDoctorCheck(cityPath, cfg, exec.LookPath))
@@ -215,8 +220,6 @@ func buildDoctorChecks(cityPath string, cfg *config.City, cfgErr error, opts bui
 		register(doctor.NewZombieSessionsCheck(cfg, cityName, st, sp))
 		register(doctor.NewOrphanSessionsCheck(cfg, cityName, st, sp))
 	}
-
-	storeFactory := openStoreForCity(cityPath)
 
 	// Data checks.
 	if cfgErr == nil && cfg != nil {
@@ -303,6 +306,44 @@ func buildDoctorChecks(cityPath string, cfg *config.City, cfgErr error, opts bui
 	}
 
 	return checks
+}
+
+func newRuntimeOrderFiringCurrentCheck(cfg *config.City, cityPath string, storeFactory func(string) (beads.Store, error)) *doctor.OrderFiringCurrentCheck {
+	check := doctor.NewOrderFiringCurrentCheck(cfg, cityPath)
+	storesByPath := map[string]beads.Store{}
+	rigPaths := map[string]string{}
+	if cfg != nil {
+		for _, rig := range cfg.Rigs {
+			if strings.TrimSpace(rig.Name) == "" || strings.TrimSpace(rig.Path) == "" {
+				continue
+			}
+			rigPaths[rig.Name] = rig.Path
+		}
+	}
+	check.WithLastRunResolver(func(order orderstore.Order) (time.Time, error) {
+		if storeFactory == nil {
+			return time.Time{}, nil
+		}
+		storePath := cityPath
+		if order.Rig != "" {
+			path, ok := rigPaths[order.Rig]
+			if !ok {
+				return time.Time{}, fmt.Errorf("rig %q path unavailable", order.Rig)
+			}
+			storePath = path
+		}
+		store, ok := storesByPath[storePath]
+		if !ok {
+			var err error
+			store, err = storeFactory(storePath)
+			if err != nil {
+				return time.Time{}, err
+			}
+			storesByPath[storePath] = store
+		}
+		return orderstore.RuntimeLastRunFuncForStore(store, doctorOrderLastRunReadTimeout, "doctor.order-firing")(order.ScopedName())
+	})
+	return check
 }
 
 func doDoctor(fix, verbose, jsonOut bool, stdout, stderr io.Writer) int {

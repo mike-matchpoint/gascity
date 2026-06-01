@@ -2,6 +2,7 @@ package beads
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -48,6 +49,104 @@ type txPreservingBackingStore struct {
 	Store
 	txCalls     int
 	updateCalls int
+}
+
+type partialRuntimeCloseStore struct {
+	Store
+}
+
+type sparseRuntimeCreateStore struct {
+	*MemStore
+}
+
+func (s *sparseRuntimeCreateStore) RuntimeCreate(ctx context.Context, b Bead, policy WritePolicy) (Bead, error) {
+	created, err := s.MemStore.RuntimeCreate(ctx, b, policy)
+	if err != nil {
+		return Bead{}, err
+	}
+	return Bead{
+		ID:        created.ID,
+		Title:     created.Title,
+		Status:    created.Status,
+		Type:      created.Type,
+		CreatedAt: created.CreatedAt,
+	}, nil
+}
+
+func (s partialRuntimeCloseStore) RuntimeCreate(ctx context.Context, b Bead, policy WritePolicy) (Bead, error) {
+	return RuntimeCreate(ctx, s.Store, b, policy)
+}
+
+func (s partialRuntimeCloseStore) RuntimeUpdate(ctx context.Context, id string, opts UpdateOpts, policy WritePolicy) error {
+	return RuntimeUpdate(ctx, s.Store, id, opts, policy)
+}
+
+func (s partialRuntimeCloseStore) RuntimeCloseAll(_ context.Context, ids []string, metadata map[string]string, _ WritePolicy) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	if _, err := s.CloseAll(ids[:1], metadata); err != nil {
+		return 0, err
+	}
+	return 1, errors.New("second close failed")
+}
+
+func (s partialRuntimeCloseStore) RuntimePing(ctx context.Context, policy WritePolicy) error {
+	return RuntimePing(ctx, s.Store, policy)
+}
+
+func TestCachingStoreRuntimeCreateSeedsSparseCreateOutput(t *testing.T) {
+	backing := &sparseRuntimeCreateStore{MemStore: NewMemStore()}
+	cache := NewCachingStoreForTest(backing, nil)
+	if err := cache.Prime(context.Background()); err != nil {
+		t.Fatalf("Prime: %v", err)
+	}
+
+	policy := RuntimeWritePolicy(WriteClassReservation, "test.runtime-create", "order-1")
+	created, err := cache.RuntimeCreate(context.Background(), Bead{
+		ID:          "gc-order-1",
+		Title:       "order run",
+		Type:        "task",
+		Description: "dispatch",
+		Assignee:    "worker",
+		From:        "controller",
+		Labels:      []string{"order-run:nightly", "order-tracking"},
+		Metadata:    map[string]string{"gc.order.scoped": "nightly"},
+	}, policy)
+	if err != nil {
+		t.Fatalf("RuntimeCreate: %v", err)
+	}
+	if !hasString(created.Labels, "order-run:nightly") || created.Metadata["gc.order.scoped"] != "nightly" {
+		t.Fatalf("created bead lost seed labels/metadata: %#v", created)
+	}
+
+	got, err := cache.RuntimeGet(context.Background(), created.ID, RuntimeReadPolicy(ReadClassHotAuthoritative, "test.runtime-get"))
+	if err != nil {
+		t.Fatalf("RuntimeGet: %v", err)
+	}
+	if !hasString(got.Labels, "order-run:nightly") || !hasString(got.Labels, "order-tracking") {
+		t.Fatalf("RuntimeGet labels = %#v, want seeded order labels", got.Labels)
+	}
+	if got.Metadata["gc.order.scoped"] != "nightly" || got.Metadata["from"] != "controller" {
+		t.Fatalf("RuntimeGet metadata = %#v, want seeded order metadata and from", got.Metadata)
+	}
+
+	rows, err := cache.RuntimeList(context.Background(), ListQuery{Status: "open", AllowScan: true}, RuntimeReadPolicy(ReadClassHotAuthoritative, "test.runtime-list"))
+	if err != nil {
+		t.Fatalf("RuntimeList: %v", err)
+	}
+	if len(rows) != 1 || !hasString(rows[0].Labels, "order-run:nightly") {
+		t.Fatalf("RuntimeList rows = %#v, want cached row with seeded label", rows)
+	}
+}
+
+func hasString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *txPreservingBackingStore) Update(id string, opts UpdateOpts) error {
@@ -140,6 +239,207 @@ func assertTxPreservedBead(t *testing.T, got Bead) {
 	if !stringSliceContains(got.Labels, "keep-label") || !stringSliceContains(got.Labels, "new-label") || stringSliceContains(got.Labels, "drop-label") {
 		t.Fatalf("Labels = %#v, want keep-label and new-label without drop-label", got.Labels)
 	}
+}
+
+func TestCachingStoreRuntimeUpdateRefreshesHotGetCache(t *testing.T) {
+	t.Parallel()
+
+	backing := NewMemStore()
+	bead, err := backing.Create(Bead{
+		Title:    "worker",
+		Type:     "session",
+		Metadata: map[string]string{"state": "creating"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := NewCachingStoreForTest(backing, nil)
+	if err := cache.PrimeActive(); err != nil {
+		t.Fatalf("PrimeActive: %v", err)
+	}
+
+	policy := RuntimeWritePolicy(WriteClassHotState, "test.cache-runtime-update", "session:"+bead.ID)
+	if err := RuntimeUpdate(context.Background(), cache, bead.ID, UpdateOpts{
+		Metadata: map[string]string{"state": "active"},
+	}, policy); err != nil {
+		t.Fatalf("RuntimeUpdate: %v", err)
+	}
+
+	got, err := RuntimeGet(context.Background(), cache, bead.ID,
+		RuntimeReadPolicy(ReadClassHotAuthoritative, "test.cache-runtime-get"))
+	if err != nil {
+		t.Fatalf("RuntimeGet: %v", err)
+	}
+	if got.Metadata["state"] != "active" {
+		t.Fatalf("cached state = %q, want active", got.Metadata["state"])
+	}
+}
+
+func TestCachingStoreRuntimeCloseAllDoesNotMarkUnconfirmedPartialFailuresClosed(t *testing.T) {
+	t.Parallel()
+
+	backing := partialRuntimeCloseStore{Store: NewMemStore()}
+	first, err := backing.Create(Bead{Title: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := backing.Create(Bead{Title: "second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := NewCachingStoreForTest(backing, nil)
+	if err := cache.PrimeActive(); err != nil {
+		t.Fatalf("PrimeActive: %v", err)
+	}
+
+	n, err := RuntimeCloseAll(context.Background(), cache, []string{first.ID, second.ID}, map[string]string{"close_reason": "partial close test"},
+		RuntimeWritePolicy(WriteClassHotState, "test.cache-runtime-close-partial", "partial-close"))
+	if n != 1 {
+		t.Fatalf("RuntimeCloseAll closed = %d, want 1", n)
+	}
+	if err == nil {
+		t.Fatal("RuntimeCloseAll err = nil, want partial failure")
+	}
+
+	gotFirst, err := RuntimeGet(context.Background(), cache, first.ID, RuntimeReadPolicy(ReadClassHotAuthoritative, "test.partial-first"))
+	if err != nil {
+		t.Fatalf("first RuntimeGet: %v", err)
+	}
+	if gotFirst.Status != "closed" {
+		t.Fatalf("first status = %q, want closed after confirmed close", gotFirst.Status)
+	}
+	if _, err := RuntimeGet(context.Background(), cache, second.ID, RuntimeReadPolicy(ReadClassHotAuthoritative, "test.partial-second")); !IsDegradedRead(err) {
+		t.Fatalf("second RuntimeGet err = %v, want degraded dirty cache instead of hidden close", err)
+	}
+}
+
+func TestCachingStoreRuntimeCloseAllUncachedConfirmedCloseRemainsVisible(t *testing.T) {
+	t.Parallel()
+
+	backing := NewMemStore()
+	cache := NewCachingStoreForTest(backing, nil)
+	if err := cache.PrimeActive(); err != nil {
+		t.Fatalf("PrimeActive: %v", err)
+	}
+	bead, err := backing.Create(Bead{Title: "created outside cache"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	n, err := RuntimeCloseAll(context.Background(), cache, []string{bead.ID}, map[string]string{"close_reason": "uncached close test"},
+		RuntimeWritePolicy(WriteClassHotState, "test.cache-runtime-close-uncached", "uncached-close"))
+	if err != nil {
+		t.Fatalf("RuntimeCloseAll: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("RuntimeCloseAll closed = %d, want 1", n)
+	}
+
+	if _, err := RuntimeGet(context.Background(), cache, bead.ID,
+		RuntimeReadPolicy(ReadClassHotAuthoritative, "test.uncached-close-runtime-get")); !IsDegradedRead(err) {
+		t.Fatalf("RuntimeGet err = %v, want degraded dirty cache instead of hidden tombstone", err)
+	}
+	got, err := cache.Get(bead.ID)
+	if err != nil {
+		t.Fatalf("Get closed bead after runtime close: %v", err)
+	}
+	if got.Status != "closed" {
+		t.Fatalf("status = %q, want closed", got.Status)
+	}
+	gotRuntime, err := RuntimeGet(context.Background(), cache, bead.ID,
+		RuntimeReadPolicy(ReadClassHotAuthoritative, "test.uncached-close-runtime-get-after-hydrate"))
+	if err != nil {
+		t.Fatalf("RuntimeGet after hydrate: %v", err)
+	}
+	if gotRuntime.Status != "closed" {
+		t.Fatalf("runtime status after hydrate = %q, want closed", gotRuntime.Status)
+	}
+}
+
+func TestCachingStoreRuntimeUpdateDoesNotShortCircuitDirtyCachedMatch(t *testing.T) {
+	t.Parallel()
+
+	backing := &runtimeWriteCountingStore{Store: NewMemStore()}
+	bead, err := backing.Create(Bead{
+		Title:    "dirty no-op update",
+		Status:   "in_progress",
+		Metadata: map[string]string{"state": "active"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := NewCachingStoreForTest(backing, nil)
+	if err := cache.PrimeActive(); err != nil {
+		t.Fatalf("PrimeActive: %v", err)
+	}
+	markCacheDirtyForTest(cache, bead.ID)
+
+	if err := RuntimeUpdate(context.Background(), cache, bead.ID, UpdateOpts{
+		Metadata: map[string]string{"state": "active"},
+	}, RuntimeWritePolicy(WriteClassHotState, "test.dirty-update", "dirty-update")); err != nil {
+		t.Fatalf("RuntimeUpdate: %v", err)
+	}
+	if backing.runtimeUpdateCalls != 1 {
+		t.Fatalf("runtime update calls = %d, want dirty cached match to write through", backing.runtimeUpdateCalls)
+	}
+}
+
+func TestCachingStoreRuntimeCloseAllDoesNotShortCircuitDirtyCachedClosed(t *testing.T) {
+	t.Parallel()
+
+	backing := &runtimeWriteCountingStore{Store: NewMemStore()}
+	bead, err := backing.Create(Bead{
+		Title:  "dirty no-op close",
+		Status: "closed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := NewCachingStoreForTest(backing, nil)
+	if err := cache.Prime(context.Background()); err != nil {
+		t.Fatalf("Prime: %v", err)
+	}
+	markCacheDirtyForTest(cache, bead.ID)
+
+	if _, err := RuntimeCloseAll(context.Background(), cache, []string{bead.ID}, nil,
+		RuntimeWritePolicy(WriteClassHotState, "test.dirty-close", "dirty-close")); err != nil {
+		t.Fatalf("RuntimeCloseAll: %v", err)
+	}
+	if backing.runtimeCloseAllCalls != 1 {
+		t.Fatalf("runtime close-all calls = %d, want dirty cached close to write through", backing.runtimeCloseAllCalls)
+	}
+}
+
+func TestCachingStoreSetMetadataDoesNotShortCircuitDirtyCachedMatch(t *testing.T) {
+	t.Parallel()
+
+	backing := &countingBackingStore{Store: NewMemStore()}
+	bead, err := backing.Create(Bead{
+		Title:    "dirty metadata",
+		Metadata: map[string]string{"state": "active"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := NewCachingStoreForTest(backing, nil)
+	if err := cache.Prime(context.Background()); err != nil {
+		t.Fatalf("Prime: %v", err)
+	}
+	markCacheDirtyForTest(cache, bead.ID)
+	backing.setMetadataCalls = 0
+
+	if err := cache.SetMetadata(bead.ID, "state", "active"); err != nil {
+		t.Fatalf("SetMetadata: %v", err)
+	}
+	if backing.setMetadataCalls != 1 {
+		t.Fatalf("SetMetadata calls = %d, want dirty cached match to write through", backing.setMetadataCalls)
+	}
+}
+
+func markCacheDirtyForTest(cache *CachingStore, id string) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	cache.dirty[id] = struct{}{}
 }
 
 func stringSliceContains(values []string, want string) bool {

@@ -119,6 +119,14 @@ func WithHQStoreIDPrefix(prefix string) HQStoreOption {
 	}
 }
 
+// IDPrefix returns the bead ID prefix owned by this HQ store, without trailing "-".
+func (s *HQStore) IDPrefix() string {
+	if s == nil {
+		return ""
+	}
+	return normalizeIDPrefix(s.prefix)
+}
+
 // WithHQStoreClosedTaskRetention sets how long closed main-tier beads remain
 // queryable before the TTL sweeper can delete them. A non-positive duration
 // disables closed-task retention sweeping.

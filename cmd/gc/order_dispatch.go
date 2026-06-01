@@ -299,12 +299,13 @@ type memoryOrderDispatcher struct {
 }
 
 type orderDispatchCandidate struct {
-	order         orders.Order
-	target        execStoreTarget
-	store         beads.Store
-	storeKey      string
-	gateStores    []beads.Store
-	gateStoreKeys []string
+	order               orders.Order
+	target              execStoreTarget
+	store               beads.Store
+	storeKey            string
+	reservationStoreKey string
+	gateStores          []beads.Store
+	gateStoreKeys       []string
 }
 
 type orderDispatchSnapshotInput struct {
@@ -313,6 +314,7 @@ type orderDispatchSnapshotInput struct {
 	orders       map[string]struct{}
 	needsLastRun map[string]bool
 	needsCursor  map[string]bool
+	eventLastRun map[string]time.Time
 }
 
 type orderDispatchSnapshots struct {
@@ -320,12 +322,13 @@ type orderDispatchSnapshots struct {
 }
 
 type orderDispatchStoreSnapshot struct {
-	storeKey       string
-	capturedAt     time.Time
-	lastRunByOrder map[string]time.Time
-	cursorByOrder  map[string]uint64
-	openByOrder    map[string]bool
-	degraded       map[string][]error
+	storeKey              string
+	capturedAt            time.Time
+	lastRunByOrder        map[string]time.Time
+	durableLastRunByOrder map[string]time.Time
+	cursorByOrder         map[string]uint64
+	openByOrder           map[string]bool
+	degraded              map[string][]error
 }
 
 type orderDispatchTickStats struct {
@@ -524,6 +527,7 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 					orders:       make(map[string]struct{}),
 					needsLastRun: make(map[string]bool),
 					needsCursor:  make(map[string]bool),
+					eventLastRun: make(map[string]time.Time),
 				}
 				snapshotInputs[key] = input
 			}
@@ -539,12 +543,13 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 			}
 		}
 		candidates = append(candidates, orderDispatchCandidate{
-			order:         a,
-			target:        target,
-			store:         store,
-			storeKey:      storeKey,
-			gateStores:    storesForGate,
-			gateStoreKeys: storeKeysForGate,
+			order:               a,
+			target:              target,
+			store:               store,
+			storeKey:            storeKey,
+			reservationStoreKey: orderRuntimeStoreKeyForTarget(target),
+			gateStores:          storesForGate,
+			gateStoreKeys:       storeKeysForGate,
 		})
 	}
 
@@ -552,6 +557,7 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 		return
 	}
 
+	m.populateOrderDispatchEventLastRuns(snapshotInputs)
 	snapshotCtx, cancel := context.WithTimeout(ctx, orderDispatchSnapshotBudget)
 	snapshots := buildOrderDispatchSnapshots(snapshotCtx, snapshotInputs, now)
 	cancel()
@@ -592,7 +598,7 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 			redacted := redactOrderEnvError(err, os.Environ())
 			msg := fmt.Sprintf("building trigger env: %s", redacted)
 			logDispatchError(m.stderr, "gc: order dispatch: building trigger env for %s: %s", a.ScopedName(), redacted)
-			run, reservedAt, ok := m.reserveOrderForDispatch(ctx, candidate.store, candidate.storeKey, candidate.target.Prefix, a, now, 0, append(orderTrackingLabels(scoped), labelTriggerEnvFailed), stats)
+			run, reservedAt, ok := m.reserveOrderForDispatch(ctx, candidate.store, candidate.reservationStoreKey, candidate.target.Prefix, a, now, 0, append(orderTrackingLabels(scoped), labelTriggerEnvFailed), stats)
 			if !ok {
 				continue
 			}
@@ -640,7 +646,7 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 			m.recordOrderDispatchDeferred(scoped, fmt.Errorf("event cursor head: %w", err), stats)
 			continue
 		}
-		run, reservedAt, ok := m.reserveOrderForDispatch(ctx, candidate.store, candidate.storeKey, candidate.target.Prefix, a, now, eventSeq, orderTrackingLabels(scoped), stats)
+		run, reservedAt, ok := m.reserveOrderForDispatch(ctx, candidate.store, candidate.reservationStoreKey, candidate.target.Prefix, a, now, eventSeq, orderTrackingLabels(scoped), stats)
 		if !ok {
 			continue
 		}
@@ -665,9 +671,6 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 	}
 }
 
-// effectiveCreateCap returns the per-tick tracking-bead create cap. The cap is
-// steady-state backpressure: live Dolt can absorb one order write chain per tick
-// reliably, while round-robin rotation keeps due orders from starving.
 func (m *memoryOrderDispatcher) effectiveCreateCap(_ time.Time) int {
 	if orderDispatchMaxCreatesPerTick <= 0 {
 		return 0
@@ -741,14 +744,16 @@ func (m *memoryOrderDispatcher) reserveOrderForDispatch(ctx context.Context, sto
 		Title:  "order:" + scoped,
 		Labels: labels,
 		Metadata: map[string]string{
-			"gc.order.runtime_write_isolation": orderRuntimeLeaseVersion,
-			"gc.order.scoped":                  scoped,
-			"gc.order.trigger_kind":            a.Trigger,
-			"gc.order.trigger_fingerprint":     reservation.Fingerprint,
-			"gc.order.reservation_input":       orderRuntimeReservationMetadataInput(reservation.Input),
-			"gc.order.reservation_hash":        reservation.Hash,
-			"gc.order.lease_id":                reservation.Lease.LeaseID,
-			"gc.idempotency_key":               reservation.Hash,
+			"gc.order.runtime_write_isolation":  orderRuntimeLeaseVersion,
+			"gc.order.scoped":                   scoped,
+			"gc.order.store_key":                storeKey,
+			"gc.order.trigger_kind":             a.Trigger,
+			"gc.order.trigger_fingerprint":      reservation.Fingerprint,
+			"gc.order.reservation_input":        orderRuntimeReservationMetadataInput(reservation.Input),
+			"gc.order.reservation_input_format": "base64url-raw-v2",
+			"gc.order.reservation_hash":         reservation.Hash,
+			"gc.order.lease_id":                 reservation.Lease.LeaseID,
+			"gc.idempotency_key":                reservation.Hash,
 		},
 	}
 	policy := orderDispatchTrackingWritePolicy(beads.WriteClassReservation, "order.dispatch.tracking-reservation", reservation.Hash)
@@ -786,7 +791,9 @@ func orderTrackingReservationNotStarted(err error) bool {
 
 func orderDispatchTrackingWritePolicy(class beads.WriteClass, caller, idempotencyKey string) beads.WritePolicy {
 	policy := beads.RuntimeWritePolicy(class, caller, idempotencyKey)
-	policy.Timeout = orderDispatchTrackingWriteBudget
+	if class != beads.WriteClassPostActionCritical && policy.Timeout > orderDispatchTrackingWriteBudget {
+		policy.Timeout = orderDispatchTrackingWriteBudget
+	}
 	return policy
 }
 
@@ -857,19 +864,24 @@ func buildOrderDispatchSnapshots(ctx context.Context, inputs map[string]*orderDi
 
 func buildOrderDispatchStoreSnapshot(ctx context.Context, input *orderDispatchSnapshotInput, now time.Time) *orderDispatchStoreSnapshot {
 	snapshot := &orderDispatchStoreSnapshot{
-		storeKey:       input.storeKey,
-		capturedAt:     now,
-		lastRunByOrder: make(map[string]time.Time),
-		cursorByOrder:  make(map[string]uint64),
-		openByOrder:    make(map[string]bool),
-		degraded:       make(map[string][]error),
+		storeKey:              input.storeKey,
+		capturedAt:            now,
+		lastRunByOrder:        make(map[string]time.Time),
+		durableLastRunByOrder: make(map[string]time.Time),
+		cursorByOrder:         make(map[string]uint64),
+		openByOrder:           make(map[string]bool),
+		degraded:              make(map[string][]error),
 	}
 	names := make([]string, 0, len(input.orders))
 	for name := range input.orders {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	snapshot.captureOpenTracking(ctx, input.store, names)
+	for _, name := range names {
+		if last := input.eventLastRun[name]; last.After(snapshot.lastRunByOrder[name]) {
+			snapshot.lastRunByOrder[name] = last
+		}
+	}
 	for _, name := range names {
 		if err := ctx.Err(); err != nil {
 			snapshot.addDegradation(name, "snapshot deadline", err)
@@ -880,44 +892,89 @@ func buildOrderDispatchStoreSnapshot(ctx context.Context, input *orderDispatchSn
 	return snapshot
 }
 
-func (s *orderDispatchStoreSnapshot) captureOpenTracking(ctx context.Context, store beads.Store, names []string) {
-	if len(names) == 0 {
+func (m *memoryOrderDispatcher) populateOrderDispatchEventLastRuns(inputs map[string]*orderDispatchSnapshotInput) {
+	if m == nil || m.ep == nil || len(inputs) == 0 {
 		return
 	}
-	tracking, err := orderDispatchRuntimeList(ctx, store, beads.ListQuery{
-		Label: labelOrderTracking,
-		Limit: orderDispatchOpenReadLimit,
-	}, "order.dispatch.open-tracking")
+	needed := map[string]struct{}{}
+	for _, input := range inputs {
+		if input == nil {
+			continue
+		}
+		for name := range input.needsLastRun {
+			needed[name] = struct{}{}
+		}
+	}
+	if len(needed) == 0 {
+		return
+	}
+	evts, err := orderDispatchRecentOrderFiredEvents(m.ep)
 	if err != nil {
-		for _, name := range names {
-			s.addDegradation(name, "open order-tracking", err)
-		}
 		return
 	}
-	if len(tracking) >= orderDispatchOpenReadLimit {
-		err := fmt.Errorf("open order-tracking read hit cap %d", orderDispatchOpenReadLimit)
-		for _, name := range names {
-			s.addDegradation(name, "open order-tracking", err)
+	lastByOrder := map[string]time.Time{}
+	for _, evt := range evts {
+		if evt.Type != events.OrderFired {
+			continue
+		}
+		if _, ok := needed[evt.Subject]; !ok {
+			continue
+		}
+		if evt.Ts.After(lastByOrder[evt.Subject]) {
+			lastByOrder[evt.Subject] = evt.Ts
 		}
 	}
-	known := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		known[name] = struct{}{}
+	if len(lastByOrder) == 0 {
+		return
 	}
-	for _, b := range tracking {
-		if b.Status == "closed" {
+	for _, input := range inputs {
+		if input == nil {
 			continue
 		}
-		if b.Metadata["gc.order.runtime_write_isolation"] == orderRuntimeLeaseVersion && !beadLabelsContain(b.Labels, labelTriggerEnvFailed) {
-			continue
+		if input.eventLastRun == nil {
+			input.eventLastRun = make(map[string]time.Time)
 		}
-		name, ok := orderNameFromTrackingBead(b)
-		if !ok {
-			continue
+		for name := range input.needsLastRun {
+			if last := lastByOrder[name]; last.After(input.eventLastRun[name]) {
+				input.eventLastRun[name] = last
+			}
 		}
-		if _, ok := known[name]; ok {
-			s.openByOrder[name] = true
-		}
+	}
+}
+
+func orderDispatchRecentOrderFiredEvents(ep events.Provider) ([]events.Event, error) {
+	if ep == nil {
+		return nil, nil
+	}
+	const orderDispatchEventLastRunTailLimit = 5000
+	if tail, ok := ep.(events.TailProvider); ok {
+		return tail.ListTail(events.Filter{Type: events.OrderFired}, orderDispatchEventLastRunTailLimit)
+	}
+	return ep.List(events.Filter{Type: events.OrderFired})
+}
+
+func (s *orderDispatchStoreSnapshot) captureOpenWorkRow(ctx context.Context, store beads.Store, scopedName string, b beads.Bead) {
+	if b.Metadata["gc.order.runtime_write_isolation"] == orderRuntimeLeaseVersion && !beadLabelsContain(b.Labels, labelTriggerEnvFailed) {
+		return
+	}
+	if beadLabelsContain(b.Labels, labelOrderTracking) {
+		s.openByOrder[scopedName] = true
+		return
+	}
+	if !isOrderWispRootCandidate(b) {
+		return
+	}
+	if isOrderRootOnlyWispCandidate(b) {
+		s.openByOrder[scopedName] = true
+		return
+	}
+	hasOpen, err := orderDispatchHasOpenDescendants(ctx, store, b.ID)
+	if err != nil {
+		s.addDegradation(scopedName, "order wisp descendants", err)
+		return
+	}
+	if hasOpen {
+		s.openByOrder[scopedName] = true
 	}
 }
 
@@ -925,50 +982,7 @@ func (s *orderDispatchStoreSnapshot) captureOrder(ctx context.Context, store bea
 	if s.openByOrder[scopedName] {
 		return
 	}
-
-	openWork, err := orderDispatchRuntimeList(ctx, store, beads.ListQuery{
-		Label:    orderRunLabel(scopedName),
-		Limit:    orderDispatchOpenReadLimit,
-		Sort:     beads.SortCreatedDesc,
-		TierMode: beads.TierBoth,
-	}, "order.dispatch.open-work")
-	if err != nil {
-		s.addDegradation(scopedName, "checking open work", err)
-		return
-	}
-	if len(openWork) >= orderDispatchOpenReadLimit {
-		s.addDegradation(scopedName, "checking open work", fmt.Errorf("open work read hit cap %d", orderDispatchOpenReadLimit))
-	}
-	for _, b := range openWork {
-		if needsLastRun && b.CreatedAt.After(s.lastRunByOrder[scopedName]) {
-			s.lastRunByOrder[scopedName] = b.CreatedAt
-		}
-		if b.Metadata["gc.order.runtime_write_isolation"] == orderRuntimeLeaseVersion && !beadLabelsContain(b.Labels, labelTriggerEnvFailed) {
-			continue
-		}
-		if b.Status == "closed" {
-			continue
-		}
-		if beadLabelsContain(b.Labels, labelOrderTracking) {
-			s.openByOrder[scopedName] = true
-			continue
-		}
-		if !isOrderWispRootCandidate(b) {
-			continue
-		}
-		if isOrderRootOnlyWispCandidate(b) {
-			s.openByOrder[scopedName] = true
-			continue
-		}
-		hasOpen, descErr := orderDispatchHasOpenDescendants(ctx, store, b.ID)
-		if descErr != nil {
-			s.addDegradation(scopedName, "order wisp descendants", descErr)
-			return
-		}
-		if hasOpen {
-			s.openByOrder[scopedName] = true
-		}
-	}
+	s.captureOpenOrderWork(ctx, store, scopedName, needsLastRun)
 	if s.openByOrder[scopedName] {
 		return
 	}
@@ -988,6 +1002,12 @@ func (s *orderDispatchStoreSnapshot) captureOrder(ctx context.Context, store bea
 		for _, b := range history {
 			if b.CreatedAt.After(s.lastRunByOrder[scopedName]) {
 				s.lastRunByOrder[scopedName] = b.CreatedAt
+			}
+			if b.CreatedAt.After(s.durableLastRunByOrder[scopedName]) {
+				s.durableLastRunByOrder[scopedName] = b.CreatedAt
+			}
+			if b.Status != "closed" {
+				s.captureOpenWorkRow(ctx, store, scopedName, b)
 			}
 		}
 	}
@@ -1014,6 +1034,34 @@ func (s *orderDispatchStoreSnapshot) captureOrder(ctx context.Context, store bea
 		labelSets = append(labelSets, b.Labels)
 	}
 	s.cursorByOrder[scopedName] = orders.MaxSeqFromLabels(labelSets)
+}
+
+func (s *orderDispatchStoreSnapshot) captureOpenOrderWork(ctx context.Context, store beads.Store, scopedName string, needsLastRun bool) {
+	openWork, err := orderDispatchRuntimeList(ctx, store, beads.ListQuery{
+		Label:    orderRunLabel(scopedName),
+		Limit:    orderDispatchOpenReadLimit,
+		Sort:     beads.SortCreatedDesc,
+		TierMode: beads.TierBoth,
+	}, "order.dispatch.open-work")
+	if err != nil {
+		s.addDegradation(scopedName, "checking open work", err)
+		return
+	}
+	if len(openWork) >= orderDispatchOpenReadLimit {
+		s.addDegradation(scopedName, "checking open work", fmt.Errorf("open work read hit cap %d", orderDispatchOpenReadLimit))
+	}
+	for _, b := range openWork {
+		if needsLastRun && b.CreatedAt.After(s.lastRunByOrder[scopedName]) {
+			s.lastRunByOrder[scopedName] = b.CreatedAt
+		}
+		if b.CreatedAt.After(s.durableLastRunByOrder[scopedName]) {
+			s.durableLastRunByOrder[scopedName] = b.CreatedAt
+		}
+		if b.Status == "closed" {
+			continue
+		}
+		s.captureOpenWorkRow(ctx, store, scopedName, b)
+	}
 }
 
 func orderDispatchHasOpenDescendants(ctx context.Context, store beads.Store, parentID string) (bool, error) {
@@ -1423,9 +1471,10 @@ func (m *memoryOrderDispatcher) closeOrderTrackingRuntime(ctx context.Context, s
 	if !run.TrackingReserved || run.TrackingID == "" {
 		return nil
 	}
-	_, err := beads.RuntimeCloseAll(ctx, store, []string{run.TrackingID}, map[string]string{
+	writeCtx := orderDispatchPostActionWriteContext(ctx)
+	_, err := beads.RuntimeCloseAll(writeCtx, store, []string{run.TrackingID}, map[string]string{
 		"close_reason": completedOrderTrackingCloseReason,
-	}, orderDispatchTrackingWritePolicy(beads.WriteClassAuditRepair, "order.dispatch.tracking-close", run.TrackingID))
+	}, orderDispatchTrackingWritePolicy(beads.WriteClassPostActionCritical, "order.dispatch.tracking-close", run.TrackingID))
 	return err
 }
 
@@ -1510,7 +1559,7 @@ func closeAndVerifyOrderTrackingBeads(ctx context.Context, store beads.Store, id
 	closed := 0
 	var lastErr error
 	for attempt := 1; attempt <= orderTrackingCloseVerifyAttempts; attempt++ {
-		n, err := store.CloseAll(ids, metadata)
+		n, err := runtimeCloseOrderTrackingBeads(ctx, store, ids, metadata)
 		closed += n
 		if closed > len(ids) {
 			closed = len(ids)
@@ -1524,7 +1573,7 @@ func closeAndVerifyOrderTrackingBeads(ctx context.Context, store beads.Store, id
 			}
 			continue
 		}
-		openIDs, err := openOrderTrackingIDs(store, ids)
+		openIDs, err := openOrderTrackingIDs(ctx, store, ids)
 		if err != nil {
 			lastErr = fmt.Errorf("verifying order-tracking close for %s: %w", strings.Join(ids, ", "), err)
 			if attempt < orderTrackingCloseVerifyAttempts {
@@ -1545,6 +1594,14 @@ func closeAndVerifyOrderTrackingBeads(ctx context.Context, store beads.Store, id
 		}
 	}
 	return closed, lastErr
+}
+
+func runtimeCloseOrderTrackingBeads(ctx context.Context, store beads.Store, ids []string, metadata map[string]string) (int, error) {
+	if _, ok := store.(beads.RuntimeWriter); !ok {
+		return store.CloseAll(ids, metadata)
+	}
+	policy := beads.RuntimeWritePolicy(beads.WriteClassMaintenance, "order.tracking.sweep-close", "order-tracking-close:"+strings.Join(ids, ","))
+	return beads.RuntimeCloseAll(ctx, store, ids, metadata, policy)
 }
 
 func waitOrderTrackingCloseRetry(ctx context.Context) error {
@@ -1575,10 +1632,10 @@ func uniqueNonEmptyOrderTrackingIDs(ids []string) []string {
 	return out
 }
 
-func openOrderTrackingIDs(store beads.Store, ids []string) ([]string, error) {
+func openOrderTrackingIDs(ctx context.Context, store beads.Store, ids []string) ([]string, error) {
 	var openIDs []string
 	for _, id := range ids {
-		b, err := store.Get(id)
+		b, err := runtimeGetOrderTrackingBead(ctx, store, id)
 		if errors.Is(err, beads.ErrNotFound) {
 			continue
 		}
@@ -1590,6 +1647,16 @@ func openOrderTrackingIDs(store beads.Store, ids []string) ([]string, error) {
 		}
 	}
 	return openIDs, nil
+}
+
+func runtimeGetOrderTrackingBead(ctx context.Context, store beads.Store, id string) (beads.Bead, error) {
+	if runtimeStore, ok := store.(interface {
+		RuntimeGet(context.Context, string, beads.ReadPolicy) (beads.Bead, error)
+	}); ok {
+		policy := beads.RuntimeReadPolicy(beads.ReadClassHotAuthoritative, "order.tracking.close-verify")
+		return runtimeStore.RuntimeGet(ctx, id, policy)
+	}
+	return store.Get(id)
 }
 
 // dispatchExec runs an exec order's shell command.
@@ -1628,7 +1695,7 @@ func (m *memoryOrderDispatcher) dispatchExec(ctx context.Context, store beads.St
 	// cursor labels were already persisted before the command ran.
 	if run.TrackingReserved {
 		writeCtx := orderDispatchPostActionWriteContext(ctx)
-		if err := m.runtimeTrackingUpdate(writeCtx, store, run.TrackingID, beads.UpdateOpts{Labels: labels}, beads.WriteClassAuditRepair, "order.dispatch.exec-outcome", run.TrackingID); err != nil {
+		if err := m.runtimeTrackingUpdate(writeCtx, store, run.TrackingID, beads.UpdateOpts{Labels: labels}, beads.WriteClassPostActionCritical, "order.dispatch.exec-outcome", run.TrackingID); err != nil {
 			logDispatchError(m.stderr, "gc: order %s: failed to label exec tracking bead %s: %v", scoped, run.TrackingID, err)
 			m.recordOrderTrackingDegraded(scoped, run.TrackingID, "exec-outcome", err, nil)
 		}
@@ -1672,7 +1739,7 @@ func (m *memoryOrderDispatcher) dispatchWisp(ctx context.Context, store beads.St
 		})
 		if run.TrackingReserved {
 			writeCtx := orderDispatchPostActionWriteContext(ctx)
-			_ = m.runtimeTrackingUpdate(writeCtx, store, run.TrackingID, beads.UpdateOpts{Labels: []string{"wisp", "wisp-canceled"}}, beads.WriteClassAuditRepair, "order.dispatch.wisp-canceled", run.TrackingID)
+			_ = m.runtimeTrackingUpdate(writeCtx, store, run.TrackingID, beads.UpdateOpts{Labels: []string{"wisp", "wisp-canceled"}}, beads.WriteClassPostActionCritical, "order.dispatch.wisp-canceled", run.TrackingID)
 		}
 		return
 	}
@@ -1784,7 +1851,7 @@ func (m *memoryOrderDispatcher) dispatchWisp(ctx context.Context, store beads.St
 
 	// Label tracking bead with outcome.
 	if run.TrackingReserved {
-		if err := m.runtimeTrackingUpdate(writeCtx, store, run.TrackingID, beads.UpdateOpts{Labels: []string{"wisp"}}, beads.WriteClassAuditRepair, "order.dispatch.wisp-outcome", run.TrackingID); err != nil {
+		if err := m.runtimeTrackingUpdate(writeCtx, store, run.TrackingID, beads.UpdateOpts{Labels: []string{"wisp"}}, beads.WriteClassPostActionCritical, "order.dispatch.wisp-outcome", run.TrackingID); err != nil {
 			m.recordOrderTrackingDegraded(scoped, run.TrackingID, "wisp-outcome", err, nil)
 		}
 	}
@@ -1818,7 +1885,7 @@ func (m *memoryOrderDispatcher) markTrackingFailure(ctx context.Context, store b
 		labels = append(labels, eventCursorLabels(scoped, run.EventSeq)...)
 	}
 	writeCtx := orderDispatchPostActionWriteContext(ctx)
-	if err := m.runtimeTrackingUpdate(writeCtx, store, run.TrackingID, beads.UpdateOpts{Labels: labels}, beads.WriteClassAuditRepair, "order.dispatch.mark-failed", run.TrackingID); err != nil {
+	if err := m.runtimeTrackingUpdate(writeCtx, store, run.TrackingID, beads.UpdateOpts{Labels: labels}, beads.WriteClassPostActionCritical, "order.dispatch.mark-failed", run.TrackingID); err != nil {
 		logDispatchError(m.stderr, "gc: order %s: failed to mark tracking bead %s as failed: %v", scoped, run.TrackingID, err)
 		m.recordOrderTrackingDegraded(scoped, run.TrackingID, "mark-failed", err, nil)
 	}

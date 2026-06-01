@@ -1,9 +1,12 @@
 package beads
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"syscall"
+	"time"
 )
 
 // Locker abstracts file-level locking for cross-process synchronization.
@@ -39,6 +42,35 @@ func (fl *FileFlock) Lock() error {
 	}
 	fl.f = f
 	return nil
+}
+
+// LockContext acquires an exclusive flock, polling so runtime callers can
+// honor their context deadline instead of blocking indefinitely in flock(2).
+func (fl *FileFlock) LockContext(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	f, err := os.OpenFile(fl.path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return fmt.Errorf("flock open: %w", err)
+	}
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
+			fl.f = f
+			return nil
+		} else if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+			_ = f.Close()
+			return fmt.Errorf("flock lock: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			_ = f.Close()
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 // Unlock releases the flock and closes the lock file.

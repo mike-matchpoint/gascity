@@ -22,11 +22,11 @@ func TestRuntimeWritePolicyDefaults(t *testing.T) {
 		class WriteClass
 		want  time.Duration
 	}{
-		{WriteClassReservation, time.Second},
-		{WriteClassCursorReservation, time.Second},
-		{WriteClassPostActionCritical, 2 * time.Second},
-		{WriteClassAuditRepair, time.Second},
-		{WriteClassHotState, 5 * time.Second},
+		{WriteClassReservation, 10 * time.Second},
+		{WriteClassCursorReservation, 10 * time.Second},
+		{WriteClassPostActionCritical, 30 * time.Second},
+		{WriteClassAuditRepair, 10 * time.Second},
+		{WriteClassHotState, 10 * time.Second},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.class), func(t *testing.T) {
@@ -588,30 +588,23 @@ func TestBdStoreRuntimeUpdateRetriesTransientWriteError(t *testing.T) {
 	}
 }
 
-func TestBdStoreRuntimeGetNotFoundTraceIsNonDegraded(t *testing.T) {
-	tracePath := filepath.Join(t.TempDir(), "bd.trace")
-	t.Setenv("GC_BD_TRACE", tracePath)
-	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(_ context.Context, _ string, _ string, args ...string) ([]byte, error) {
-		if strings.Join(args, " ") != "show --json gc-missing" {
-			t.Fatalf("args = %v, want show --json gc-missing", args)
-		}
-		return nil, fmt.Errorf("exit status 1: Error fetching gc-missing: no issue found matching %q", "gc-missing")
-	})
+func TestBdStoreRuntimeGetIndexedNotFoundIsNonDegraded(t *testing.T) {
+	var runnerCalls atomic.Int64
+	indexed := &runtimeReadIndexedGetStub{getErr: ErrNotFound}
+	store := NewBdStore(t.TempDir(), func(string, string, ...string) ([]byte, error) {
+		runnerCalls.Add(1)
+		return nil, errors.New("runner must not be called")
+	}).WithIndexedReader(indexed)
 	policy := RuntimeReadPolicy(ReadClassHotAuthoritative, "test.runtime-get-missing")
 	_, err := store.RuntimeGet(context.Background(), "gc-missing", policy)
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("RuntimeGet err = %v, want ErrNotFound", err)
 	}
-	traceBytes, err := os.ReadFile(tracePath)
-	if err != nil {
-		t.Fatalf("read trace: %v", err)
+	if indexed.getCalls.Load() != 1 || indexed.getID != "gc-missing" {
+		t.Fatalf("indexed get calls=%d id=%q, want 1/gc-missing", indexed.getCalls.Load(), indexed.getID)
 	}
-	trace := string(traceBytes)
-	if !strings.Contains(trace, "outcome=not-found") {
-		t.Fatalf("trace missing not-found outcome:\n%s", trace)
-	}
-	if strings.Contains(trace, "outcome=failed") || strings.Contains(trace, "outcome=ambiguous-timeout") {
-		t.Fatalf("trace recorded expected not-found as degraded:\n%s", trace)
+	if runnerCalls.Load() != 0 {
+		t.Fatalf("runner calls = %d, want 0", runnerCalls.Load())
 	}
 }
 
@@ -891,19 +884,23 @@ func TestBdStoreRuntimeUpdateMergesQueuedSessionHotState(t *testing.T) {
 
 func TestBdStoreRuntimeCreateDuplicateMatchingReservationSucceeds(t *testing.T) {
 	var createCalls atomic.Int64
-	var showCalls atomic.Int64
 	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(_ context.Context, _ string, _ string, args ...string) ([]byte, error) {
 		switch args[0] {
 		case "create":
 			createCalls.Add(1)
 			return nil, errors.New("duplicate id already exists")
-		case "show":
-			showCalls.Add(1)
-			return []byte(`[{"id":"gc-order-fixed","title":"fixed","metadata":{"gc.order.reservation_hash":"hash-1"}}]`), nil
 		default:
 			t.Fatalf("unexpected bd args: %v", args)
 			return nil, nil
 		}
+	}).WithIndexedReader(&runtimeReadIndexedGetStub{
+		getResult: Bead{
+			ID:    "gc-order-fixed",
+			Title: "fixed",
+			Metadata: map[string]string{
+				"gc.order.reservation_hash": "hash-1",
+			},
+		},
 	})
 	policy := RuntimeWritePolicy(WriteClassReservation, "test.duplicate", "reservation-key")
 	created, err := store.RuntimeCreate(context.Background(), Bead{
@@ -919,8 +916,8 @@ func TestBdStoreRuntimeCreateDuplicateMatchingReservationSucceeds(t *testing.T) 
 	if created.ID != "gc-order-fixed" {
 		t.Fatalf("created ID = %q, want existing duplicate bead", created.ID)
 	}
-	if createCalls.Load() != 1 || showCalls.Load() != 1 {
-		t.Fatalf("calls create=%d show=%d, want 1/1", createCalls.Load(), showCalls.Load())
+	if createCalls.Load() != 1 {
+		t.Fatalf("create calls = %d, want 1", createCalls.Load())
 	}
 }
 
@@ -929,12 +926,18 @@ func TestBdStoreRuntimeCreateDuplicateMismatchedReservationFails(t *testing.T) {
 		switch args[0] {
 		case "create":
 			return nil, errors.New("duplicate id already exists")
-		case "show":
-			return []byte(`[{"id":"gc-order-fixed","title":"fixed","metadata":{"gc.order.reservation_hash":"other"}}]`), nil
 		default:
 			t.Fatalf("unexpected bd args: %v", args)
 			return nil, nil
 		}
+	}).WithIndexedReader(&runtimeReadIndexedGetStub{
+		getResult: Bead{
+			ID:    "gc-order-fixed",
+			Title: "fixed",
+			Metadata: map[string]string{
+				"gc.order.reservation_hash": "other",
+			},
+		},
 	})
 	policy := RuntimeWritePolicy(WriteClassReservation, "test.duplicate", "reservation-key")
 	_, err := store.RuntimeCreate(context.Background(), Bead{
@@ -949,11 +952,42 @@ func TestBdStoreRuntimeCreateDuplicateMismatchedReservationFails(t *testing.T) {
 	}
 }
 
+func TestBdStoreRuntimeCreateCompletesSparseCreateOutputFromSeed(t *testing.T) {
+	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(_ context.Context, _ string, name string, args ...string) ([]byte, error) {
+		if name != "bd" || args[0] != "create" {
+			t.Fatalf("unexpected command = %s %v", name, args)
+		}
+		return []byte(`{"id":"gc-order-1","title":"order run","status":"open","issue_type":"task","created_at":"2026-01-01T00:00:00Z"}`), nil
+	})
+	policy := RuntimeWritePolicy(WriteClassReservation, "test.runtime-create", "order-1")
+	created, err := store.RuntimeCreate(context.Background(), Bead{
+		ID:          "gc-order-1",
+		Title:       "order run",
+		Description: "dispatch",
+		ParentID:    "gc-parent",
+		Labels:      []string{"order-run:nightly", "order-tracking"},
+		Needs:       []string{"gc-dep"},
+		Metadata:    map[string]string{"gc.order.scoped": "nightly"},
+	}, policy)
+	if err != nil {
+		t.Fatalf("RuntimeCreate: %v", err)
+	}
+	if !stringSliceContains(created.Labels, "order-run:nightly") || !stringSliceContains(created.Labels, "order-tracking") {
+		t.Fatalf("created labels = %#v, want seed order labels", created.Labels)
+	}
+	if created.Metadata["gc.order.scoped"] != "nightly" {
+		t.Fatalf("created metadata = %#v, want seed metadata", created.Metadata)
+	}
+	if created.Description != "dispatch" || created.ParentID != "gc-parent" || !stringSliceContains(created.Needs, "gc-dep") {
+		t.Fatalf("created bead lost seed fields: %#v", created)
+	}
+}
+
 func TestBdStoreRuntimePingUsesRuntimeBudget(t *testing.T) {
 	var sawDeadline atomic.Bool
 	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(ctx context.Context, _ string, name string, args ...string) ([]byte, error) {
-		if name != "bd" || strings.Join(args, " ") != "list --json --limit 0" {
-			t.Fatalf("command = %s %v, want bd list --json --limit 0", name, args)
+		if name != "bd" || strings.Join(args, " ") != "ping --json" {
+			t.Fatalf("command = %s %v, want bd ping --json", name, args)
 		}
 		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < time.Second {
 			sawDeadline.Store(true)
@@ -1014,6 +1048,51 @@ func TestBdStoreRuntimeWriteTraceIncludesPolicy(t *testing.T) {
 	} {
 		if !strings.Contains(trace, want) {
 			t.Fatalf("trace missing %q:\n%s", want, trace)
+		}
+	}
+}
+
+func TestBdStoreRuntimeWriteManagerDegradationWritesDefaultAndEnvTrace(t *testing.T) {
+	dir := t.TempDir()
+	envTrace := filepath.Join(t.TempDir(), "explicit.trace")
+	t.Setenv("GC_BD_TRACE", envTrace)
+	var runnerCalls atomic.Int64
+	store := NewBdStore(dir, nil).WithContextRunner(func(_ context.Context, _ string, _ string, _ ...string) ([]byte, error) {
+		runnerCalls.Add(1)
+		return []byte(`[]`), nil
+	})
+
+	manager := store.runtimeWriteManager()
+	manager.mu.Lock()
+	manager.breakerState = RuntimeWriteBreakerOpen
+	manager.breakerOpened = time.Now()
+	manager.mu.Unlock()
+
+	policy := RuntimeWritePolicy(WriteClassAuditRepair, "test.manager-trace", "blocked")
+	err := store.RuntimeUpdate(context.Background(), "gc-1", UpdateOpts{Metadata: map[string]string{"safe": "true"}}, policy)
+	if !IsDegradedWrite(err) {
+		t.Fatalf("RuntimeUpdate err = %v, want degraded write", err)
+	}
+	if runnerCalls.Load() != 0 {
+		t.Fatalf("runner calls = %d, want manager-level rejection before bd command", runnerCalls.Load())
+	}
+
+	for _, path := range []string{RuntimeWriteTracePath(dir), envTrace} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read trace %s: %v", path, err)
+		}
+		trace := string(data)
+		for _, want := range []string{
+			"runtime_write",
+			"caller=test.manager-trace",
+			"op=update",
+			"command=bd:runtime-manager",
+			"outcome=not-started",
+		} {
+			if !strings.Contains(trace, want) {
+				t.Fatalf("trace %s missing %q:\n%s", path, want, trace)
+			}
 		}
 	}
 }

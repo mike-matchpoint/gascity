@@ -82,6 +82,9 @@ func TestBuildDSNUsesManagedDoltDriverDefaults(t *testing.T) {
 	if !cfg.AllowNativePasswords {
 		t.Fatal("AllowNativePasswords = false, want true for Dolt SQL auth")
 	}
+	if cfg.TLSConfig != "false" {
+		t.Fatalf("TLSConfig = %q, want false for managed Dolt SQL", cfg.TLSConfig)
+	}
 	if cfg.Timeout != 10*time.Second || cfg.ReadTimeout != 10*time.Second || cfg.WriteTimeout != 10*time.Second {
 		t.Fatalf("timeouts = %s/%s/%s, want 10s/10s/10s", cfg.Timeout, cfg.ReadTimeout, cfg.WriteTimeout)
 	}
@@ -229,6 +232,30 @@ func TestBuildCountSQLSupportsBroadIncludeClosedWithoutHydration(t *testing.T) {
 	}
 	if !reflect.DeepEqual(args, []any{"closed", "order-tracking"}) {
 		t.Fatalf("filtered count args = %#v, want [closed order-tracking]", args)
+	}
+}
+
+func TestBuildGetSQLUsesPrimaryIDWithoutStatusFilter(t *testing.T) {
+	sqlText, args := buildGetSQL(tierIssues, "gc-1")
+	for _, want := range []string{
+		"FROM issues b WHERE b.id = ? LIMIT 1",
+		"b.metadata",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("get SQL missing %q:\n%s", want, sqlText)
+		}
+	}
+	for _, unwanted := range []string{
+		"b.status <> 'closed'",
+		"ORDER BY",
+		"bd show",
+	} {
+		if strings.Contains(sqlText, unwanted) {
+			t.Fatalf("get SQL contains %q:\n%s", unwanted, sqlText)
+		}
+	}
+	if !reflect.DeepEqual(args, []any{"gc-1"}) {
+		t.Fatalf("get args = %#v, want [gc-1]", args)
 	}
 }
 

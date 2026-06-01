@@ -1,7 +1,6 @@
 package beads_test
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -84,6 +83,96 @@ func TestHQStoreRuntimeHotPaths(t *testing.T) {
 	}
 }
 
+func TestHQStoreRuntimeReadHotPaths(t *testing.T) {
+	store, err := beads.OpenHQStore(t.TempDir(), beads.WithHQStoreSnapshotInterval(0))
+	if err != nil {
+		t.Fatalf("OpenHQStore: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Shutdown(); err != nil {
+			t.Errorf("Shutdown: %v", err)
+		}
+	})
+
+	readyTask, err := store.Create(beads.Bead{
+		Title:    "ready task",
+		Type:     "task",
+		Status:   "open",
+		Assignee: "cartographer",
+	})
+	if err != nil {
+		t.Fatalf("Create ready task: %v", err)
+	}
+	blocker, err := store.Create(beads.Bead{
+		Title:  "open blocker",
+		Type:   "task",
+		Status: "open",
+	})
+	if err != nil {
+		t.Fatalf("Create blocker: %v", err)
+	}
+	blockedTask, err := store.Create(beads.Bead{
+		Title:    "blocked task",
+		Type:     "task",
+		Status:   "open",
+		Assignee: "cartographer",
+	})
+	if err != nil {
+		t.Fatalf("Create blocked task: %v", err)
+	}
+	if err := store.DepAdd(blockedTask.ID, blocker.ID, "blocks"); err != nil {
+		t.Fatalf("DepAdd blocked task: %v", err)
+	}
+	readyStep, err := store.Create(beads.Bead{
+		Title:    "ready formula step",
+		Type:     "step",
+		Status:   "open",
+		Assignee: "cartographer",
+	})
+	if err != nil {
+		t.Fatalf("Create ready step: %v", err)
+	}
+	blockedStep, err := store.Create(beads.Bead{
+		Title:    "blocked formula step",
+		Type:     "step",
+		Status:   "open",
+		Assignee: "cartographer",
+	})
+	if err != nil {
+		t.Fatalf("Create blocked step: %v", err)
+	}
+	if err := store.DepAdd(blockedStep.ID, blocker.ID, "blocks"); err != nil {
+		t.Fatalf("DepAdd blocked step: %v", err)
+	}
+
+	ctx := context.Background()
+	policy := beads.RuntimeReadPolicy(beads.ReadClassHotAuthoritative, "test.hq-runtime-read")
+	openSteps, err := store.RuntimeList(ctx, beads.ListQuery{Status: "open", Type: "step"}, policy)
+	if err != nil {
+		t.Fatalf("RuntimeList: %v", err)
+	}
+	if len(openSteps) != 2 {
+		t.Fatalf("RuntimeList open steps = %+v, want ready and blocked steps", openSteps)
+	}
+	readyRows, err := store.RuntimeReady(ctx, beads.ReadyQuery{Assignee: "cartographer"}, policy)
+	if err != nil {
+		t.Fatalf("RuntimeReady: %v", err)
+	}
+	if len(readyRows) != 1 || readyRows[0].ID != readyTask.ID {
+		t.Fatalf("RuntimeReady rows = %+v, want ready task %s", readyRows, readyTask.ID)
+	}
+	readySteps, err := store.RuntimeReadyList(ctx, beads.ListQuery{
+		Type:     "step",
+		Assignee: "cartographer",
+	}, policy)
+	if err != nil {
+		t.Fatalf("RuntimeReadyList: %v", err)
+	}
+	if len(readySteps) != 1 || readySteps[0].ID != readyStep.ID {
+		t.Fatalf("RuntimeReadyList rows = %+v, want ready step %s", readySteps, readyStep.ID)
+	}
+}
+
 func TestHQStoreRecoversFlushedSnapshotAfterSIGKILL(t *testing.T) {
 	if os.Getenv("HQSTORE_SIGKILL_HELPER") == "1" {
 		hqStoreSIGKILLHelper(t)
@@ -96,9 +185,6 @@ func TestHQStoreRecoversFlushedSnapshotAfterSIGKILL(t *testing.T) {
 		"HQSTORE_SIGKILL_HELPER=1",
 		"HQSTORE_DIR="+dir,
 	)
-	var helperOutput bytes.Buffer
-	cmd.Stdout = &helperOutput
-	cmd.Stderr = &helperOutput
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting helper: %v", err)
 	}
@@ -107,7 +193,7 @@ func TestHQStoreRecoversFlushedSnapshotAfterSIGKILL(t *testing.T) {
 	// presence guarantees a durable snapshot exists on disk.
 	idPath := filepath.Join(dir, "created-id")
 	var id string
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		data, err := os.ReadFile(idPath)
 		if err == nil {
@@ -119,7 +205,7 @@ func TestHQStoreRecoversFlushedSnapshotAfterSIGKILL(t *testing.T) {
 	if id == "" {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		t.Fatalf("helper did not write created bead id; output:\n%s", helperOutput.String())
+		t.Fatal("helper did not write created bead id")
 	}
 
 	if err := cmd.Process.Kill(); err != nil {

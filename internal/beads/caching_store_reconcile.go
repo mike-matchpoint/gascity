@@ -559,8 +559,9 @@ func (c *CachingStore) recoverMissingFromList(freshByID map[string]Bead) {
 	}
 	var recoveredAlive int64
 	var deferredClose int64
+	readPolicy := RuntimeReadPolicy(ReadClassHotAuthoritative, "cache.reconcile.verify-missing")
 	for id, cached := range candidates {
-		bead, err := c.backing.Get(id)
+		bead, err := RuntimeGet(context.Background(), c.backing, id, readPolicy)
 		switch {
 		case err == nil:
 			if bead.ID != id {

@@ -18,6 +18,32 @@ func (s *flakyReadyStore) Ready(query ...ReadyQuery) ([]Bead, error) {
 	return s.MemStore.Ready(query...)
 }
 
+func (s *flakyReadyStore) ListIndexed(ctx context.Context, query ListQuery) (IndexedListResult, error) {
+	select {
+	case <-ctxDone(ctx):
+		return IndexedListResult{}, ctx.Err()
+	default:
+	}
+	rows, err := s.List(query)
+	if err != nil {
+		return IndexedListResult{}, err
+	}
+	depsByID := make(map[string][]Dep, len(rows))
+	for _, row := range rows {
+		deps, err := s.DepList(row.ID, "down")
+		if err != nil {
+			return IndexedListResult{Beads: rows, DepsByID: depsByID}, err
+		}
+		depsByID[row.ID] = deps
+	}
+	return IndexedListResult{
+		Beads:              rows,
+		DepsByID:           depsByID,
+		DependencyCoverage: true,
+		LabelsCoverage:     true,
+	}, nil
+}
+
 func TestReadyLiveBypassesCachingStore(t *testing.T) {
 	t.Parallel()
 

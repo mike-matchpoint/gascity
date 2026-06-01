@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gastownhall/gascity/internal/fsys"
 )
 
 func TestCachingStoreRunReconciliationDetectsLabelContentChanges(t *testing.T) {
@@ -40,6 +42,37 @@ func TestCachingStoreRunReconciliationDetectsLabelContentChanges(t *testing.T) {
 	}
 	if len(got.Labels) != 1 || got.Labels[0] != "new" {
 		t.Fatalf("Labels = %v, want [new]", got.Labels)
+	}
+}
+
+func TestCachingStoreRuntimeListFallsThroughToFileStoreRuntimeListForLabels(t *testing.T) {
+	t.Parallel()
+
+	backing, err := OpenFileStore(fsys.OSFS{}, t.TempDir()+"/beads.json")
+	if err != nil {
+		t.Fatalf("OpenFileStore: %v", err)
+	}
+	if _, err := backing.Create(Bead{
+		Title:  "session",
+		Type:   "session",
+		Labels: []string{"gc:session"},
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	cache := NewCachingStoreForTest(backing, nil)
+	if err := cache.PrimeActive(); err != nil {
+		t.Fatalf("PrimeActive: %v", err)
+	}
+
+	rows, err := RuntimeList(context.Background(), cache, ListQuery{
+		Label:    "gc:session",
+		TierMode: TierIssues,
+	}, RuntimeReadPolicy(ReadClassHotAuthoritative, "test.file-label-runtime-list"))
+	if err != nil {
+		t.Fatalf("RuntimeList: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Title != "session" {
+		t.Fatalf("rows = %+v, want one labeled file-store row", rows)
 	}
 }
 

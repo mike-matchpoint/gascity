@@ -135,7 +135,6 @@ func ensureQueuedNudgeBeadRuntime(ctx context.Context, store beads.Store, item q
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	storePrefix := nudgeStoreIDPrefix(store)
 	beadID := nudgeAuditBeadIDForStore(store, item.ID)
 	if beadID != "" {
 		existing, err := beads.RuntimeGet(ctx, store, beadID, beads.RuntimeReadPolicy(beads.ReadClassHotAuthoritative, "nudge.ensure.get"))
@@ -151,14 +150,12 @@ func ensureQueuedNudgeBeadRuntime(ctx context.Context, store beads.Store, item q
 			}
 		}
 	}
-	if beadID == "" || storePrefix == "" {
-		if existing, ok, err := findQueuedNudgeBeadRuntime(ctx, store, item.ID, "nudge.ensure.find"); err != nil {
-			if beads.IsLookupLimitError(err) || !beads.IsDegradedRead(err) {
-				return "", false, err
-			}
-		} else if ok {
-			return existing.ID, false, nil
+	if existing, ok, err := findQueuedNudgeBeadRuntime(ctx, store, item.ID, "nudge.ensure.find"); err != nil {
+		if beads.IsLookupLimitError(err) || !beads.IsDegradedRead(err) {
+			return "", false, err
 		}
+	} else if ok {
+		return existing.ID, false, nil
 	}
 	meta := map[string]string{
 		"nudge_id":           item.ID,

@@ -1,12 +1,14 @@
 package doctor
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // RequiredCustomTypes lists the bead types that Gas City requires
@@ -27,6 +29,11 @@ var RequiredCustomTypes = []string{
 	"merge-request", "agent", "role", "rig", "session", "spec",
 	"convergence", "step",
 }
+
+var (
+	customTypesConfigGetTimeout = 5 * time.Second
+	customTypesCommandContext   = exec.CommandContext
+)
 
 // CustomTypesCheck verifies that all required Gas City custom bead
 // types are registered in a bd store's types.custom config.
@@ -155,10 +162,16 @@ func mergeCustomTypes(current, required []string) []string {
 // the human-readable "types.custom (not set)" sentinel (which would
 // otherwise be persisted as a fake custom type when Fix() merges).
 func getCustomTypes(dir string) ([]string, error) {
-	cmd := exec.Command("bd", "config", "get", "--json", "types.custom")
+	ctx, cancel := context.WithTimeout(context.Background(), customTypesConfigGetTimeout)
+	defer cancel()
+
+	cmd := customTypesCommandContext(ctx, "bd", "config", "get", "--json", "types.custom")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("bd config get types.custom timed out after %s", customTypesConfigGetTimeout)
+		}
 		return nil, err
 	}
 	return parseCustomTypesJSON(out)

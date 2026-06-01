@@ -189,8 +189,9 @@ func TestEnsureQueuedNudgeBeadUsesRuntimeCreateWithDeterministicID(t *testing.T)
 	if !created {
 		t.Fatal("created = false, want true")
 	}
-	if createdID != item.ID {
-		t.Fatalf("createdID = %q, want deterministic nudge id %q", createdID, item.ID)
+	expectedID := nudgeAuditBeadIDForStore(store, item.ID)
+	if createdID != expectedID {
+		t.Fatalf("createdID = %q, want deterministic nudge audit id %q", createdID, expectedID)
 	}
 	if store.foregroundCreates != 0 {
 		t.Fatalf("foregroundCreates = %d, want 0", store.foregroundCreates)
@@ -258,8 +259,10 @@ func TestEnsureQueuedNudgeBeadUsesCacheOwnedPrefixID(t *testing.T) {
 
 func TestEnsureQueuedNudgeBeadRejectsMismatchedExactID(t *testing.T) {
 	store := beads.NewMemStore()
+	itemID := "nudge-collision"
+	beadID := nudgeAuditBeadIDForStore(store, itemID)
 	if _, err := store.Create(beads.Bead{
-		ID:    "nudge-collision",
+		ID:    beadID,
 		Title: "unrelated",
 		Type:  "task",
 		Metadata: map[string]string{
@@ -269,7 +272,7 @@ func TestEnsureQueuedNudgeBeadRejectsMismatchedExactID(t *testing.T) {
 		t.Fatalf("seed unrelated bead: %v", err)
 	}
 	_, _, err := ensureQueuedNudgeBead(store, queuedNudge{
-		ID:      "nudge-collision",
+		ID:      itemID,
 		Agent:   "wendy.wendy",
 		Source:  "session",
 		Message: "follow up",

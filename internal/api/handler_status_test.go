@@ -246,7 +246,7 @@ func TestHandleStatusUsesCachedSessionStateForSuspendedAgents(t *testing.T) {
 
 func TestHandleStatusUsesPartialSessionRows(t *testing.T) {
 	state := newFakeState(t)
-	store := &partialPrimeSessionStore{MemStore: beads.NewMemStore()}
+	store := &partialPrimeSessionStore{Store: beads.NewMemStore()}
 	state.cityBeadStore = store
 	sessionBead, err := store.Create(beads.Bead{
 		Type:   session.BeadType,

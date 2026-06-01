@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/events"
@@ -310,64 +311,60 @@ func (s *BdStore) RuntimeList(ctx context.Context, query ListQuery, policy ReadP
 	return enforceRuntimeRowCap(items, policy, "list", "indexed")
 }
 
-// RuntimeGet retrieves one bead under a bounded runtime read policy. BdStore
-// currently has no direct indexed ID lookup, so this uses a short runtime
-// command budget and reports degraded outcomes instead of falling back to the
-// foreground 120s read budget.
+// RuntimeHydrationProbe exercises bd's JSON row serialization through a
+// bounded, cancellable CLI invocation. Doctor uses this separately from ping so
+// malformed rows remain visible without letting a hydration read wedge doctor.
+func (s *BdStore) RuntimeHydrationProbe(ctx context.Context, policy ReadPolicy) (int, error) {
+	if s == nil {
+		return 0, degradedRead(policy, "hydrate", "bd-list", "", errors.New("nil BdStore"))
+	}
+	policy = normalizeReadPolicy(policy)
+	readCtx, cancel := contextWithReadPolicy(ctx, policy)
+	defer cancel()
+	run := s.ctxRunner
+	if run == nil {
+		return 0, degradedRead(policy, "hydrate", "bd-list", "", errors.New("runtime hydration requires a context command runner"))
+	}
+	out, err := run(readCtx, s.dir, "bd", "list", "--json", "--limit", "0")
+	if err != nil {
+		return 0, degradedRead(policy, "hydrate", "bd-list", "", err)
+	}
+	var issues []bdIssue
+	if err := json.Unmarshal(extractJSON(out), &issues); err != nil {
+		return 0, degradedRead(policy, "hydrate", "bd-list", "", fmt.Errorf("bd list: parsing JSON: %w", err))
+	}
+	return len(issues), nil
+}
+
+// RuntimeGet retrieves one bead under a bounded runtime read policy. Hot reads
+// require an indexed ID lookup; they do not fall through to bd show.
 func (s *BdStore) RuntimeGet(ctx context.Context, id string, policy ReadPolicy) (Bead, error) {
 	if s == nil {
-		return Bead{}, degradedRead(policy, "get", "bd", "", errors.New("nil BdStore"))
+		return Bead{}, degradedRead(policy, "get", "indexed", "", errors.New("nil BdStore"))
 	}
 	policy = normalizeReadPolicy(policy)
 	if policy.AllowFallback {
 		return s.Get(id)
 	}
-	readCtx, cancel := contextWithReadPolicy(ctx, policy)
-	defer cancel()
-	writePolicy := RuntimeWritePolicy(WriteClassHotState, policy.Caller, "runtime-get:"+id)
-	writePolicy.Timeout = policy.Timeout
-	out, err := s.runRuntimeBDGet(readCtx, writePolicy, id)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return Bead{}, err
-		}
-		return Bead{}, degradedRead(policy, "get", "bd", "", err)
-	}
-	var issues []bdIssue
-	if err := json.Unmarshal(extractJSON(out), &issues); err != nil {
-		return Bead{}, degradedRead(policy, "get", "bd", "", fmt.Errorf("bd show: parsing JSON: %w", err))
-	}
-	if len(issues) == 0 {
-		return Bead{}, fmt.Errorf("getting bead %q: %w", id, ErrNotFound)
-	}
-	return issues[0].toBead(), nil
+	return s.runtimeGetIndexed(ctx, id, policy)
 }
 
-func (s *BdStore) runRuntimeBDGet(ctx context.Context, policy WritePolicy, id string) ([]byte, error) {
-	if ctx == nil {
-		ctx = context.Background()
+func (s *BdStore) runtimeGetIndexed(ctx context.Context, id string, policy ReadPolicy) (Bead, error) {
+	policy = normalizeReadPolicy(policy)
+	getter, ok := s.indexedReader.(IndexedGetter)
+	if !ok {
+		return Bead{}, degradedRead(policy, "get", "indexed", "unavailable", ErrIndexedListUnsupported)
 	}
-	args := []string{"show", "--json", id}
-	start := time.Now()
-	s.recordRuntimeWriteEvent(events.RuntimeWriteStarted, policy, "get", args, 0, nil)
-	if s.ctxRunner == nil && s.runner == nil {
-		err := degradedWrite(policy, s.RuntimeWriteStoreKey(), "get", WriteOutcomeUnsupported, errors.New("nil bd command runner"))
-		s.traceRuntimeWrite(policy, "get", args, time.Since(start), err)
-		return nil, err
-	}
-	out, err := s.runRuntimeBDCommand(ctx, args...)
+	readCtx, cancel := contextWithReadPolicy(ctx, policy)
+	defer cancel()
+	item, err := getter.GetIndexed(readCtx, id)
 	if err != nil {
-		if isBdNotFound(err) {
-			notFound := fmt.Errorf("getting bead %q: %w", id, ErrNotFound)
-			s.traceRuntimeWrite(policy, "get", args, time.Since(start), notFound)
-			return out, notFound
+		if errors.Is(err, ErrNotFound) {
+			return Bead{}, fmt.Errorf("getting bead %q: %w", id, ErrNotFound)
 		}
-		wrapped := s.runtimeCommandError(ctx, policy, "get", err)
-		s.traceRuntimeWrite(policy, "get", args, time.Since(start), wrapped)
-		return out, wrapped
+		return Bead{}, degradedRead(policy, "get", "indexed", "", err)
 	}
-	s.traceRuntimeWrite(policy, "get", args, time.Since(start), nil)
-	return out, nil
+	return item, nil
 }
 
 // RuntimeReady has no safe direct BdStore implementation because bd ready is a
@@ -387,6 +384,12 @@ func (s *BdStore) IDPrefix() string {
 		return ""
 	}
 	return s.idPrefix
+}
+
+// ExplicitIDPrefix returns the prefix that callers may use for explicit create
+// IDs against this store.
+func (s *BdStore) ExplicitIDPrefix() string {
+	return s.IDPrefix()
 }
 
 // Init initializes a beads database via bd init --server. This is an admin
@@ -861,6 +864,76 @@ func beadFromCreateOutput(out []byte, seed Bead, metadata map[string]string) (Be
 		created.Metadata = maps.Clone(metadata)
 	}
 	return created, nil
+}
+
+func completeCreatedBeadFromSeed(created, seed Bead, metadata map[string]string) Bead {
+	if len(metadata) == 0 && len(seed.Metadata) > 0 {
+		metadata = seed.Metadata
+	}
+	if seed.From != "" {
+		if metadata == nil {
+			metadata = map[string]string{"from": seed.From}
+		} else if metadata["from"] == "" {
+			cloned := maps.Clone(metadata)
+			cloned["from"] = seed.From
+			metadata = cloned
+		}
+	}
+	if created.ID == "" {
+		created.ID = seed.ID
+	}
+	if created.Title == "" {
+		created.Title = seed.Title
+	}
+	if created.Status == "" {
+		if seed.Status != "" {
+			created.Status = seed.Status
+		} else {
+			created.Status = "open"
+		}
+	}
+	if created.Type == "" {
+		if seed.Type != "" {
+			created.Type = seed.Type
+		} else {
+			created.Type = "task"
+		}
+	}
+	if created.Assignee == "" {
+		created.Assignee = seed.Assignee
+	}
+	if created.From == "" {
+		created.From = seed.From
+	}
+	if created.ParentID == "" {
+		created.ParentID = seed.ParentID
+	}
+	if created.Description == "" {
+		created.Description = seed.Description
+	}
+	if created.Priority == nil && seed.Priority != nil {
+		created.Priority = cloneIntPtr(seed.Priority)
+	}
+	if len(created.Needs) == 0 && len(seed.Needs) > 0 {
+		created.Needs = append([]string(nil), seed.Needs...)
+	}
+	if len(created.Labels) == 0 && len(seed.Labels) > 0 {
+		created.Labels = append([]string(nil), seed.Labels...)
+	}
+	if len(metadata) > 0 {
+		if created.Metadata == nil {
+			created.Metadata = make(map[string]string, len(metadata))
+		}
+		for k, v := range metadata {
+			if _, ok := created.Metadata[k]; !ok {
+				created.Metadata[k] = v
+			}
+		}
+	}
+	if seed.Ephemeral {
+		created.Ephemeral = true
+	}
+	return created
 }
 
 // Create persists a new bead via bd create.
@@ -1473,7 +1546,9 @@ func (s *BdStore) RuntimeCreate(ctx context.Context, b Bead, policy WritePolicy)
 	if key == "" {
 		key = strings.TrimSpace(policy.IdempotencyKey)
 	}
+	var commandStarted atomic.Bool
 	value, err := s.runtimeWriteManager().do(ctx, policy, "create", key, func(writeCtx context.Context) (any, error) {
+		commandStarted.Store(true)
 		out, runErr := s.runRuntimeBD(writeCtx, policy, "create", args...)
 		if runErr != nil {
 			if isBdDuplicateID(runErr) && strings.TrimSpace(b.ID) != "" {
@@ -1491,6 +1566,7 @@ func (s *BdStore) RuntimeCreate(ctx context.Context, b Bead, policy WritePolicy)
 		}
 		return beadFromCreateOutput(out, b, metadata)
 	})
+	s.traceRuntimeWriteManagerDegradation(policy, "create", commandStarted.Load(), err)
 	if err != nil {
 		return Bead{}, err
 	}
@@ -1498,6 +1574,7 @@ func (s *BdStore) RuntimeCreate(ctx context.Context, b Bead, policy WritePolicy)
 	if !ok {
 		return Bead{}, degradedWrite(policy, s.RuntimeWriteStoreKey(), "create", WriteOutcomeFailed, errors.New("runtime create returned non-bead result"))
 	}
+	created = completeCreatedBeadFromSeed(created, b, metadata)
 	return created, nil
 }
 
@@ -1510,18 +1587,21 @@ func (s *BdStore) RuntimeUpdate(ctx context.Context, id string, opts UpdateOpts,
 		return nil
 	}
 	policy = normalizeWritePolicy(policy)
+	var commandStarted atomic.Bool
 	_, err := s.runtimeWriteManager().doWithPayload(ctx, policy, "update", id, opts, mergeRuntimeUpdatePayload, func(writeCtx context.Context, payload any) (any, error) {
 		merged, _ := payload.(UpdateOpts)
 		args := bdUpdateArgs(id, merged)
 		if len(args) == 0 {
 			return nil, nil
 		}
+		commandStarted.Store(true)
 		_, runErr := s.runRuntimeBD(writeCtx, policy, "update", args...)
 		if isBdNotFound(runErr) {
 			return nil, fmt.Errorf("updating bead %q: %w", id, ErrNotFound)
 		}
 		return nil, runErr
 	})
+	s.traceRuntimeWriteManagerDegradation(policy, "update", commandStarted.Load(), err)
 	return err
 }
 
@@ -1538,6 +1618,7 @@ func (s *BdStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata ma
 	policy = normalizeWritePolicy(policy)
 	policy = runtimeWriteCloseAllCompositePolicy(policy, len(ids), len(preCloseMetadata) > 0)
 	objectKey := strings.Join(ids, ",")
+	var commandStarted atomic.Bool
 	value, err := s.runtimeWriteManager().do(ctx, policy, "close-all", objectKey, func(writeCtx context.Context) (any, error) {
 		if len(preCloseMetadata) > 0 {
 			for _, id := range ids {
@@ -1545,18 +1626,21 @@ func (s *BdStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata ma
 				if len(args) == 0 {
 					continue
 				}
+				commandStarted.Store(true)
 				if _, runErr := s.runRuntimeBD(writeCtx, policy, "close-all.metadata", args...); runErr != nil {
 					return 0, runErr
 				}
 			}
 		}
 		reason := strings.TrimSpace(metadata["close_reason"])
+		commandStarted.Store(true)
 		_, runErr := s.runRuntimeBD(writeCtx, policy, "close-all.close", bdCloseArgs(reason, ids...)...)
 		if runErr != nil {
 			return 0, runErr
 		}
 		return len(ids), nil
 	})
+	s.traceRuntimeWriteManagerDegradation(policy, "close-all", commandStarted.Load(), err)
 	if err != nil {
 		if n, ok := value.(int); ok {
 			return n, err
@@ -1590,10 +1674,13 @@ func (s *BdStore) RuntimePing(ctx context.Context, policy WritePolicy) error {
 		return degradedWrite(policy, "", "ping", WriteOutcomeUnsupported, errors.New("nil BdStore"))
 	}
 	policy = normalizeWritePolicy(policy)
+	var commandStarted atomic.Bool
 	_, err := s.runtimeWriteManager().do(ctx, policy, "ping", "ping", func(writeCtx context.Context) (any, error) {
-		_, runErr := s.runRuntimeBD(writeCtx, policy, "ping", "list", "--json", "--limit", "0")
+		commandStarted.Store(true)
+		_, runErr := s.runRuntimeBD(writeCtx, policy, "ping", "ping", "--json")
 		return nil, runErr
 	})
+	s.traceRuntimeWriteManagerDegradation(policy, "ping", commandStarted.Load(), err)
 	return err
 }
 
@@ -1691,21 +1778,6 @@ func (s *BdStore) runtimeCommandError(ctx context.Context, policy WritePolicy, o
 }
 
 func (s *BdStore) traceRuntimeWrite(policy WritePolicy, operation string, args []string, duration time.Duration, err error) {
-	path := strings.TrimSpace(os.Getenv("GC_BD_TRACE"))
-	if path == "" {
-		if s == nil || strings.TrimSpace(s.dir) == "" {
-			return
-		}
-		path = RuntimeWriteTracePath(s.dir)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return
-	}
-	f, openErr := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if openErr != nil {
-		return
-	}
-	defer f.Close() //nolint:errcheck // best-effort diagnostic trace
 	subcommand := ""
 	if len(args) > 0 {
 		subcommand = args[0]
@@ -1715,7 +1787,11 @@ func (s *BdStore) traceRuntimeWrite(policy WritePolicy, operation string, args [
 		errMsg = err.Error()
 	}
 	outcome := runtimeWriteOutcomeForTrace(err)
-	fmt.Fprintf(f, "%s runtime_write caller=%s class=%s op=%s command=bd:%s args=%q duration=%s timeout=%s outcome=%s store_key=%s err=%q\n", //nolint:errcheck // best-effort diagnostic trace
+	storeKey := ""
+	if s != nil {
+		storeKey = s.RuntimeWriteStoreKey()
+	}
+	line := fmt.Sprintf("%s runtime_write caller=%s class=%s op=%s command=bd:%s args=%q duration=%s timeout=%s outcome=%s store_key=%s err=%q\n",
 		time.Now().UTC().Format(time.RFC3339Nano),
 		strings.TrimSpace(policy.Caller),
 		policy.Class,
@@ -1725,8 +1801,11 @@ func (s *BdStore) traceRuntimeWrite(policy WritePolicy, operation string, args [
 		duration,
 		policy.Timeout,
 		outcome,
-		s.RuntimeWriteStoreKey(),
+		storeKey,
 		errMsg)
+	for _, path := range s.runtimeWriteTracePaths() {
+		appendRuntimeWriteTraceLine(path, line)
+	}
 	switch {
 	case err == nil:
 		s.recordRuntimeWriteEvent(events.RuntimeWriteCompleted, policy, operation, args, duration, nil)
@@ -1737,6 +1816,57 @@ func (s *BdStore) traceRuntimeWrite(policy WritePolicy, operation string, args [
 	default:
 		s.recordRuntimeWriteEvent(events.RuntimeWriteDegraded, policy, operation, args, duration, err)
 	}
+}
+
+func (s *BdStore) traceRuntimeWriteManagerDegradation(policy WritePolicy, operation string, commandStarted bool, err error) {
+	var degraded *DegradedWriteError
+	if !errors.As(err, &degraded) {
+		return
+	}
+	if commandStarted && degraded.Outcome != WriteOutcomeAmbiguousTimeout {
+		return
+	}
+	s.traceRuntimeWrite(policy, operation, []string{"runtime-manager"}, 0, err)
+}
+
+func (s *BdStore) runtimeWriteTracePaths() []string {
+	paths := make([]string, 0, 2)
+	if s != nil && strings.TrimSpace(s.dir) != "" {
+		paths = append(paths, RuntimeWriteTracePath(s.dir))
+	}
+	if envPath := strings.TrimSpace(os.Getenv("GC_BD_TRACE")); envPath != "" {
+		paths = append(paths, envPath)
+	}
+	if len(paths) < 2 {
+		return paths
+	}
+	out := paths[:0]
+	seen := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		clean := filepath.Clean(path)
+		if _, ok := seen[clean]; ok {
+			continue
+		}
+		seen[clean] = struct{}{}
+		out = append(out, path)
+	}
+	return out
+}
+
+func appendRuntimeWriteTraceLine(path, line string) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	f, openErr := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if openErr != nil {
+		return
+	}
+	defer f.Close()     //nolint:errcheck // best-effort diagnostic trace
+	fmt.Fprint(f, line) //nolint:errcheck // best-effort diagnostic trace
 }
 
 func runtimeWriteOutcomeForTrace(err error) WriteOutcome {
@@ -1794,21 +1924,16 @@ func (s *BdStore) recordRuntimeWriteEvent(eventType string, policy WritePolicy, 
 }
 
 func (s *BdStore) runtimeGet(ctx context.Context, id string, policy WritePolicy) (Bead, error) {
-	out, err := s.runRuntimeBD(ctx, policy, "get", "show", "--json", id)
+	readPolicy := RuntimeReadPolicy(ReadClassHotAuthoritative, policy.Caller)
+	readPolicy.Timeout = policy.Timeout
+	item, err := s.runtimeGetIndexed(ctx, id, readPolicy)
 	if err != nil {
-		if isBdNotFound(err) {
+		if errors.Is(err, ErrNotFound) {
 			return Bead{}, fmt.Errorf("getting bead %q: %w", id, ErrNotFound)
 		}
-		return Bead{}, err
+		return Bead{}, degradedWrite(policy, s.RuntimeWriteStoreKey(), "get", WriteOutcomeFailed, err)
 	}
-	var issues []bdIssue
-	if err := json.Unmarshal(extractJSON(out), &issues); err != nil {
-		return Bead{}, degradedWrite(policy, s.RuntimeWriteStoreKey(), "get", WriteOutcomeFailed, fmt.Errorf("bd show: parsing JSON: %w", err))
-	}
-	if len(issues) == 0 {
-		return Bead{}, fmt.Errorf("getting bead %q: %w", id, ErrNotFound)
-	}
-	return issues[0].toBead(), nil
+	return item, nil
 }
 
 func isBdDuplicateID(err error) bool {
@@ -2027,6 +2152,63 @@ func (s *BdStore) List(query ListQuery) ([]Bead, error) {
 		return s.listBothTiers(query)
 	}
 
+	args := bdIssueListArgs(query)
+
+	out, err := s.runner(s.dir, "bd", args...)
+	if err != nil {
+		return nil, fmt.Errorf("bd list: %w", err)
+	}
+	issues, parseErr := parseIssuesTolerant(extractJSON(out))
+	result := make([]Bead, len(issues))
+	for i := range issues {
+		result[i] = issues[i].toBead()
+	}
+	filtered := applyListQuery(result, query)
+	if parseErr != nil {
+		if len(filtered) == 0 {
+			return nil, fmt.Errorf("bd list: %w", parseErr)
+		}
+		// Surface partial-parse outcomes so callers can distinguish a complete
+		// list from one that silently dropped entries. Treating a partial list
+		// as authoritative has driven a runaway cache-reconcile loop in the
+		// past (synthesizing bead.closed for beads that were merely dropped
+		// by parseIssuesTolerant).
+		return filtered, &PartialResultError{Op: "bd list", Err: parseErr}
+	}
+	return filtered, nil
+}
+
+func (s *BdStore) listIssuesContext(ctx context.Context, query ListQuery) ([]Bead, error) {
+	if s == nil || s.ctxRunner == nil {
+		return nil, ErrIndexedListUnsupported
+	}
+	if !query.HasFilter() && !query.AllowScan {
+		return nil, fmt.Errorf("bd list: %w", ErrQueryRequiresScan)
+	}
+	if query.TierMode != TierIssues {
+		return nil, fmt.Errorf("bd list context: %w", ErrIndexedListUnsupported)
+	}
+	args := bdIssueListArgs(query)
+	out, err := s.ctxRunner(ctx, s.dir, "bd", args...)
+	if err != nil {
+		return nil, fmt.Errorf("bd list: %w", err)
+	}
+	issues, parseErr := parseIssuesTolerant(extractJSON(out))
+	result := make([]Bead, len(issues))
+	for i := range issues {
+		result[i] = issues[i].toBead()
+	}
+	filtered := applyListQuery(result, query)
+	if parseErr != nil {
+		if len(filtered) == 0 {
+			return nil, fmt.Errorf("bd list: %w", parseErr)
+		}
+		return filtered, &PartialResultError{Op: "bd list", Err: parseErr}
+	}
+	return filtered, nil
+}
+
+func bdIssueListArgs(query ListQuery) []string {
 	limit := query.Limit
 	if query.Sort == SortCreatedAsc {
 		limit = 0
@@ -2067,29 +2249,7 @@ func (s *BdStore) List(query ListQuery) ([]Bead, error) {
 			args = append(args, "--metadata-field", k+"="+query.Metadata[k])
 		}
 	}
-
-	out, err := s.runner(s.dir, "bd", args...)
-	if err != nil {
-		return nil, fmt.Errorf("bd list: %w", err)
-	}
-	issues, parseErr := parseIssuesTolerant(extractJSON(out))
-	result := make([]Bead, len(issues))
-	for i := range issues {
-		result[i] = issues[i].toBead()
-	}
-	filtered := applyListQuery(result, query)
-	if parseErr != nil {
-		if len(filtered) == 0 {
-			return nil, fmt.Errorf("bd list: %w", parseErr)
-		}
-		// Surface partial-parse outcomes so callers can distinguish a complete
-		// list from one that silently dropped entries. Treating a partial list
-		// as authoritative has driven a runaway cache-reconcile loop in the
-		// past (synthesizing bead.closed for beads that were merely dropped
-		// by parseIssuesTolerant).
-		return filtered, &PartialResultError{Op: "bd list", Err: parseErr}
-	}
-	return filtered, nil
+	return args
 }
 
 // listEphemeral reads only the wisps tier using `bd query "ephemeral=true AND

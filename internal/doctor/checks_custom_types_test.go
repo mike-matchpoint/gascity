@@ -1,10 +1,14 @@
 package doctor
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestCustomTypesCheck_NoBeadsDir(t *testing.T) {
@@ -46,6 +50,36 @@ func TestCustomTypesCheck_MissingTypes(t *testing.T) {
 	if !c.CanFix() {
 		t.Fatal("CanFix should return true")
 	}
+}
+
+func TestGetCustomTypesTimesOut(t *testing.T) {
+	oldTimeout := customTypesConfigGetTimeout
+	oldCommandContext := customTypesCommandContext
+	customTypesConfigGetTimeout = 20 * time.Millisecond
+	customTypesCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestHelperProcessCustomTypesHang", "--")
+		cmd.Env = append(os.Environ(), "GO_WANT_CUSTOM_TYPES_HANG=1")
+		return cmd
+	}
+	t.Cleanup(func() {
+		customTypesConfigGetTimeout = oldTimeout
+		customTypesCommandContext = oldCommandContext
+	})
+
+	_, err := getCustomTypes(t.TempDir())
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+	if !strings.Contains(err.Error(), "bd config get types.custom timed out after") {
+		t.Fatalf("error = %q, want timeout message", err)
+	}
+}
+
+func TestHelperProcessCustomTypesHang(_ *testing.T) {
+	if os.Getenv("GO_WANT_CUSTOM_TYPES_HANG") != "1" {
+		return
+	}
+	time.Sleep(10 * time.Second)
 }
 
 func TestCustomTypesCheck_RequiredTypesIncludeSpec(t *testing.T) {

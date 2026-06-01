@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/events"
+	"github.com/gastownhall/gascity/internal/orders"
 )
 
 func TestOrderFiringCurrent_NeverFired_BeyondUptime(t *testing.T) {
@@ -72,6 +74,56 @@ func TestOrderFiringCurrent_FiredRecently(t *testing.T) {
 	}
 }
 
+func TestOrderFiringCurrent_UsesDurableHistoryWhenEventIsMissing(t *testing.T) {
+	now := time.Date(2026, 5, 17, 12, 0, 0, 0, time.UTC)
+	cityPath, cfg := orderFiringTestCity(t)
+	writeOrderFiringTestOrder(t, cityPath, "mol-dog-reaper", "cooldown", "30m")
+	writeOrderFiringTestEvents(t, cityPath,
+		events.Event{Type: events.ControllerStarted, Ts: now.Add(-2 * time.Hour)},
+		events.Event{Type: events.OrderFired, Subject: "mol-dog-reaper", Ts: now.Add(-90 * time.Minute)},
+	)
+
+	result := runOrderFiringCurrentTestWithLastRun(t, cfg, cityPath, now, func(order orders.Order) (time.Time, error) {
+		if order.ScopedName() != "mol-dog-reaper" {
+			t.Fatalf("last-run resolver called for %q, want mol-dog-reaper", order.ScopedName())
+		}
+		return now.Add(-10 * time.Minute), nil
+	})
+	if result.Status != StatusOK {
+		t.Fatalf("status = %v, want OK; msg = %s; details = %v", result.Status, result.Message, result.Details)
+	}
+	details := strings.Join(result.Details, "\n")
+	if !strings.Contains(details, "last fired 10m ago, expected every 30m") {
+		t.Fatalf("details = %v, want durable last-run detail", result.Details)
+	}
+	if strings.Contains(details, "overdue") || strings.Contains(details, "stale") {
+		t.Fatalf("details = %v, want no stale event-only classification", result.Details)
+	}
+}
+
+func TestOrderFiringCurrent_DurableHistoryReadFailureIsVisible(t *testing.T) {
+	now := time.Date(2026, 5, 17, 12, 0, 0, 0, time.UTC)
+	cityPath, cfg := orderFiringTestCity(t)
+	writeOrderFiringTestOrder(t, cityPath, "mol-dog-reaper", "cooldown", "30m")
+	writeOrderFiringTestEvents(t, cityPath,
+		events.Event{Type: events.ControllerStarted, Ts: now.Add(-2 * time.Hour)},
+		events.Event{Type: events.OrderFired, Subject: "mol-dog-reaper", Ts: now.Add(-10 * time.Minute)},
+	)
+
+	result := runOrderFiringCurrentTestWithLastRun(t, cfg, cityPath, now, func(orders.Order) (time.Time, error) {
+		return time.Time{}, errors.New("store offline")
+	})
+	if result.Status != StatusError {
+		t.Fatalf("status = %v, want error; msg = %s; details = %v", result.Status, result.Message, result.Details)
+	}
+	if !strings.Contains(strings.Join(result.Details, "\n"), "mol-dog-reaper: cannot read order history: store offline") {
+		t.Fatalf("details = %v, want visible history read failure", result.Details)
+	}
+	if result.FixHint != "Inspect with: gc order check && gc order history mol-dog-reaper" {
+		t.Fatalf("FixHint = %q, want inspect hint for order", result.FixHint)
+	}
+}
+
 func TestOrderFiringCurrent_Overdue(t *testing.T) {
 	now := time.Date(2026, 5, 17, 12, 0, 0, 0, time.UTC)
 	cityPath, cfg := orderFiringTestCity(t)
@@ -130,13 +182,35 @@ func TestOrderFiringCurrent_StaleRuntimeWriteBackpressureWarns(t *testing.T) {
 	}
 }
 
-func TestOrderFiringCurrent_ShortCooldownDriftWarnsBeforeFloor(t *testing.T) {
+func TestOrderFiringCurrent_ShortCooldownJitterStaysOKBeforeWarningFloor(t *testing.T) {
 	now := time.Date(2026, 5, 17, 12, 0, 0, 0, time.UTC)
 	cityPath, cfg := orderFiringTestCity(t)
 	writeOrderFiringTestOrder(t, cityPath, "beads-health", "cooldown", "30s")
 	writeOrderFiringTestEvents(t, cityPath,
 		events.Event{Type: events.ControllerStarted, Ts: now.Add(-10 * time.Minute)},
 		events.Event{Type: events.OrderFired, Subject: "beads-health", Ts: now.Add(-2 * time.Minute)},
+	)
+
+	result := runOrderFiringCurrentTest(t, cfg, cityPath, now)
+	if result.Status != StatusOK {
+		t.Fatalf("status = %v, want OK; msg = %s; details = %v", result.Status, result.Message, result.Details)
+	}
+	details := strings.Join(result.Details, "\n")
+	if !strings.Contains(details, "expected every 1m") {
+		t.Fatalf("details = %v, want short-cooldown detail", result.Details)
+	}
+	if strings.Contains(details, "(overdue)") {
+		t.Fatalf("details = %v, want no overdue detail before warning floor", result.Details)
+	}
+}
+
+func TestOrderFiringCurrent_ShortCooldownDriftWarnsAfterWarningFloor(t *testing.T) {
+	now := time.Date(2026, 5, 17, 12, 0, 0, 0, time.UTC)
+	cityPath, cfg := orderFiringTestCity(t)
+	writeOrderFiringTestOrder(t, cityPath, "beads-health", "cooldown", "30s")
+	writeOrderFiringTestEvents(t, cityPath,
+		events.Event{Type: events.ControllerStarted, Ts: now.Add(-10 * time.Minute)},
+		events.Event{Type: events.OrderFired, Subject: "beads-health", Ts: now.Add(-4 * time.Minute)},
 	)
 
 	result := runOrderFiringCurrentTest(t, cfg, cityPath, now)
@@ -148,7 +222,7 @@ func TestOrderFiringCurrent_ShortCooldownDriftWarnsBeforeFloor(t *testing.T) {
 		t.Fatalf("details = %v, want short-cooldown detail", result.Details)
 	}
 	if !strings.Contains(details, "(overdue)") {
-		t.Fatalf("details = %v, want overdue detail", result.Details)
+		t.Fatalf("details = %v, want overdue detail after warning floor", result.Details)
 	}
 }
 
@@ -356,8 +430,16 @@ func writeOrderFiringTestEvents(t *testing.T, cityPath string, evts ...events.Ev
 
 func runOrderFiringCurrentTest(t *testing.T, cfg *config.City, cityPath string, now time.Time) *CheckResult {
 	t.Helper()
+	return runOrderFiringCurrentTestWithLastRun(t, cfg, cityPath, now, nil)
+}
+
+func runOrderFiringCurrentTestWithLastRun(t *testing.T, cfg *config.City, cityPath string, now time.Time, lastRun OrderFiringLastRunFunc) *CheckResult {
+	t.Helper()
 	check := NewOrderFiringCurrentCheck(cfg, cityPath)
 	check.clock = func() time.Time { return now }
+	if lastRun != nil {
+		check.WithLastRunResolver(lastRun)
+	}
 	return check.Run(&CheckContext{CityPath: cityPath})
 }
 

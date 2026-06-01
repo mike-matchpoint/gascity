@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -65,6 +66,7 @@ func buildDSN(cfg Config) string {
 	mysqlCfg.Timeout = 10 * time.Second
 	mysqlCfg.ReadTimeout = 10 * time.Second
 	mysqlCfg.WriteTimeout = 10 * time.Second
+	mysqlCfg.TLSConfig = "false"
 	mysqlCfg.AllowNativePasswords = true
 	return mysqlCfg.FormatDSN()
 }
@@ -138,6 +140,26 @@ func (r *Reader) CountIndexed(ctx context.Context, query beads.ListQuery) (int, 
 	default:
 		return r.countTier(ctx, query, tierIssues)
 	}
+}
+
+// GetIndexed returns a single bead by ID from bounded read-only SQL. It checks
+// both durable issues and ephemeral wisps so the hot read contract matches the
+// foreground bd show surface without shelling out to bd.
+func (r *Reader) GetIndexed(ctx context.Context, id string) (beads.Bead, error) {
+	if r == nil || r.db == nil {
+		return beads.Bead{}, fmt.Errorf("indexed dolt reader unavailable")
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return beads.Bead{}, fmt.Errorf("indexed get: %w", beads.ErrNotFound)
+	}
+	if item, ok, err := r.getTierByID(ctx, id, tierIssues); err != nil || ok {
+		return item, err
+	}
+	if item, ok, err := r.getTierByID(ctx, id, tierWisps); err != nil || ok {
+		return item, err
+	}
+	return beads.Bead{}, fmt.Errorf("getting bead %q: %w", id, beads.ErrNotFound)
 }
 
 func validateSupported(query beads.ListQuery) error {
@@ -292,6 +314,41 @@ func (r *Reader) countTier(ctx context.Context, query beads.ListQuery, tier tier
 	return count, nil
 }
 
+func (r *Reader) getTierByID(ctx context.Context, id string, tier tierSpec) (beads.Bead, bool, error) {
+	if len(tier.depTargetColumns) == 0 {
+		var err error
+		tier, err = r.tierWithDependencyTargetColumns(ctx, tier)
+		if err != nil {
+			return beads.Bead{}, false, err
+		}
+	}
+	sqlText, args := buildGetSQL(tier, id)
+	item, err := scanBead(r.db.QueryRowContext(ctx, sqlText, args...).Scan, tier.ephemeral)
+	if errors.Is(err, sql.ErrNoRows) {
+		return beads.Bead{}, false, nil
+	}
+	if err != nil {
+		return beads.Bead{}, false, fmt.Errorf("indexed get %s: %w", tier.beadTable, err)
+	}
+	labelsByID, err := r.loadLabels(ctx, tier.labelTable, []string{id})
+	if err != nil {
+		return beads.Bead{}, false, err
+	}
+	item.Labels = labelsByID[item.ID]
+	depsByID, err := r.loadDependencies(ctx, tier, []string{id})
+	if err != nil {
+		return beads.Bead{}, false, err
+	}
+	item.Dependencies = depsByID[item.ID]
+	for _, dep := range item.Dependencies {
+		if dep.Type == "parent-child" {
+			item.ParentID = dep.DependsOnID
+			break
+		}
+	}
+	return item, true, nil
+}
+
 func buildWhereSQL(query beads.ListQuery, tier tierSpec) ([]string, []any) {
 	where := []string{}
 	args := []any{}
@@ -390,6 +447,12 @@ func buildListSQL(query beads.ListQuery, tier tierSpec, applyLimit bool) (string
 		args = append(args, query.Limit)
 	}
 	return text, args
+}
+
+func buildGetSQL(tier tierSpec, id string) (string, []any) {
+	text := "SELECT b.id, b.title, b.description, b.status, b.priority, b.issue_type, b.assignee, b.created_at, b.external_ref, b.metadata FROM " +
+		tier.beadTable + " b WHERE b.id = ? LIMIT 1"
+	return text, []any{id}
 }
 
 func buildCountSQL(query beads.ListQuery, tier tierSpec) (string, []any) {

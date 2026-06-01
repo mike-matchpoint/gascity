@@ -40,6 +40,10 @@ type fileFreshness struct {
 	modTime time.Time
 }
 
+type contextLocker interface {
+	LockContext(context.Context) error
+}
+
 func (f fileFreshness) same(other fileFreshness) bool {
 	if !f.known || !other.known {
 		return false
@@ -224,7 +228,10 @@ func (fs *FileStore) RuntimeCreate(ctx context.Context, b Bead, policy WritePoli
 			return Bead{}, degradedWrite(policy, fs.runtimeWriteStoreKey(), "create", WriteOutcomeNotStarted, writeCtx.Err())
 		default:
 		}
-		created, createErr := fs.Create(b)
+		created, createErr := fs.createRuntime(writeCtx, b)
+		if createErr != nil && writeCtx.Err() != nil {
+			return Bead{}, degradedWrite(policy, fs.runtimeWriteStoreKey(), "create", WriteOutcomeAmbiguousTimeout, createErr)
+		}
 		if existing, ok, duplicateErr := runtimeCreateDuplicateResult(fs, b, createErr, policy, fs.runtimeWriteStoreKey()); ok {
 			return existing, duplicateErr
 		}
@@ -246,43 +253,85 @@ func (fs *FileStore) RuntimeGet(ctx context.Context, id string, policy ReadPolic
 		return Bead{}, degradedRead(policy, "get", "file", "", errors.New("nil FileStore"))
 	}
 	policy = normalizeReadPolicy(policy)
-	select {
-	case <-ctxDone(ctx):
-		return Bead{}, degradedRead(policy, "get", "file", "", ctx.Err())
-	default:
+	readCtx, cancel := contextWithReadPolicy(ctx, policy)
+	defer cancel()
+	unlock, err := fs.lockRuntime(readCtx)
+	if err != nil {
+		return Bead{}, degradedRead(policy, "get", "file", "", err)
 	}
-	fs.fmu.Lock()
-	defer fs.fmu.Unlock()
-	if err := fs.locker.Lock(); err != nil {
-		return Bead{}, err
-	}
-	defer fs.locker.Unlock() //nolint:errcheck // best-effort unlock
+	defer unlock()
 	if err := fs.reloadFromDisk(); err != nil {
 		return Bead{}, err
 	}
 	return fs.MemStore.Get(id)
 }
 
-// RuntimeList lists beads under a runtime read policy. FileStore is
-// in-process; it still honors cancellation before entering the filesystem path.
+// RuntimeList lists beads under a runtime read policy after refreshing the
+// in-memory projection from disk under the existing file lock.
 func (fs *FileStore) RuntimeList(ctx context.Context, query ListQuery, policy ReadPolicy) ([]Bead, error) {
 	if fs == nil {
 		return nil, degradedRead(policy, "list", "file", "", errors.New("nil FileStore"))
 	}
 	policy = normalizeReadPolicy(policy)
-	if policy.AllowFallback {
-		return fs.List(query)
-	}
-	select {
-	case <-ctxDone(ctx):
-		return nil, degradedRead(policy, "list", "file", "", ctx.Err())
-	default:
-	}
-	rows, err := fs.List(query)
+	readCtx, cancel := contextWithReadPolicy(ctx, policy)
+	defer cancel()
+	unlock, err := fs.lockRuntime(readCtx)
 	if err != nil {
-		return rows, err
+		return nil, degradedRead(policy, "list", "file", "", err)
+	}
+	defer unlock()
+	if err := fs.reloadFromDisk(); err != nil {
+		return nil, degradedRead(policy, "list", "file", "", err)
+	}
+	rows, err := fs.MemStore.List(query)
+	if err != nil {
+		return nil, degradedRead(policy, "list", "file", "", err)
 	}
 	return enforceRuntimeRowCap(rows, policy, "list", "file")
+}
+
+// RuntimeReady returns ready beads under a runtime read policy after refreshing
+// the file-backed in-memory projection.
+func (fs *FileStore) RuntimeReady(ctx context.Context, query ReadyQuery, policy ReadPolicy) ([]Bead, error) {
+	if fs == nil {
+		return nil, degradedRead(policy, "ready", "file", "", errors.New("nil FileStore"))
+	}
+	policy = normalizeReadPolicy(policy)
+	readCtx, cancel := contextWithReadPolicy(ctx, policy)
+	defer cancel()
+	unlock, err := fs.lockRuntime(readCtx)
+	if err != nil {
+		return nil, degradedRead(policy, "ready", "file", "", err)
+	}
+	defer unlock()
+	if err := fs.reloadFromDisk(); err != nil {
+		return nil, degradedRead(policy, "ready", "file", "", err)
+	}
+	rows, err := fs.MemStore.Ready(query)
+	if err != nil {
+		return nil, degradedRead(policy, "ready", "file", "", err)
+	}
+	return enforceRuntimeRowCap(rows, policy, "ready", "file")
+}
+
+// RuntimeReadyList computes selector-ready rows under a runtime read policy
+// from the refreshed file-backed in-memory projection.
+func (fs *FileStore) RuntimeReadyList(ctx context.Context, query ListQuery, policy ReadPolicy) ([]Bead, error) {
+	if fs == nil {
+		return nil, degradedRead(policy, "ready", "file", "", errors.New("nil FileStore"))
+	}
+	policy = normalizeReadPolicy(policy)
+	readCtx, cancel := contextWithReadPolicy(ctx, policy)
+	defer cancel()
+	unlock, err := fs.lockRuntime(readCtx)
+	if err != nil {
+		return nil, degradedRead(policy, "ready", "file", "", err)
+	}
+	defer unlock()
+	if err := fs.reloadFromDisk(); err != nil {
+		return nil, degradedRead(policy, "ready", "file", "", err)
+	}
+	return fs.MemStore.RuntimeReadyList(ctx, query, policy)
 }
 
 // Update delegates to MemStore.Update and flushes to disk.
@@ -321,7 +370,13 @@ func (fs *FileStore) RuntimeUpdate(ctx context.Context, id string, opts UpdateOp
 		default:
 		}
 		merged, _ := payload.(UpdateOpts)
-		return nil, fs.Update(id, merged)
+		if err := fs.updateRuntime(writeCtx, id, merged); err != nil {
+			if writeCtx.Err() != nil {
+				return nil, degradedWrite(policy, fs.runtimeWriteStoreKey(), "update", WriteOutcomeAmbiguousTimeout, err)
+			}
+			return nil, err
+		}
+		return nil, nil
 	})
 	return err
 }
@@ -458,7 +513,11 @@ func (fs *FileStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata
 			return 0, degradedWrite(policy, fs.runtimeWriteStoreKey(), "close-all", WriteOutcomeNotStarted, writeCtx.Err())
 		default:
 		}
-		return fs.CloseAll(ids, metadata)
+		closed, err := fs.closeAllRuntime(writeCtx, ids, metadata)
+		if err != nil && writeCtx.Err() != nil {
+			return closed, degradedWrite(policy, fs.runtimeWriteStoreKey(), "close-all", WriteOutcomeAmbiguousTimeout, err)
+		}
+		return closed, err
 	})
 	if err != nil {
 		if n, ok := value.(int); ok {
@@ -641,6 +700,115 @@ func (fs *FileStore) runtimeWriteStoreKey() string {
 
 func (fs *FileStore) runtimeWriteManager() *runtimeWriteManager {
 	return runtimeWriteManagerForKey(fs.runtimeWriteStoreKey(), 0)
+}
+
+func (fs *FileStore) lockRuntime(ctx context.Context) (func(), error) {
+	if fs == nil {
+		return nil, errors.New("nil FileStore")
+	}
+	if err := lockMutexContext(ctx, &fs.fmu); err != nil {
+		return nil, err
+	}
+	unlockMutex := true
+	defer func() {
+		if unlockMutex {
+			fs.fmu.Unlock()
+		}
+	}()
+	if locker, ok := fs.locker.(contextLocker); ok {
+		if err := locker.LockContext(ctx); err != nil {
+			return nil, err
+		}
+	} else if err := fs.locker.Lock(); err != nil {
+		return nil, err
+	}
+	unlockMutex = false
+	return func() {
+		_ = fs.locker.Unlock()
+		fs.fmu.Unlock()
+	}, nil
+}
+
+func lockMutexContext(ctx context.Context, mu *sync.Mutex) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if mu.TryLock() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (fs *FileStore) createRuntime(ctx context.Context, b Bead) (Bead, error) {
+	unlock, err := fs.lockRuntime(ctx)
+	if err != nil {
+		return Bead{}, err
+	}
+	defer unlock()
+	if err := fs.reloadFromDisk(); err != nil {
+		return Bead{}, err
+	}
+	snap := fs.snapshotLocked()
+	result, err := fs.MemStore.Create(b)
+	if err != nil {
+		return Bead{}, err
+	}
+	if err := fs.save(); err != nil {
+		fs.restoreFrom(snap.seq, snap.beads, snap.deps)
+		return Bead{}, err
+	}
+	return result, nil
+}
+
+func (fs *FileStore) updateRuntime(ctx context.Context, id string, opts UpdateOpts) error {
+	unlock, err := fs.lockRuntime(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := fs.reloadFromDisk(); err != nil {
+		return err
+	}
+	snap := fs.snapshotLocked()
+	if err := fs.MemStore.Update(id, opts); err != nil {
+		return err
+	}
+	if err := fs.save(); err != nil {
+		fs.restoreFrom(snap.seq, snap.beads, snap.deps)
+		return err
+	}
+	return nil
+}
+
+func (fs *FileStore) closeAllRuntime(ctx context.Context, ids []string, metadata map[string]string) (int, error) {
+	unlock, err := fs.lockRuntime(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
+	if err := fs.reloadFromDisk(); err != nil {
+		return 0, err
+	}
+	snap := fs.snapshotLocked()
+	closed, err := fs.MemStore.CloseAll(ids, metadata)
+	if err != nil {
+		return 0, err
+	}
+	if closed > 0 {
+		if err := fs.save(); err != nil {
+			fs.restoreFrom(snap.seq, snap.beads, snap.deps)
+			return 0, err
+		}
+	}
+	return closed, nil
 }
 
 // DepAdd delegates to MemStore.DepAdd and flushes to disk.

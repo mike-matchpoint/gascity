@@ -39,11 +39,11 @@ const (
 	// doctor/status when GC_BD_TRACE is not explicitly set.
 	RuntimeWriteTraceRelativePath = ".gc/runtime/beads/runtime-write.trace"
 
-	RuntimeWriteReservationBudget       = time.Second
-	RuntimeWriteCursorReservationBudget = time.Second
-	RuntimeWritePostActionBudget        = 2 * time.Second
-	RuntimeWriteAuditRepairBudget       = time.Second
-	RuntimeWriteHotStateBudget          = 5 * time.Second
+	RuntimeWriteReservationBudget       = 10 * time.Second
+	RuntimeWriteCursorReservationBudget = 10 * time.Second
+	RuntimeWritePostActionBudget        = 30 * time.Second
+	RuntimeWriteAuditRepairBudget       = 10 * time.Second
+	RuntimeWriteHotStateBudget          = 10 * time.Second
 	RuntimeWritePingBudget              = time.Second
 	RuntimeWriteQueueWaitBudget         = 3 * time.Second
 
@@ -192,14 +192,58 @@ type RuntimeWriter interface {
 	runtimePinger
 }
 
-// RuntimeCreate executes a create under policy. CachingStore is deliberately
-// unwrapped so hot writes bypass foreground post-write readbacks.
+// RuntimeWriteExecutor exposes the shared bounded runtime-write scheduler to
+// store adapters outside this package. Adapters still own their concrete write
+// operation; the executor owns queueing, collapse, priority, and breaker policy.
+type RuntimeWriteExecutor struct {
+	storeKey string
+	manager  *runtimeWriteManager
+}
+
+// NewRuntimeWriteExecutor returns a shared bounded runtime-write executor for
+// storeKey. Callers should pass the same canonical key used in degraded-write
+// errors and status/doctor summaries.
+func NewRuntimeWriteExecutor(storeKey string) *RuntimeWriteExecutor {
+	storeKey = strings.TrimSpace(storeKey)
+	if storeKey == "" {
+		storeKey = "unknown"
+	}
+	return &RuntimeWriteExecutor{
+		storeKey: storeKey,
+		manager:  runtimeWriteManagerForKey(storeKey, RuntimeWriteQueueWaitBudget),
+	}
+}
+
+// Do runs a runtime write under the executor's queue and breaker policy.
+func (e *RuntimeWriteExecutor) Do(ctx context.Context, policy WritePolicy, op, objectKey string, run func(context.Context) (any, error)) (any, error) {
+	if e == nil || e.manager == nil {
+		return nil, degradedWrite(policy, "", op, WriteOutcomeUnsupported, errors.New("nil runtime write executor"))
+	}
+	return e.manager.do(ctx, policy, op, objectKey, run)
+}
+
+// DoWithPayload runs a collapsible runtime write under the executor's queue and
+// breaker policy. merge is applied to queued, not-yet-started jobs that share a
+// collapse key.
+func (e *RuntimeWriteExecutor) DoWithPayload(ctx context.Context, policy WritePolicy, op, objectKey string, payload any, merge func(existing, incoming any) any, run func(context.Context, any) (any, error)) (any, error) {
+	if e == nil || e.manager == nil {
+		return nil, degradedWrite(policy, "", op, WriteOutcomeUnsupported, errors.New("nil runtime write executor"))
+	}
+	return e.manager.doWithPayload(ctx, policy, op, objectKey, payload, merge, run)
+}
+
+// Stats exposes bounded writer health for stores that compose an executor.
+func (e *RuntimeWriteExecutor) Stats() RuntimeWriteManagerStats {
+	if e == nil || e.manager == nil {
+		return RuntimeWriteManagerStats{}
+	}
+	return e.manager.stats()
+}
+
+// RuntimeCreate executes a create under policy.
 func RuntimeCreate(ctx context.Context, store Store, b Bead, policy WritePolicy) (Bead, error) {
 	if store == nil {
 		return Bead{}, degradedWrite(policy, "", "create", WriteOutcomeUnsupported, errors.New("nil bead store"))
-	}
-	if cache, ok := store.(*CachingStore); ok {
-		store = cache.Backing()
 	}
 	policy = normalizeWritePolicy(policy)
 	if policy.AllowFallback {
@@ -227,14 +271,10 @@ func runtimeCreateDuplicateResult(store Store, b Bead, createErr error, policy W
 		fmt.Errorf("duplicate bead id %q has mismatched reservation metadata", b.ID))
 }
 
-// RuntimeUpdate executes an update under policy, bypassing CachingStore
-// foreground refreshes.
+// RuntimeUpdate executes an update under policy.
 func RuntimeUpdate(ctx context.Context, store Store, id string, opts UpdateOpts, policy WritePolicy) error {
 	if store == nil {
 		return degradedWrite(policy, "", "update", WriteOutcomeUnsupported, errors.New("nil bead store"))
-	}
-	if cache, ok := store.(*CachingStore); ok {
-		store = cache.Backing()
 	}
 	policy = normalizeWritePolicy(policy)
 	if policy.AllowFallback {
@@ -246,14 +286,10 @@ func RuntimeUpdate(ctx context.Context, store Store, id string, opts UpdateOpts,
 	return degradedWrite(policy, "", "update", WriteOutcomeUnsupported, ErrRuntimeWriteUnsupported)
 }
 
-// RuntimeCloseAll executes a batch close under policy, bypassing CachingStore
-// foreground refreshes.
+// RuntimeCloseAll executes a batch close under policy.
 func RuntimeCloseAll(ctx context.Context, store Store, ids []string, metadata map[string]string, policy WritePolicy) (int, error) {
 	if store == nil {
 		return 0, degradedWrite(policy, "", "close-all", WriteOutcomeUnsupported, errors.New("nil bead store"))
-	}
-	if cache, ok := store.(*CachingStore); ok {
-		store = cache.Backing()
 	}
 	policy = normalizeWritePolicy(policy)
 	if policy.AllowFallback {
@@ -269,9 +305,6 @@ func RuntimeCloseAll(ctx context.Context, store Store, ids []string, metadata ma
 func RuntimePing(ctx context.Context, store Store, policy WritePolicy) error {
 	if store == nil {
 		return degradedWrite(policy, "", "ping", WriteOutcomeUnsupported, errors.New("nil bead store"))
-	}
-	if cache, ok := store.(*CachingStore); ok {
-		store = cache.Backing()
 	}
 	policy = normalizeWritePolicy(policy)
 	if policy.AllowFallback {
@@ -738,6 +771,12 @@ func runtimeWriteStoreKey(root, providerName, backendName, envFingerprint string
 	return hex.EncodeToString(sum[:])
 }
 
+// RuntimeStoreKey builds the canonical runtime-writer store key from the store
+// root, provider, backend, and non-secret environment fingerprint.
+func RuntimeStoreKey(root, providerName, backendName, envFingerprint string) string {
+	return runtimeWriteStoreKey(root, providerName, backendName, envFingerprint)
+}
+
 func runtimeWriteCollapseKey(policy WritePolicy, op, objectKey string) string {
 	idempotencyKey := strings.TrimSpace(policy.IdempotencyKey)
 	if idempotencyKey == "" {
@@ -759,6 +798,12 @@ func mergeRuntimeUpdatePayload(existing, incoming any) any {
 	existingOpts, _ := existing.(UpdateOpts)
 	incomingOpts, _ := incoming.(UpdateOpts)
 	return mergeRuntimeUpdateOpts(existingOpts, incomingOpts)
+}
+
+// MergeRuntimeUpdatePayload is the shared coalescing merge function for queued
+// runtime UpdateOpts payloads.
+func MergeRuntimeUpdatePayload(existing, incoming any) any {
+	return mergeRuntimeUpdatePayload(existing, incoming)
 }
 
 func mergeRuntimeUpdateOpts(existing, incoming UpdateOpts) UpdateOpts {

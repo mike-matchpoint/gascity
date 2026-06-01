@@ -995,13 +995,22 @@ func TestBeadsStoreCheck_OpenError(t *testing.T) {
 	}
 }
 
-func TestBeadsStoreCheck_UsesPing(t *testing.T) {
-	// The check should call Ping() to verify accessibility without loading data.
+func TestBeadsStoreCheck_UsesPingAndHydrationProbe(t *testing.T) {
+	// The check should separate cheap reachability from row hydration so doctor
+	// still catches serialization failures without treating them as ping health.
 	pinged := false
+	hydrated := false
 	spy := &spyPingStore{
 		pingFunc: func() error {
 			pinged = true
 			return nil
+		},
+		listFunc: func(query beads.ListQuery) ([]beads.Bead, error) {
+			hydrated = true
+			if !query.AllowScan {
+				t.Fatalf("hydration query = %+v, want AllowScan", query)
+			}
+			return nil, nil
 		},
 	}
 	c := NewBeadsStoreCheck(t.TempDir(), func(_ string) (beads.Store, error) {
@@ -1013,6 +1022,30 @@ func TestBeadsStoreCheck_UsesPing(t *testing.T) {
 	}
 	if !pinged {
 		t.Error("Ping was not called")
+	}
+	if !hydrated {
+		t.Error("hydration probe was not called")
+	}
+}
+
+func TestBeadsStoreCheck_HydrationFailureIsDistinctFromPing(t *testing.T) {
+	spy := &spyPingStore{
+		pingFunc: func() error {
+			return nil
+		},
+		listFunc: func(beads.ListQuery) ([]beads.Bead, error) {
+			return nil, fmt.Errorf("bad row json")
+		},
+	}
+	c := NewBeadsStoreCheck(t.TempDir(), func(_ string) (beads.Store, error) {
+		return spy, nil
+	})
+	r := c.Run(&CheckContext{})
+	if r.Status != StatusError {
+		t.Fatalf("status = %d, want Error; msg = %s", r.Status, r.Message)
+	}
+	if !strings.Contains(r.Message, "store hydration failed") || strings.Contains(r.Message, "store ping failed") {
+		t.Fatalf("message = %q, want distinct hydration failure", r.Message)
 	}
 }
 
@@ -1038,6 +1071,47 @@ func TestBeadsStoreCheck_RuntimePingIsBounded(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("runtime ping was not bounded; elapsed=%s", elapsed)
+	}
+}
+
+func TestBeadsStoreCheck_RuntimeHydrationProbeIsBounded(t *testing.T) {
+	oldTimeout := beadsStoreHydrationTimeout
+	beadsStoreHydrationTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { beadsStoreHydrationTimeout = oldTimeout })
+
+	var sawList bool
+	store := beads.NewBdStore("", nil).WithContextRunner(func(ctx context.Context, _ string, name string, args ...string) ([]byte, error) {
+		if name != "bd" {
+			t.Fatalf("command = %s %v, want bd", name, args)
+		}
+		switch strings.Join(args, " ") {
+		case "ping --json":
+			return []byte(`{"ok":true}`), nil
+		case "list --json --limit 0":
+			sawList = true
+			<-ctx.Done()
+			return nil, ctx.Err()
+		default:
+			t.Fatalf("unexpected bd args: %v", args)
+			return nil, nil
+		}
+	})
+	c := NewBeadsStoreCheck(t.TempDir(), func(_ string) (beads.Store, error) {
+		return store, nil
+	})
+	start := time.Now()
+	r := c.Run(&CheckContext{})
+	if r.Status != StatusError {
+		t.Fatalf("status = %d, want Error; msg = %s", r.Status, r.Message)
+	}
+	if !sawList {
+		t.Fatal("hydration probe did not run bd list")
+	}
+	if !strings.Contains(r.Message, "store hydration failed") {
+		t.Fatalf("message = %q, want hydration failure", r.Message)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("runtime hydration was not bounded; elapsed=%s", elapsed)
 	}
 }
 
@@ -1430,7 +1504,9 @@ func writeDoltRepoMarker(t *testing.T, dir string) {
 // spyPingStore is a minimal Store that records Ping calls.
 type spyPingStore struct {
 	beads.MemStore
-	pingFunc func() error
+	pingFunc    func() error
+	listFunc    func(beads.ListQuery) ([]beads.Bead, error)
+	hydrateFunc func(context.Context, beads.ReadPolicy) (int, error)
 }
 
 func (s *spyPingStore) Ping() error {
@@ -1438,6 +1514,21 @@ func (s *spyPingStore) Ping() error {
 		return s.pingFunc()
 	}
 	return nil
+}
+
+func (s *spyPingStore) List(query beads.ListQuery) ([]beads.Bead, error) {
+	if s.listFunc != nil {
+		return s.listFunc(query)
+	}
+	return s.MemStore.List(query)
+}
+
+func (s *spyPingStore) RuntimeHydrationProbe(ctx context.Context, policy beads.ReadPolicy) (int, error) {
+	if s.hydrateFunc != nil {
+		return s.hydrateFunc(ctx, policy)
+	}
+	rows, err := s.List(beads.ListQuery{AllowScan: true})
+	return len(rows), err
 }
 
 // --- DoltServerCheck ---
@@ -2213,10 +2304,18 @@ func TestRigBeadsCheck_Error(t *testing.T) {
 
 func TestRigBeadsCheck_UsesPing(t *testing.T) {
 	pinged := false
+	hydrated := false
 	spy := &spyPingStore{
 		pingFunc: func() error {
 			pinged = true
 			return nil
+		},
+		listFunc: func(query beads.ListQuery) ([]beads.Bead, error) {
+			hydrated = true
+			if !query.AllowScan {
+				t.Fatalf("hydration query = %+v, want AllowScan", query)
+			}
+			return nil, nil
 		},
 	}
 	rigDir := t.TempDir()
@@ -2229,6 +2328,9 @@ func TestRigBeadsCheck_UsesPing(t *testing.T) {
 	}
 	if !pinged {
 		t.Error("Ping was not called")
+	}
+	if !hydrated {
+		t.Error("hydration probe was not called")
 	}
 }
 

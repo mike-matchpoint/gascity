@@ -80,9 +80,13 @@ func TestCheckTriggerCronEveryMinuteStepMatched(t *testing.T) {
 
 func TestCheckTriggerCronNotMatched(t *testing.T) {
 	a := Order{Name: "cleanup", Trigger: "cron", Schedule: "0 3 * * *"}
-	// 12:00 UTC — should not match.
+	// 12:00 UTC is not a scheduled minute, and the 03:00 scheduled run has
+	// already been recorded.
 	now := time.Date(2026, 2, 27, 12, 0, 0, 0, time.UTC)
-	result := CheckTrigger(a, now, neverRan, nil, nil)
+	lastRun := time.Date(2026, 2, 27, 3, 0, 10, 0, time.UTC)
+	lastRunFn := func(_ string) (time.Time, error) { return lastRun, nil }
+
+	result := CheckTrigger(a, now, lastRunFn, nil, nil)
 	if result.Due {
 		t.Errorf("Due = true, want false (schedule doesn't match 12:00)")
 	}
@@ -97,6 +101,33 @@ func TestCheckTriggerCronAlreadyRunThisMinute(t *testing.T) {
 	result := CheckTrigger(a, now, lastRunFn, nil, nil)
 	if result.Due {
 		t.Errorf("Due = true, want false (already run this minute)")
+	}
+}
+
+func TestCheckTriggerCronCatchesUpMissedSchedule(t *testing.T) {
+	a := Order{Name: "cleanup", Trigger: "cron", Schedule: "0 */4 * * *"}
+	now := time.Date(2026, 5, 31, 23, 35, 0, 0, time.UTC)
+	lastRun := time.Date(2026, 5, 31, 12, 0, 10, 0, time.UTC)
+	lastRunFn := func(_ string) (time.Time, error) { return lastRun, nil }
+
+	result := CheckTrigger(a, now, lastRunFn, nil, nil)
+	if !result.Due {
+		t.Fatalf("Due = false, want true for missed 20:00 schedule; reason=%q", result.Reason)
+	}
+	if !strings.Contains(result.Reason, "2026-05-31T20:00:00Z") {
+		t.Fatalf("Reason = %q, want missed scheduled minute", result.Reason)
+	}
+}
+
+func TestCheckTriggerCronCatchUpAlreadyRecorded(t *testing.T) {
+	a := Order{Name: "cleanup", Trigger: "cron", Schedule: "0 */4 * * *"}
+	now := time.Date(2026, 5, 31, 23, 35, 0, 0, time.UTC)
+	lastRun := time.Date(2026, 5, 31, 20, 1, 0, 0, time.UTC)
+	lastRunFn := func(_ string) (time.Time, error) { return lastRun, nil }
+
+	result := CheckTrigger(a, now, lastRunFn, nil, nil)
+	if result.Due {
+		t.Fatalf("Due = true, want false after recording latest scheduled run; reason=%q", result.Reason)
 	}
 }
 

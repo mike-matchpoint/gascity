@@ -1,6 +1,7 @@
 package beads
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -19,6 +20,31 @@ func (c *CachingStore) Create(b Bead) (Bead, error) {
 		c.recordProblem("refresh bead after create", fmt.Errorf("%s: %w", created.ID, err))
 	}
 
+	c.mu.Lock()
+	c.noteLocalMutationLocked(created.ID)
+	c.beads[created.ID] = cloneBead(created)
+	c.deps[created.ID] = depsFromBeadFields(created)
+	delete(c.dirty, created.ID)
+	delete(c.deletedSeq, created.ID)
+	c.markFreshLocked(time.Now())
+	c.updateStatsLocked()
+	c.mu.Unlock()
+
+	c.notifyChange("bead.created", created)
+	return created, nil
+}
+
+// RuntimeCreate writes through to a runtime-aware backing store and updates
+// the cache without issuing the foreground post-create readback.
+func (c *CachingStore) RuntimeCreate(ctx context.Context, b Bead, policy WritePolicy) (Bead, error) {
+	if c == nil {
+		return Bead{}, degradedWrite(policy, "", "create", WriteOutcomeUnsupported, errors.New("nil CachingStore"))
+	}
+	created, err := RuntimeCreate(ctx, c.backing, b, policy)
+	if err != nil {
+		return created, err
+	}
+	created = completeCreatedBeadFromSeed(created, b, b.Metadata)
 	c.mu.Lock()
 	c.noteLocalMutationLocked(created.ID)
 	c.beads[created.ID] = cloneBead(created)
@@ -70,6 +96,47 @@ func (c *CachingStore) Update(id string, opts UpdateOpts) error {
 	c.mu.Unlock()
 
 	c.notifyChange("bead.updated", fresh)
+	return nil
+}
+
+// RuntimeUpdate writes through to a runtime-aware backing store and applies the
+// successful mutation to cached rows so subsequent hot RuntimeGet calls do not
+// observe stale pre-write state while waiting for event reconciliation.
+func (c *CachingStore) RuntimeUpdate(ctx context.Context, id string, opts UpdateOpts, policy WritePolicy) error {
+	if c == nil {
+		return degradedWrite(policy, "", "update", WriteOutcomeUnsupported, errors.New("nil CachingStore"))
+	}
+	if len(updateOptsArgsForRuntimeCache(opts)) == 0 {
+		return nil
+	}
+	if c.updateMatchesCached(id, opts) {
+		return nil
+	}
+	if err := RuntimeUpdate(ctx, c.backing, id, opts, policy); err != nil {
+		return err
+	}
+
+	var updated Bead
+	found := false
+	c.mu.Lock()
+	c.noteLocalMutationLocked(id)
+	if b, ok := c.beads[id]; ok {
+		updated = applyUpdateOptsToBead(b, opts)
+		c.beads[id] = cloneBead(updated)
+		c.deps[id] = depsFromBeadFields(updated)
+		delete(c.dirty, id)
+		delete(c.deletedSeq, id)
+		found = true
+	} else {
+		c.dirty[id] = struct{}{}
+	}
+	c.markFreshLocked(time.Now())
+	c.updateStatsLocked()
+	c.mu.Unlock()
+
+	if found {
+		c.notifyChange("bead.updated", updated)
+	}
 	return nil
 }
 
@@ -260,6 +327,73 @@ func (c *CachingStore) CloseAll(ids []string, metadata map[string]string) (int, 
 	return n, errors.Join(err, refreshErr)
 }
 
+// RuntimeCloseAll writes through to a runtime-aware backing store and marks
+// cached rows closed without issuing foreground verification reads. Confirmed
+// closes for rows that are not currently cached stay dirty so foreground reads
+// rehydrate the closed row instead of hiding it behind a local tombstone.
+func (c *CachingStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy WritePolicy) (int, error) {
+	if c == nil {
+		return 0, degradedWrite(policy, "", "close-all", WriteOutcomeUnsupported, errors.New("nil CachingStore"))
+	}
+	ids = c.closeAllIDsNeedingBacking(ids)
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	n, err := RuntimeCloseAll(ctx, c.backing, ids, metadata, policy)
+	if err != nil && n == 0 {
+		return n, err
+	}
+	closedCount := len(ids)
+	if n < closedCount {
+		closedCount = n
+	}
+	if closedCount < 0 {
+		closedCount = 0
+	}
+	closedIDs := ids[:closedCount]
+	unconfirmedIDs := ids[closedCount:]
+
+	notifications := make([]cacheNotification, 0, len(closedIDs))
+	now := time.Now()
+	c.mu.Lock()
+	c.noteLocalMutationLocked(ids...)
+	for _, id := range closedIDs {
+		if b, ok := c.beads[id]; ok {
+			previous := b
+			b.Status = "closed"
+			if b.Metadata == nil && len(metadata) > 0 {
+				b.Metadata = make(map[string]string, len(metadata))
+			}
+			for k, v := range metadata {
+				b.Metadata[k] = v
+			}
+			c.beads[id] = cloneBead(b)
+			delete(c.dirty, id)
+			delete(c.deletedSeq, id)
+			delete(c.deps, id)
+			if previous.Status != "closed" {
+				notifications = append(notifications, cacheNotification{
+					eventType: "bead.closed",
+					bead:      cloneBead(b),
+				})
+			}
+			continue
+		}
+		c.dirty[id] = struct{}{}
+		delete(c.deletedSeq, id)
+	}
+	for _, id := range unconfirmedIDs {
+		c.dirty[id] = struct{}{}
+		delete(c.deletedSeq, id)
+	}
+	c.markFreshLocked(now)
+	c.updateStatsLocked()
+	c.mu.Unlock()
+
+	c.notifyChanges(notifications)
+	return n, err
+}
+
 func (c *CachingStore) closeAllIDsNeedingBacking(ids []string) []string {
 	if len(ids) == 0 {
 		return nil
@@ -275,12 +409,47 @@ func (c *CachingStore) closeAllIDsNeedingBacking(ids []string) []string {
 			out = append(out, id)
 			continue
 		}
-		if b, ok := c.beads[id]; ok && b.Status == "closed" {
+		if b, ok := c.trustedCachedBeadLocked(id); ok && b.Status == "closed" {
 			continue
 		}
 		out = append(out, id)
 	}
 	return out
+}
+
+func updateOptsArgsForRuntimeCache(opts UpdateOpts) []string {
+	args := make([]string, 0, 8+len(opts.Metadata)+len(opts.Labels)+len(opts.RemoveLabels))
+	if opts.Title != nil {
+		args = append(args, "title")
+	}
+	if opts.Status != nil {
+		args = append(args, "status")
+	}
+	if opts.Type != nil {
+		args = append(args, "type")
+	}
+	if opts.Priority != nil {
+		args = append(args, "priority")
+	}
+	if opts.Description != nil {
+		args = append(args, "description")
+	}
+	if opts.ParentID != nil {
+		args = append(args, "parent")
+	}
+	if opts.Assignee != nil {
+		args = append(args, "assignee")
+	}
+	for k := range opts.Metadata {
+		args = append(args, "metadata:"+k)
+	}
+	for _, l := range opts.Labels {
+		args = append(args, "label:"+l)
+	}
+	for _, l := range opts.RemoveLabels {
+		args = append(args, "remove-label:"+l)
+	}
+	return args
 }
 
 // SetMetadata sets a single metadata key-value on a bead.
@@ -353,6 +522,14 @@ func (c *CachingStore) SetMetadataBatch(id string, kvs map[string]string) error 
 	c.updateStatsLocked()
 	c.mu.Unlock()
 	return nil
+}
+
+// RuntimePing delegates bounded health checks to the backing runtime writer.
+func (c *CachingStore) RuntimePing(ctx context.Context, policy WritePolicy) error {
+	if c == nil {
+		return degradedWrite(policy, "", "ping", WriteOutcomeUnsupported, errors.New("nil CachingStore"))
+	}
+	return RuntimePing(ctx, c.backing, policy)
 }
 
 // Tx executes fn through the backing store transaction and refreshes touched
@@ -529,7 +706,7 @@ func (c *CachingStore) updateMatchesCached(id string, opts UpdateOpts) bool {
 	if c.state != cacheLive && c.state != cachePartial {
 		return false
 	}
-	b, ok := c.beads[id]
+	b, ok := c.trustedCachedBeadLocked(id)
 	if !ok {
 		return false
 	}
@@ -603,7 +780,7 @@ func (c *CachingStore) closeAlreadyMatchesCached(id string) bool {
 	if c.state != cacheLive && c.state != cachePartial {
 		return false
 	}
-	b, ok := c.beads[id]
+	b, ok := c.trustedCachedBeadLocked(id)
 	if !ok {
 		return false
 	}
@@ -622,7 +799,7 @@ func (c *CachingStore) metadataAlreadyMatchesCached(id string, kvs map[string]st
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	b, ok := c.beads[id]
+	b, ok := c.trustedCachedBeadLocked(id)
 	if !ok {
 		return false
 	}
@@ -643,6 +820,26 @@ func (c *CachingStore) metadataAlreadyMatchesCached(id string, kvs map[string]st
 		}
 	}
 	return true
+}
+
+func (c *CachingStore) trustedCachedBeadLocked(id string) (Bead, bool) {
+	if c == nil || id == "" {
+		return Bead{}, false
+	}
+	if c.state != cacheLive && c.state != cachePartial {
+		return Bead{}, false
+	}
+	if _, dirty := c.dirty[id]; dirty {
+		return Bead{}, false
+	}
+	if _, deleted := c.deletedSeq[id]; deleted {
+		return Bead{}, false
+	}
+	b, ok := c.beads[id]
+	if !ok {
+		return Bead{}, false
+	}
+	return b, true
 }
 
 // DepAdd adds a dependency and updates the cache.

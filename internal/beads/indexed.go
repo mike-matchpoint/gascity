@@ -23,6 +23,12 @@ type IndexedLister interface {
 	ListIndexed(ctx context.Context, query ListQuery) (IndexedListResult, error)
 }
 
+// IndexedGetter is the direct ID lookup companion to IndexedLister. Runtime
+// hot reads use this instead of hydrated bd show fallback when attached.
+type IndexedGetter interface {
+	GetIndexed(ctx context.Context, id string) (Bead, error)
+}
+
 // IndexedCounter is an optional companion to IndexedLister for cheap aggregate
 // counts that do not need the hydrated label/dependency payload from ListIndexed.
 type IndexedCounter interface {

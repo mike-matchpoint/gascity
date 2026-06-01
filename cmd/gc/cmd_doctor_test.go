@@ -3,15 +3,18 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/beads/contract"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/doctor"
+	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/fsys"
 )
 
@@ -75,6 +78,50 @@ func TestDoctorSkipsDoltChecksTreatsExecGcBeadsBdAsBdContract(t *testing.T) {
 	t.Setenv("GC_BEADS", "exec:"+gcBeadsBdScriptPath(cityDir))
 	if doctorSkipsDoltChecks(cityDir) {
 		t.Fatal("doctorSkipsDoltChecks() = true, want false for exec:gc-beads-bd")
+	}
+}
+
+func TestDoctorOrderFiringUsesDurableRuntimeHistory(t *testing.T) {
+	cityDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cityDir, "orders"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityDir, "orders", "mol-dog-reaper.toml"), []byte(`[order]
+exec = "true"
+trigger = "cooldown"
+interval = "30m"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := events.NewFileRecorder(filepath.Join(cityDir, ".gc", "events.jsonl"), io.Discard)
+	if err != nil {
+		t.Fatalf("NewFileRecorder: %v", err)
+	}
+	rec.Record(events.Event{Type: events.ControllerStarted, Ts: time.Now().Add(-2 * time.Hour)})
+	if err := rec.Close(); err != nil {
+		t.Fatalf("close recorder: %v", err)
+	}
+
+	store := beads.NewMemStore()
+	if _, err := store.Create(beads.Bead{
+		Title:  "mol-dog run",
+		Labels: []string{"order-run:mol-dog-reaper"},
+	}); err != nil {
+		t.Fatalf("create order-run bead: %v", err)
+	}
+	cfg := &config.City{}
+	check := newRuntimeOrderFiringCurrentCheck(cfg, cityDir, func(path string) (beads.Store, error) {
+		if path != cityDir {
+			t.Fatalf("store path = %q, want city path %q", path, cityDir)
+		}
+		return store, nil
+	})
+	result := check.Run(&doctor.CheckContext{CityPath: cityDir})
+	if result.Status != doctor.StatusOK {
+		t.Fatalf("status = %v, want OK from durable order-run history; msg=%s details=%v", result.Status, result.Message, result.Details)
+	}
+	if !strings.Contains(strings.Join(result.Details, "\n"), "last fired") {
+		t.Fatalf("details = %v, want durable last fired detail", result.Details)
 	}
 }
 

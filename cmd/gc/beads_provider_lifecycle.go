@@ -1012,11 +1012,11 @@ func waitForBeadsScopeReadyAfterRecovery(scopeRoot, cityPath string, deadline ti
 	for {
 		store, err := openStoreAtForCity(scopeRoot, cityPath)
 		if err == nil {
-			pingErr := store.Ping()
-			if pingErr == nil {
+			readyErr := checkStoreForRuntimeReadiness(store, deadline, "beads.lifecycle.ready")
+			if readyErr == nil {
 				return nil
 			}
-			lastErr = pingErr
+			lastErr = readyErr
 		} else {
 			lastErr = err
 		}

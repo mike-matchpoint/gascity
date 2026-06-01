@@ -241,6 +241,17 @@ func (c *CachingStore) IDPrefix() string {
 	return c.idPrefix
 }
 
+// ExplicitIDPrefix returns the prefix safe for caller-supplied create IDs.
+func (c *CachingStore) ExplicitIDPrefix() string {
+	if c == nil {
+		return ""
+	}
+	if c.idPrefix != "" {
+		return c.idPrefix
+	}
+	return StoreExplicitIDPrefix(c.backing)
+}
+
 func newCachingStore(backing Store, idPrefix string, onChange func(eventType, beadID string, payload json.RawMessage)) *CachingStore {
 	return &CachingStore{
 		backing:     backing,
@@ -474,8 +485,11 @@ func (c *CachingStore) loadActiveSnapshot(query ListQuery) ([]Bead, map[string][
 	query.IncludeClosed = false
 	query.Live = true
 
+	readPolicy := RuntimeReadPolicy(ReadClassHotAuthoritative, "cache.active-snapshot")
+	readPolicy.MaxRows = 0
+
 	if indexed, ok := c.backing.(IndexedLister); ok {
-		ctx, cancel := context.WithTimeout(context.Background(), bdReadCommandTimeout)
+		ctx, cancel := contextWithReadPolicy(context.Background(), readPolicy)
 		defer cancel()
 		result, err := indexed.ListIndexed(ctx, query)
 		if err == nil {
@@ -487,6 +501,39 @@ func (c *CachingStore) loadActiveSnapshot(query ListQuery) ([]Bead, map[string][
 		}
 		if !errors.Is(err, ErrIndexedListUnsupported) {
 			return result.Beads, indexedResultDepMap(result), result.DependencyCoverage, err
+		}
+	}
+
+	if bd, ok := c.backing.(*BdStore); ok && bd.ctxRunner != nil {
+		ctx, cancel := contextWithReadPolicy(context.Background(), readPolicy)
+		defer cancel()
+		all, err := bd.listIssuesContext(ctx, query)
+		if err != nil {
+			return all, nil, false, err
+		}
+		return all, indexedResultDepMap(IndexedListResult{Beads: all}), false, nil
+	}
+
+	if _, isBD := c.backing.(*BdStore); !isBD {
+		if runtimeStore, ok := c.backing.(runtimeLister); ok {
+			ctx, cancel := contextWithReadPolicy(context.Background(), readPolicy)
+			defer cancel()
+			all, err := runtimeStore.RuntimeList(ctx, query, readPolicy)
+			if err != nil {
+				return all, indexedResultDepMap(IndexedListResult{Beads: all}), false, err
+			}
+			if runtimeSnapshotCanFetchDeps(c.backing) {
+				beadMap := make(map[string]Bead, len(all))
+				for _, b := range all {
+					beadMap[b.ID] = cloneBead(b)
+				}
+				depMap, depsComplete, depErr := c.fetchDepsForIDs(beadIDs(beadMap))
+				if depErr != nil {
+					c.recordProblem("active snapshot dep cache", depErr)
+				}
+				return all, depMap, depsComplete && depErr == nil, nil
+			}
+			return all, indexedResultDepMap(IndexedListResult{Beads: all}), false, nil
 		}
 	}
 
@@ -503,6 +550,15 @@ func (c *CachingStore) loadActiveSnapshot(query ListQuery) ([]Bead, map[string][
 		c.recordProblem("active snapshot dep cache", depErr)
 	}
 	return all, depMap, depsComplete && depErr == nil, err
+}
+
+func runtimeSnapshotCanFetchDeps(store Store) bool {
+	switch store.(type) {
+	case *MemStore, *FileStore, *HQStore:
+		return true
+	default:
+		return false
+	}
 }
 
 func indexedResultDepMap(result IndexedListResult) map[string][]Dep {

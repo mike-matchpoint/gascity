@@ -430,6 +430,17 @@ ensure_bd_runtime_custom_types() {
     ensure_bd_runtime_config_value "$db" "types.custom" "$types"
 }
 
+ensure_bd_runtime_allowed_prefix() {
+    local db="$1"
+    local prefix="$2"
+    [ -n "$db" ] || return 0
+    [ -n "$prefix" ] || return 0
+    valid_sql_name "$db" || die "invalid dolt database name: $db"
+    valid_sql_name "$prefix" || die "invalid beads allowed prefix: $prefix"
+
+    server_sql_retry "USE \`$db\`; INSERT INTO config (\`key\`, value) VALUES ('allowed_prefixes', '$prefix') ON DUPLICATE KEY UPDATE value = CASE WHEN INSTR(CONCAT(',', REPLACE(COALESCE(value, ''), ' ', ''), ','), ',$prefix,') > 0 THEN value WHEN TRIM(COALESCE(value, '')) = '' THEN '$prefix' ELSE CONCAT(value, ',', '$prefix') END" >/dev/null || die "failed to add bd runtime allowed_prefixes=$prefix for $db"
+}
+
 ensure_bd_runtime_config_value() {
     local db="$1"
     local key="$2"
@@ -2157,6 +2168,10 @@ op_init() {
                 ensure_types_custom_in_yaml "$dir" "$custom_types"
                 ensure_bd_runtime_custom_types "$dolt_database" "$custom_types"
                 ensure_bd_runtime_issue_prefix "$dolt_database" "$prefix"
+                ensure_bd_runtime_allowed_prefix "$dolt_database" "$prefix"
+                if [ "$prefix" != "gc" ]; then
+                    ensure_bd_runtime_allowed_prefix "$dolt_database" "gc"
+                fi
                 ensure_project_identity "$dir"
                 exit 0
             fi
@@ -2230,6 +2245,10 @@ op_init() {
     # Keep bd's runtime config in sync with GC's canonical prefix. This is
     # compatibility state for raw bd operations, not a second GC authority.
     ensure_bd_runtime_issue_prefix "$dolt_database" "$prefix"
+    ensure_bd_runtime_allowed_prefix "$dolt_database" "$prefix"
+    if [ "$prefix" != "gc" ]; then
+        ensure_bd_runtime_allowed_prefix "$dolt_database" "gc"
+    fi
 
     ensure_project_identity "$dir"
 

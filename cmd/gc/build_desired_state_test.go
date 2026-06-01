@@ -133,6 +133,10 @@ func (s *readyQueryRecordingStore) Ready(query ...beads.ReadyQuery) ([]beads.Bea
 	return s.MemStore.Ready(query...)
 }
 
+func (s *readyQueryRecordingStore) RuntimeReady(_ context.Context, query beads.ReadyQuery, _ beads.ReadPolicy) ([]beads.Bead, error) {
+	return s.Ready(query)
+}
+
 type blockingPoolCreateStore struct {
 	*beads.MemStore
 	alias               string
@@ -286,6 +290,13 @@ func (s *controllerDemandPartialStore) Ready(query ...beads.ReadyQuery) ([]beads
 	return rows, nil
 }
 
+func (s *controllerDemandPartialStore) RuntimeReady(_ context.Context, query beads.ReadyQuery, _ beads.ReadPolicy) ([]beads.Bead, error) {
+	if query == (beads.ReadyQuery{}) {
+		return s.Ready()
+	}
+	return s.Ready(query)
+}
+
 type acpOnlyDesiredStateProvider struct {
 	*runtime.Fake
 }
@@ -332,6 +343,10 @@ func (s *partialAssignedWorkStore) Ready(query ...beads.ReadyQuery) ([]beads.Bea
 		return rows, &beads.PartialResultError{Op: "bd ready", Err: errors.New("skipped corrupt ready bead")}
 	}
 	return rows, nil
+}
+
+func (s *partialAssignedWorkStore) RuntimeReady(_ context.Context, query beads.ReadyQuery, _ beads.ReadPolicy) ([]beads.Bead, error) {
+	return s.Ready(query)
 }
 
 func TestCollectAssignedWorkBeads_IncludesReadyOpenAssignedHandoff(t *testing.T) {

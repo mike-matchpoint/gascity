@@ -1,6 +1,7 @@
 package orders
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -15,6 +16,20 @@ type rowsErrorStore struct {
 }
 
 func (s *rowsErrorStore) List(_ beads.ListQuery) ([]beads.Bead, error) {
+	return s.rows, s.err
+}
+
+type runtimeRowsStore struct {
+	*rowsErrorStore
+	query  beads.ListQuery
+	policy beads.ReadPolicy
+	calls  int
+}
+
+func (s *runtimeRowsStore) RuntimeList(_ context.Context, query beads.ListQuery, policy beads.ReadPolicy) ([]beads.Bead, error) {
+	s.calls++
+	s.query = query
+	s.policy = policy
 	return s.rows, s.err
 }
 
@@ -84,6 +99,58 @@ func TestLastRunFuncForStoreReturnsListError(t *testing.T) {
 	}
 	if !got.IsZero() {
 		t.Fatalf("LastRunFuncForStore() = %s, want zero time on list error", got)
+	}
+}
+
+func TestRuntimeLastRunFuncForStoreUsesBoundedRuntimeList(t *testing.T) {
+	want := time.Date(2026, 5, 15, 7, 0, 0, 0, time.UTC)
+	store := &runtimeRowsStore{rowsErrorStore: &rowsErrorStore{
+		MemStore: beads.NewMemStore(),
+		rows: []beads.Bead{{
+			ID:        "run-1",
+			Title:     "digest",
+			CreatedAt: want,
+			Labels:    []string{"order-run:digest"},
+		}},
+	}}
+
+	got, err := RuntimeLastRunFuncForStore(store, time.Second, "test.runtime-last-run")("digest")
+	if err != nil {
+		t.Fatalf("RuntimeLastRunFuncForStore(): %v", err)
+	}
+	if !got.Equal(want) {
+		t.Fatalf("RuntimeLastRunFuncForStore() = %s, want %s", got, want)
+	}
+	if store.calls != 1 {
+		t.Fatalf("RuntimeList calls = %d, want 1", store.calls)
+	}
+	if store.query.Label != "order-run:digest" || !store.query.IncludeClosed || store.query.Limit != 1 || store.query.TierMode != beads.TierBoth {
+		t.Fatalf("RuntimeList query = %+v, want bounded order-run history query", store.query)
+	}
+	if store.policy.MaxRows != 2 {
+		t.Fatalf("RuntimeList policy MaxRows = %d, want 2 so one returned row is not treated as a row-cap", store.policy.MaxRows)
+	}
+}
+
+func TestRuntimeLastRunFuncForStoreAllowsOneRowWithoutRowCapDegradation(t *testing.T) {
+	store := beads.NewMemStore()
+	created, err := store.Create(beads.Bead{
+		Title:  "order:digest",
+		Labels: []string{"order-run:digest"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(created.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := RuntimeLastRunFuncForStore(store, time.Second, "test.runtime-last-run")("digest")
+	if err != nil {
+		t.Fatalf("RuntimeLastRunFuncForStore(): %v", err)
+	}
+	if !got.Equal(created.CreatedAt) {
+		t.Fatalf("RuntimeLastRunFuncForStore() = %s, want %s", got, created.CreatedAt)
 	}
 }
 

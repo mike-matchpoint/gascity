@@ -1,6 +1,7 @@
 package beads_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/beads/beadstest"
@@ -1208,6 +1210,34 @@ func TestFileStoreListByMetadataRequiresIncludeClosed(t *testing.T) {
 	}
 	if len(got) != 2 {
 		t.Fatalf("ListByMetadata(IncludeClosed) = %d items, want 2", len(got))
+	}
+}
+
+func TestFileStoreRuntimeListHonorsPolicyTimeoutWaitingForFlock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "beads.json")
+	store, err := beads.OpenFileStore(fsys.OSFS{}, path)
+	if err != nil {
+		t.Fatalf("OpenFileStore: %v", err)
+	}
+	if _, err := store.Create(beads.Bead{Title: "blocked"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	lock := beads.NewFileFlock(path + ".lock")
+	if err := lock.Lock(); err != nil {
+		t.Fatalf("hold flock: %v", err)
+	}
+	defer lock.Unlock() //nolint:errcheck
+
+	policy := beads.RuntimeReadPolicy(beads.ReadClassHotAuthoritative, "test.file-runtime-timeout")
+	policy.Timeout = 75 * time.Millisecond
+	start := time.Now()
+	_, err = beads.RuntimeList(context.Background(), store, beads.ListQuery{AllowScan: true}, policy)
+	elapsed := time.Since(start)
+	if !beads.IsDegradedRead(err) {
+		t.Fatalf("RuntimeList err = %v, want degraded read timeout", err)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("RuntimeList elapsed = %s, want bounded by runtime policy", elapsed)
 	}
 }
 

@@ -107,6 +107,10 @@ func orderStoreTargetKey(target execStoreTarget) string {
 	return target.ScopeKind + "\x00" + filepath.Clean(target.ScopeRoot)
 }
 
+func orderRuntimeStoreKeyForTarget(target execStoreTarget) string {
+	return beads.RuntimeStoreKey(target.ScopeRoot, "bd", "bd", "")
+}
+
 func orderExecEnvWithError(cityPath string, cfg *config.City, target execStoreTarget, a orders.Order) ([]string, error) {
 	var env map[string]string
 	var err error

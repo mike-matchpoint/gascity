@@ -1372,7 +1372,7 @@ func defaultScaleCheckCounts(targets []defaultScaleCheckTarget) (map[string]int,
 		if readyErr != nil {
 			errs = append(errs, fmt.Errorf("default scale_check %s templates=%s: Ready(): %w", key, strings.Join(sortedStringSet(group.templates), ","), readyErr))
 			partialTemplates = markScaleCheckPartialSet(partialTemplates, group.templates)
-			if !beads.IsPartialResult(readyErr) {
+			if !beads.HasUsableReadRows(readyErr, len(ready)) {
 				ready = nil
 			}
 		}
@@ -1414,7 +1414,7 @@ func defaultScaleCheckCounts(targets []defaultScaleCheckTarget) (map[string]int,
 		if demandErr != nil {
 			errs = append(errs, fmt.Errorf("default scale_check %s templates=%s: List(%s): %w", key, strings.Join(sortedStringSet(group.templates), ","), poolDemandMetadataKey, demandErr))
 			partialTemplates = markScaleCheckPartialSet(partialTemplates, group.templates)
-			if !beads.IsPartialResult(demandErr) {
+			if !beads.HasUsableReadRows(demandErr, len(demand)) {
 				demand = nil
 			}
 		}
@@ -1498,7 +1498,7 @@ func defaultNamedSessionDemand(targets []defaultScaleCheckTarget, cfg *config.Ci
 		if err != nil {
 			errs = append(errs, fmt.Errorf("default scale_check %s templates=%s: Ready(): %w", key, strings.Join(sortedStringSet(group.templates), ","), err))
 			partialTemplates = markScaleCheckPartialSet(partialTemplates, group.templates)
-			if !beads.IsPartialResult(err) || len(ready) == 0 {
+			if !beads.HasUsableReadRows(err, len(ready)) || len(ready) == 0 {
 				continue
 			}
 		}

@@ -1163,11 +1163,11 @@ func TestEnsureBeadsProvider_execDoesNotReclassifyProviderAfterStart(t *testing.
 		"echo \"$1\" >> \"" + callLog + "\"\n" +
 		"case \"${1:-}\" in\n" +
 		"  start)\n" +
-		"    printf 'started\\n' > \"" + marker + "\"\n" +
+		"    : > \"" + marker + "\"\n" +
 		"    i=0\n" +
 		"    while [ ! -f \"" + release + "\" ]; do\n" +
 		"      i=$((i + 1))\n" +
-		"      [ \"$i\" -le 4000 ] || exit 42\n" +
+		"      [ \"$i\" -le 1000 ] || exit 42\n" +
 		"      sleep 0.01\n" +
 		"    done\n" +
 		"    echo 'signal: terminated' >&2\n" +
@@ -1199,13 +1199,10 @@ func TestEnsureBeadsProvider_execDoesNotReclassifyProviderAfterStart(t *testing.
 
 	releaseErr := make(chan error, 1)
 	go func() {
-		deadline := time.Now().Add(30 * time.Second)
+		deadline := time.Now().Add(5 * time.Second)
 		for {
-			if data, err := os.ReadFile(marker); err == nil && strings.TrimSpace(string(data)) == "started" {
+			if _, err := os.Stat(marker); err == nil {
 				break
-			} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-				releaseErr <- err
-				return
 			}
 			if time.Now().After(deadline) {
 				releaseErr <- fmt.Errorf("provider start marker was not written")
@@ -4589,12 +4586,12 @@ if [ -f %q ]; then
 fi
 count=$((count + 1))
 printf '%%s\n' "$count" > %q
-if [ "$1" = "list" ]; then
+if [ "$1" = "ping" ]; then
   if [ "$count" -eq 1 ]; then
     echo '{"error":"failed to open database: dolt circuit breaker is open: server appears down, failing fast (cooldown 5s)"}' >&2
     exit 1
   fi
-  printf '[]\n'
+  printf '{"status":"ok"}\n'
   exit 0
 fi
 echo "unexpected bd command: $*" >&2
@@ -4618,7 +4615,7 @@ exit 2
 	if err != nil {
 		t.Fatalf("read bd calls: %v", err)
 	}
-	if got := strings.Count(string(calls), "list --json --limit 0"); got < 2 {
+	if got := strings.Count(string(calls), "ping --json"); got < 2 {
 		t.Fatalf("bd ping call count = %d, want at least 2; calls:\n%s", got, string(calls))
 	}
 	ops, err := os.ReadFile(opsFile)
@@ -6355,7 +6352,8 @@ esac
 // TestGcBeadsBdInitFastPathRepairsRuntimeConfigDirectly guards the fix for
 // bd v1.0.3 rejecting DB-backed config writes during the managed fast path
 // after the schema already exists. In that state, the script should repair
-// issue_prefix and types.custom directly without falling back to bd init.
+// issue_prefix, types.custom, and allowed_prefixes directly without falling
+// back to bd init.
 func TestGcBeadsBdInitFastPathRepairsRuntimeConfigDirectly(t *testing.T) {
 	cityPath := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(cityPath, ".gc"), 0o755); err != nil {
@@ -6420,7 +6418,7 @@ esac
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(script, "init", cityPath, "gc", "hq")
+	cmd := exec.Command(script, "init", cityPath, "fe", "hq")
 	cmd.Env = sanitizedBaseEnv(append(gcBeadsBdTestHomeEnv(t),
 		"GC_CITY_PATH="+cityPath,
 		"PATH="+strings.Join([]string{binDir, os.Getenv("PATH")}, string(os.PathListSeparator)),
@@ -6444,8 +6442,10 @@ esac
 	for _, want := range []string{
 		"SELECT 1 FROM config LIMIT 1",
 		"USE `hq`",
-		"VALUES ('issue_prefix', 'gc') ON DUPLICATE KEY UPDATE",
+		"VALUES ('issue_prefix', 'fe') ON DUPLICATE KEY UPDATE",
 		"VALUES ('types.custom', 'molecule,convoy,message,event,gate,merge-request,agent,role,rig,session,spec,convergence,step') ON DUPLICATE KEY UPDATE",
+		"VALUES ('allowed_prefixes', 'fe') ON DUPLICATE KEY UPDATE",
+		"VALUES ('allowed_prefixes', 'gc') ON DUPLICATE KEY UPDATE",
 	} {
 		if !strings.Contains(sqlText, want) {
 			t.Fatalf("dolt SQL log missing %q:\n%s", want, sqlText)
@@ -9948,6 +9948,9 @@ func TestStartBeadsLifecycleManagedDeferredDoesNotRequireRuntimeState(t *testing
 	originalVerifier := verifyManagedDoltDatabaseExistsAfterInit
 	verifyManagedDoltDatabaseExistsAfterInit = func(_, _, _ string) error { return nil }
 	t.Cleanup(func() { verifyManagedDoltDatabaseExistsAfterInit = originalVerifier })
+	originalReadyWait := initAndHookDirWaitForScopeReady
+	initAndHookDirWaitForScopeReady = func(_, _ string, _ time.Time) error { return nil }
+	t.Cleanup(func() { initAndHookDirWaitForScopeReady = originalReadyWait })
 
 	cityPath := t.TempDir()
 	rigPath := filepath.Join(cityPath, "rig")
@@ -9970,8 +9973,11 @@ if [ "$1" = "start" ]; then
 if [ "$1" = "init" ]; then
   mkdir -p "$2/.beads"
 fi
+if [ "$1" = "ping" ]; then
+  exit 0
+fi
 exit 0
-	`, callLog, providerState, providerState, os.Getpid(), port, filepath.Join(cityPath, ".beads", "dolt"))
+		`, callLog, providerState, providerState, os.Getpid(), port, filepath.Join(cityPath, ".beads", "dolt"))
 	script := writeManagedBdTestScript(t, scriptBody)
 	writeExecStoreCityConfig(t, cityPath, "test-city", "", []config.Rig{{Name: "rig", Path: rigPath, Prefix: "rg"}})
 	seedDeferredManagedBeads(cityPath, cityPath, "tc", "hq")

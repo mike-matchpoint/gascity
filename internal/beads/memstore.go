@@ -35,6 +35,11 @@ func NewMemStoreFrom(seq int, existing []Bead, deps []Dep) *MemStore {
 	return &MemStore{seq: seq, beads: b, deps: d}
 }
 
+// IDPrefix returns the default in-memory/file-store bead ID prefix.
+func (m *MemStore) IDPrefix() string {
+	return "gc"
+}
+
 // restoreFrom replaces the in-memory state with the given snapshot.
 // Used by FileStore to roll back mutations when a disk flush fails.
 func (m *MemStore) restoreFrom(seq int, beads []Bead, deps []Dep) {
@@ -137,23 +142,18 @@ func (m *MemStore) RuntimeGet(ctx context.Context, id string, policy ReadPolicy)
 	return m.Get(id)
 }
 
-// RuntimeList lists beads under a runtime read policy. MemStore is in-process,
-// so it can preserve authoritative semantics without a foreground subprocess.
+// RuntimeList lists beads from the in-process store under the hot-read row cap.
 func (m *MemStore) RuntimeList(ctx context.Context, query ListQuery, policy ReadPolicy) ([]Bead, error) {
-	policy = normalizeReadPolicy(policy)
-	if policy.AllowFallback {
-		return m.List(query)
-	}
 	select {
 	case <-ctxDone(ctx):
-		return nil, degradedRead(policy, "list", "memory", "", ctx.Err())
+		return nil, degradedRead(normalizeReadPolicy(policy), "list", "memory", "", ctx.Err())
 	default:
 	}
 	rows, err := m.List(query)
 	if err != nil {
-		return rows, err
+		return nil, degradedRead(normalizeReadPolicy(policy), "list", "memory", "", err)
 	}
-	return enforceRuntimeRowCap(rows, policy, "list", "memory")
+	return enforceRuntimeRowCap(rows, normalizeReadPolicy(policy), "list", "memory")
 }
 
 // RuntimeUpdate updates a bead under a runtime write policy.
@@ -434,6 +434,21 @@ func (m *MemStore) Ready(query ...ReadyQuery) ([]Bead, error) {
 		}
 	}
 	return result, nil
+}
+
+// RuntimeReady returns ready beads from the in-process store under the hot-read
+// row cap.
+func (m *MemStore) RuntimeReady(ctx context.Context, query ReadyQuery, policy ReadPolicy) ([]Bead, error) {
+	select {
+	case <-ctxDone(ctx):
+		return nil, degradedRead(normalizeReadPolicy(policy), "ready", "memory", "", ctx.Err())
+	default:
+	}
+	rows, err := m.Ready(query)
+	if err != nil {
+		return nil, degradedRead(normalizeReadPolicy(policy), "ready", "memory", "", err)
+	}
+	return enforceRuntimeRowCap(rows, normalizeReadPolicy(policy), "ready", "memory")
 }
 
 // Get retrieves a bead by ID. Returns a wrapped ErrNotFound if the ID does

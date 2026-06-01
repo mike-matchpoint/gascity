@@ -22,10 +22,6 @@ type poolSessionCreateIdentity struct {
 	Slot      int
 }
 
-type explicitBeadIDStore interface {
-	IDPrefix() string
-}
-
 func isPoolManagedSessionBead(bead beads.Bead) bool {
 	if isEphemeralSessionBead(bead) {
 		return true
@@ -237,11 +233,7 @@ func createPoolSessionBeadWithAlias(
 }
 
 func poolSessionExplicitBeadID(store beads.Store, instanceToken string) string {
-	prefixStore, ok := store.(explicitBeadIDStore)
-	if !ok {
-		return ""
-	}
-	prefix := strings.TrimSpace(prefixStore.IDPrefix())
+	prefix := beads.StoreExplicitIDPrefix(store)
 	if prefix == "" {
 		return ""
 	}

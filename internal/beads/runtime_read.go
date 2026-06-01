@@ -120,6 +120,20 @@ func IsDegradedRead(err error) bool {
 	return errors.As(err, &degraded)
 }
 
+// HasUsableReadRows reports whether rows returned alongside err may be used as
+// partial visibility while the caller still surfaces the degradation. Legacy bd
+// partial results are usable even when empty; runtime degraded rows are usable
+// only when the store returned at least one row.
+func HasUsableReadRows(err error, rowCount int) bool {
+	if err == nil {
+		return true
+	}
+	if IsPartialResult(err) {
+		return true
+	}
+	return rowCount > 0 && IsDegradedRead(err)
+}
+
 type runtimeLister interface {
 	RuntimeList(context.Context, ListQuery, ReadPolicy) ([]Bead, error)
 }
@@ -138,6 +152,10 @@ type runtimeReadyLister interface {
 
 type runtimeHotFallbackBlocker interface {
 	RuntimeHotFallbackDisabled() bool
+}
+
+type runtimeHydrationProber interface {
+	RuntimeHydrationProbe(context.Context, ReadPolicy) (int, error)
 }
 
 // RuntimeList executes a list query under policy. Foreground/maintenance
@@ -241,6 +259,28 @@ func readyListWithQuery(store Store, query ListQuery) ([]Bead, error) {
 		return nil, err
 	}
 	return readyFromActiveRowsMatchingListQuery(rows, query), nil
+}
+
+// RuntimeHydrationProbe performs an explicit row hydration check under the
+// caller's runtime budget. Bd-backed stores implement this with a bounded
+// `bd list --json --limit 0` so doctor keeps row serialization visibility
+// without turning health checks into unkillable foreground reads.
+func RuntimeHydrationProbe(ctx context.Context, store Store, policy ReadPolicy) (int, error) {
+	if store == nil {
+		return 0, degradedRead(policy, "hydrate", "none", "", errors.New("nil bead store"))
+	}
+	policy = normalizeReadPolicy(policy)
+	if prober, ok := store.(runtimeHydrationProber); ok {
+		return prober.RuntimeHydrationProbe(ctx, policy)
+	}
+	runtimePolicy := policy
+	runtimePolicy.Class = ReadClassHotDegradedOK
+	runtimePolicy.AllowFallback = false
+	if runtimePolicy.MaxRows <= 0 {
+		runtimePolicy.MaxRows = 100000
+	}
+	rows, err := RuntimeList(ctx, store, ListQuery{AllowScan: true}, runtimePolicy)
+	return len(rows), err
 }
 
 func runtimeReadyActiveListQuery(query ListQuery, policy ReadPolicy) ListQuery {

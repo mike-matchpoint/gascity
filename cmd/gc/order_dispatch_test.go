@@ -7507,8 +7507,11 @@ func TestOrderDispatchCachesOpenWorkGateWithinDispatch(t *testing.T) {
 	if !ran {
 		t.Fatal("expected order to dispatch")
 	}
-	if got := store.counts[labelOrderTracking]; got != 1 {
-		t.Fatalf("open tracking label queries = %d, want 1 shared open-work check", got)
+	if got := store.counts[labelOrderTracking]; got != 0 {
+		t.Fatalf("global order-tracking label queries = %d, want 0 with order-scoped open-work reads", got)
+	}
+	if got := store.counts[orderRunLabel("cache-test")]; got == 0 {
+		t.Fatalf("order-scoped open-work queries = %d, want at least one", got)
 	}
 }
 

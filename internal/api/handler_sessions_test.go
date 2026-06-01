@@ -236,13 +236,13 @@ func (s *apiListQueryCaptureStore) List(query beads.ListQuery) ([]beads.Bead, er
 }
 
 type partialPrimeSessionStore struct {
-	*beads.MemStore
+	beads.Store
 	partialRows    []beads.Bead
 	labelListCalls int
 }
 
 func (s *partialPrimeSessionStore) List(query beads.ListQuery) ([]beads.Bead, error) {
-	rows, err := s.MemStore.List(query)
+	rows, err := s.Store.List(query)
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +267,7 @@ func (s *partialPrimeSessionStore) List(query beads.ListQuery) ([]beads.Bead, er
 func TestListSessionBeadsForReadModelFallsBackAfterPartialCachePrime(t *testing.T) {
 	t.Parallel()
 
-	backing := &partialPrimeSessionStore{MemStore: beads.NewMemStore()}
+	backing := &partialPrimeSessionStore{Store: beads.NewMemStore()}
 	// Real session beads carry Type=BeadType + LabelSession. Tests used
 	// to omit Type because the read-model only queried by Label; after
 	// the Type+Label union refactor, IsSessionBeadOrRepairable filters
@@ -310,7 +310,7 @@ func TestListSessionBeadsForReadModelFallsBackAfterPartialCachePrime(t *testing.
 
 func TestHandleSessionListPreservesPartialRows(t *testing.T) {
 	fs := newSessionFakeState(t)
-	store := &partialPrimeSessionStore{MemStore: beads.NewMemStore()}
+	store := &partialPrimeSessionStore{Store: beads.NewMemStore()}
 	fs.cityBeadStore = store
 	srv := New(fs)
 	h := newTestCityHandlerWith(t, fs, srv)
