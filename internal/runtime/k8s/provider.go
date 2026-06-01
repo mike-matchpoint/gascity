@@ -42,31 +42,32 @@ const (
 // Eliminates subprocess overhead by making direct API calls over reused
 // HTTP/2 connections. Pod manifests are compatible with gc-session-k8s.
 type Provider struct {
-	ops                k8sOps
-	namespace          string
-	image              string
-	k8sContext         string
-	managedServiceHost string
-	managedServicePort string
-	cpuRequest         string
-	memRequest         string
-	cpuLimit           string
-	memLimit           string
-	serviceAccount     string              // pod service account name (GC_K8S_SERVICE_ACCOUNT)
-	agentEnv           map[string]string   // default agent pod env (GC_K8S_AGENT_ENV_JSON)
-	prebaked           bool                // skip staging + init container for prebaked images
-	workspacePVC       string              // optional PersistentVolumeClaim for shared pod workspace
-	workspaceRoot      string              // pod mount path for workspacePVC
-	nodeSelector       map[string]string   // GC_K8S_NODE_SELECTOR (JSON)
-	tolerations        []corev1.Toleration // GC_K8S_TOLERATIONS (JSON)
-	affinity           *corev1.Affinity    // GC_K8S_AFFINITY (JSON)
-	priorityClassName  string              // GC_K8S_PRIORITY_CLASS_NAME
-	postStartSettle    time.Duration       // settle time before post-start liveness check
-	stderr             io.Writer           // warning output (default os.Stderr)
-	podCacheTTL        time.Duration
-	podCacheMu         sync.Mutex
-	podCachePods       []corev1.Pod
-	podCacheExpiresAt  time.Time
+	ops                 k8sOps
+	namespace           string
+	image               string
+	k8sContext          string
+	managedServiceHost  string
+	managedServicePort  string
+	cpuRequest          string
+	memRequest          string
+	cpuLimit            string
+	memLimit            string
+	serviceAccount      string              // pod service account name (GC_K8S_SERVICE_ACCOUNT)
+	agentEnv            map[string]string   // default agent pod env (GC_K8S_AGENT_ENV_JSON)
+	prebaked            bool                // skip staging + init container for prebaked images
+	workspacePVC        string              // optional PersistentVolumeClaim for shared pod workspace
+	workspaceRoot       string              // pod mount path for workspacePVC
+	nodeSelector        map[string]string   // GC_K8S_NODE_SELECTOR (JSON)
+	tolerations         []corev1.Toleration // GC_K8S_TOLERATIONS (JSON)
+	affinity            *corev1.Affinity    // GC_K8S_AFFINITY (JSON)
+	priorityClassName   string              // GC_K8S_PRIORITY_CLASS_NAME
+	postStartSettle     time.Duration       // settle time before post-start liveness check
+	stderr              io.Writer           // warning output (default os.Stderr)
+	podCacheTTL         time.Duration
+	stopDeletionTimeout time.Duration
+	podCacheMu          sync.Mutex
+	podCachePods        []corev1.Pod
+	podCacheExpiresAt   time.Time
 }
 
 type schedulingFields struct {
@@ -512,15 +513,30 @@ func (p *Provider) Stop(name string) error {
 
 	pods, err := p.sessionPods(ctx, name, false)
 	if err != nil {
-		return nil // best-effort
+		return fmt.Errorf("listing K8s pods for session %q: %w", name, err)
 	}
+	if len(pods) == 0 {
+		return nil
+	}
+	deletionTimeout := p.stopDeletionTimeout
+	if deletionTimeout <= 0 {
+		deletionTimeout = 30 * time.Second
+	}
+	var errs []error
 	for i := range pods {
-		_ = p.ops.deletePod(ctx, pods[i].Name, 5)
+		podName := pods[i].Name
+		if err := p.ops.deletePod(ctx, podName, 5); err != nil {
+			if !runtime.IsSessionGone(err) {
+				errs = append(errs, fmt.Errorf("deleting K8s pod %q for session %q: %w", podName, name, err))
+			}
+			continue
+		}
+		if err := waitForDeletion(ctx, p.ops, podName, deletionTimeout); err != nil {
+			errs = append(errs, fmt.Errorf("waiting for K8s pod %q deletion for session %q: %w", podName, name, err))
+		}
 	}
-	if len(pods) > 0 {
-		p.invalidatePodCache()
-	}
-	return nil
+	p.invalidatePodCache()
+	return errors.Join(errs...)
 }
 
 // Interrupt sends Ctrl-C to the tmux session inside the pod.
@@ -1162,12 +1178,22 @@ func waitForDeletion(ctx context.Context, ops k8sOps, name string, timeout time.
 		}
 		_, err := ops.getPod(ctx, name)
 		if err != nil {
-			return nil // gone
+			if runtime.IsSessionGone(err) {
+				return nil
+			}
+			return fmt.Errorf("checking pod %q deletion: %w", name, err)
+		}
+		sleep := time.Second
+		if remaining := time.Until(deadline); remaining < sleep {
+			sleep = remaining
+		}
+		if sleep <= 0 {
+			break
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(time.Second):
+		case <-time.After(sleep):
 		}
 	}
 	return fmt.Errorf("pod %s not deleted after %s", name, timeout)

@@ -105,13 +105,14 @@ type fakeK8sOps struct {
 	calls []fakeCall
 
 	// Configurable behaviors.
-	execOutput map[string]string                              // pod+cmd key → stdout
-	execErr    map[string]error                               // pod+cmd key → error
-	execFunc   func(pod string, cmd []string) (string, error) // dynamic override, checked first
-	createErr  error
-	deleteErr  error
-	getErr     error
-	listErr    error
+	execOutput      map[string]string                              // pod+cmd key → stdout
+	execErr         map[string]error                               // pod+cmd key → error
+	execFunc        func(pod string, cmd []string) (string, error) // dynamic override, checked first
+	createErr       error
+	deleteErr       error
+	keepDeletedPods bool
+	getErr          error
+	listErr         error
 }
 
 type fakeCall struct {
@@ -173,6 +174,9 @@ func (f *fakeK8sOps) deletePod(_ context.Context, name string, _ int64) error {
 	f.record("deletePod", name, nil)
 	if f.deleteErr != nil {
 		return f.deleteErr
+	}
+	if f.keepDeletedPods {
+		return nil
 	}
 	delete(f.pods, name)
 	return nil

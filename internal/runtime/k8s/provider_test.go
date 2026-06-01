@@ -483,6 +483,60 @@ func TestStop(t *testing.T) {
 	}
 }
 
+func TestStopReturnsListError(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	fake.listErr = errors.New("api unavailable")
+
+	err := p.Stop("gc-test-agent")
+	if err == nil {
+		t.Fatal("Stop error = nil, want list error")
+	}
+	if !strings.Contains(err.Error(), "listing K8s pods for session") ||
+		!strings.Contains(err.Error(), "api unavailable") {
+		t.Fatalf("Stop error = %q, want list error context", err)
+	}
+}
+
+func TestStopReturnsDeleteError(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+	fake.deleteErr = errors.New("rbac denied")
+
+	err := p.Stop("gc-test-agent")
+	if err == nil {
+		t.Fatal("Stop error = nil, want delete error")
+	}
+	if !strings.Contains(err.Error(), "deleting K8s pod") ||
+		!strings.Contains(err.Error(), "rbac denied") {
+		t.Fatalf("Stop error = %q, want delete error context", err)
+	}
+	if _, exists := fake.pods["gc-test-agent"]; !exists {
+		t.Fatal("pod was removed despite delete error")
+	}
+}
+
+func TestStopReturnsWaitErrorWhenPodRemains(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+	p.stopDeletionTimeout = time.Millisecond
+	addRunningPod(fake, "gc-test-agent", "gc-test-agent")
+	fake.keepDeletedPods = true
+
+	err := p.Stop("gc-test-agent")
+	if err == nil {
+		t.Fatal("Stop error = nil, want deletion wait error")
+	}
+	if !strings.Contains(err.Error(), "waiting for K8s pod") ||
+		!strings.Contains(err.Error(), "not deleted") {
+		t.Fatalf("Stop error = %q, want wait error context", err)
+	}
+	if _, exists := fake.pods["gc-test-agent"]; !exists {
+		t.Fatal("pod should remain when fake delete keeps it")
+	}
+}
+
 func TestStopMatchesLongSessionByAnnotationNotTruncatedLabel(t *testing.T) {
 	fake := newFakeK8sOps()
 	p := newProviderWithOps(fake)
