@@ -6926,14 +6926,15 @@ func TestHandleProviderRuntimeDriftDefersDrainForLiveAssignedWork(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Create(beads.Bead{
+	work, err := store.Create(beads.Bead{
 		Title:    "assigned work",
-		Status:   "in_progress",
 		Assignee: session.ID,
 		Type:     "task",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
+	markTestBeadInProgress(t, store, work.ID)
 	sp := &incompatibleRuntimeObserverProvider{
 		Fake: runtime.NewFake(),
 		compat: runtime.CompatibilityObservation{
@@ -6982,9 +6983,8 @@ func TestHandleProviderRuntimeDriftDrainsWithOnlyPatrolWispAssigned(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Create(beads.Bead{
+	patrol, err := store.Create(beads.Bead{
 		Title:     "mol-worker-patrol",
-		Status:    "in_progress",
 		Assignee:  session.ID,
 		Type:      "molecule",
 		Ref:       "mol-worker-patrol",
@@ -6993,9 +6993,11 @@ func TestHandleProviderRuntimeDriftDrainsWithOnlyPatrolWispAssigned(t *testing.T
 			"formula": "mol-worker-patrol",
 			"gc.kind": "wisp",
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
+	markTestBeadInProgress(t, store, patrol.ID)
 	sp := &incompatibleRuntimeObserverProvider{
 		Fake: runtime.NewFake(),
 		compat: runtime.CompatibilityObservation{
@@ -7045,9 +7047,8 @@ func TestHandleProviderRuntimeDriftDefersDrainWhenPatrolWispAndLiveWorkAssigned(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Create(beads.Bead{
+	patrol, err := store.Create(beads.Bead{
 		Title:     "mol-worker-patrol",
-		Status:    "in_progress",
 		Assignee:  session.ID,
 		Type:      "molecule",
 		Ref:       "mol-worker-patrol",
@@ -7056,17 +7057,20 @@ func TestHandleProviderRuntimeDriftDefersDrainWhenPatrolWispAndLiveWorkAssigned(
 			"formula": "mol-worker-patrol",
 			"gc.kind": "wisp",
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Create(beads.Bead{
+	markTestBeadInProgress(t, store, patrol.ID)
+	work, err := store.Create(beads.Bead{
 		Title:    "assigned work",
-		Status:   "open",
 		Assignee: session.ID,
 		Type:     "task",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
+	markTestBeadInProgress(t, store, work.ID)
 	sp := &incompatibleRuntimeObserverProvider{
 		Fake: runtime.NewFake(),
 		compat: runtime.CompatibilityObservation{
@@ -7100,18 +7104,19 @@ func TestHandleProviderRuntimeDriftDefersDrainWhenPatrolWispAndLiveWorkAssigned(
 
 func TestProviderRuntimeDriftBlockingWorkTreatsPatrolMoleculeAsResumable(t *testing.T) {
 	store := beads.NewMemStore()
-	if _, err := store.Create(beads.Bead{
+	work, err := store.Create(beads.Bead{
 		Title:    "mol-witness-patrol",
-		Status:   "in_progress",
 		Assignee: "rig/gastown.witness",
 		Type:     "molecule",
 		Ref:      "mol-witness-patrol",
 		Metadata: map[string]string{
 			"gc.kind": "wisp",
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
+	markTestBeadInProgress(t, store, work.ID)
 
 	has, err := sessionHasProviderRuntimeDriftBlockingAssignedWorkInStoreByIdentifiers(store, []string{"rig/gastown.witness"})
 	if err != nil {
@@ -7124,15 +7129,16 @@ func TestProviderRuntimeDriftBlockingWorkTreatsPatrolMoleculeAsResumable(t *test
 
 func TestProviderRuntimeDriftBlockingWorkStillBlocksNonPatrolMolecule(t *testing.T) {
 	store := beads.NewMemStore()
-	if _, err := store.Create(beads.Bead{
+	work, err := store.Create(beads.Bead{
 		Title:    "mol-witness-investigation",
-		Status:   "in_progress",
 		Assignee: "rig/gastown.witness",
 		Type:     "molecule",
 		Ref:      "mol-witness-investigation",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
+	markTestBeadInProgress(t, store, work.ID)
 
 	has, err := sessionHasProviderRuntimeDriftBlockingAssignedWorkInStoreByIdentifiers(store, []string{"rig/gastown.witness"})
 	if err != nil {
@@ -7143,10 +7149,31 @@ func TestProviderRuntimeDriftBlockingWorkStillBlocksNonPatrolMolecule(t *testing
 	}
 }
 
-func TestProviderRuntimeDriftBlockingWorkDoesNotIgnorePatrolNamedTask(t *testing.T) {
+func TestProviderRuntimeDriftBlockingWorkStillBlocksInProgressPatrolNamedTask(t *testing.T) {
+	store := beads.NewMemStore()
+	work, err := store.Create(beads.Bead{
+		Title:    "validate patrol handoff",
+		Assignee: "rig/gastown.witness",
+		Type:     "task",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	markTestBeadInProgress(t, store, work.ID)
+
+	has, err := sessionHasProviderRuntimeDriftBlockingAssignedWorkInStoreByIdentifiers(store, []string{"rig/gastown.witness"})
+	if err != nil {
+		t.Fatalf("blocking work check: %v", err)
+	}
+	if !has {
+		t.Fatal("ordinary in-progress task should still block provider runtime drift")
+	}
+}
+
+func TestProviderRuntimeDriftBlockingWorkIgnoresQueuedAssignedTask(t *testing.T) {
 	store := beads.NewMemStore()
 	if _, err := store.Create(beads.Bead{
-		Title:    "validate patrol handoff",
+		Title:    "queued validation",
 		Status:   "open",
 		Assignee: "rig/gastown.witness",
 		Type:     "task",
@@ -7158,8 +7185,42 @@ func TestProviderRuntimeDriftBlockingWorkDoesNotIgnorePatrolNamedTask(t *testing
 	if err != nil {
 		t.Fatalf("blocking work check: %v", err)
 	}
+	if has {
+		t.Fatal("queued assigned work should not pin provider runtime drift")
+	}
+
+	has, err = sessionHasOpenAssignedWorkInStoreByIdentifiers(store, []string{"rig/gastown.witness"})
+	if err != nil {
+		t.Fatalf("generic assigned work check: %v", err)
+	}
 	if !has {
-		t.Fatal("ordinary task should still block provider runtime drift")
+		t.Fatal("generic assigned-work protection should still see queued assigned work")
+	}
+}
+
+func TestProviderRuntimeDriftBlockingWorkIgnoresBlockedAssignedTask(t *testing.T) {
+	store := beads.NewMemStoreFrom(0, []beads.Bead{{
+		ID:       "blocked-work",
+		Title:    "blocked validation",
+		Status:   "blocked",
+		Assignee: "rig/gastown.witness",
+		Type:     "task",
+	}}, nil)
+
+	has, err := sessionHasProviderRuntimeDriftBlockingAssignedWorkInStoreByIdentifiers(store, []string{"rig/gastown.witness"})
+	if err != nil {
+		t.Fatalf("blocking work check: %v", err)
+	}
+	if has {
+		t.Fatal("blocked assigned work should not pin provider runtime drift")
+	}
+}
+
+func markTestBeadInProgress(t *testing.T, store beads.Store, id string) {
+	t.Helper()
+	status := "in_progress"
+	if err := store.Update(id, beads.UpdateOpts{Status: &status}); err != nil {
+		t.Fatalf("mark %s in_progress: %v", id, err)
 	}
 }
 

@@ -2794,9 +2794,11 @@ func sessionHasOpenAssignedWorkForReachableStore(
 }
 
 // sessionHasProviderRuntimeDriftBlockingAssignedWorkForReachableStore uses the
-// same store routing as sessionHasOpenAssignedWorkForReachableStore, but treats
-// assigned patrol wisps as resumable loop state rather than work that should
-// permanently pin an incompatible provider runtime.
+// same store routing as sessionHasOpenAssignedWorkForReachableStore, but only
+// treats in-progress non-resumable work as a reason to pin an incompatible
+// provider runtime. Queued/open work is durable demand; draining and replacing
+// the runtime lets the replacement session resume it. Patrol wisps are resumable
+// loop state and must not permanently pin an old provider image.
 func sessionHasProviderRuntimeDriftBlockingAssignedWorkForReachableStore(
 	cityPath string,
 	cfg *config.City,
@@ -3107,7 +3109,7 @@ func sessionHasOpenAssignedWorkInStoreByIdentifiers(store beads.Store, identifie
 }
 
 func sessionHasProviderRuntimeDriftBlockingAssignedWorkInStoreByIdentifiers(store beads.Store, identifiers []string) (bool, error) {
-	return sessionHasOpenAssignedWorkInStoreByIdentifiersMatching(store, identifiers, func(item beads.Bead) bool {
+	return sessionHasOpenAssignedWorkInStoreByIdentifiersMatchingStatuses(store, identifiers, []string{"in_progress"}, func(item beads.Bead) bool {
 		return !isProviderRuntimeDriftResumablePatrolWork(item)
 	})
 }
@@ -3136,14 +3138,21 @@ func isProviderRuntimeDriftResumablePatrolWork(item beads.Bead) bool {
 }
 
 func sessionHasOpenAssignedWorkInStoreByIdentifiersMatching(store beads.Store, identifiers []string, include func(beads.Bead) bool) (bool, error) {
+	return sessionHasOpenAssignedWorkInStoreByIdentifiersMatchingStatuses(store, identifiers, []string{"open", "in_progress"}, include)
+}
+
+func sessionHasOpenAssignedWorkInStoreByIdentifiersMatchingStatuses(store beads.Store, identifiers []string, statuses []string, include func(beads.Bead) bool) (bool, error) {
 	if store == nil {
 		return false, nil
 	}
 	if include == nil {
 		include = func(beads.Bead) bool { return true }
 	}
+	if len(statuses) == 0 {
+		statuses = []string{"open", "in_progress"}
+	}
 	seen := make(map[string]struct{}, len(identifiers))
-	for _, status := range []string{"open", "in_progress"} {
+	for _, status := range statuses {
 		for _, assignee := range identifiers {
 			if assignee == "" {
 				continue
