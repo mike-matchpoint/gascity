@@ -6965,6 +6965,139 @@ func TestHandleProviderRuntimeDriftDefersDrainForLiveAssignedWork(t *testing.T) 
 	}
 }
 
+func TestHandleProviderRuntimeDriftDrainsWithOnlyPatrolWispAssigned(t *testing.T) {
+	t.Setenv("GC_K8S_RUNTIME_DRIFT_POLICY", "drain-replace")
+	store := beads.NewMemStore()
+	session, err := store.Create(beads.Bead{
+		Title:  "worker-session",
+		Type:   sessionBeadType,
+		Labels: []string{sessionBeadLabel},
+		Metadata: map[string]string{
+			"template":     "worker",
+			"session_name": "worker-1",
+			"state":        "active",
+			sessionpkg.StartedProviderRuntimeHashMetadataKey: "k8s-v1:old",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(beads.Bead{
+		Title:     "mol-worker-patrol",
+		Status:    "in_progress",
+		Assignee:  session.ID,
+		Type:      "molecule",
+		Ref:       "mol-worker-patrol",
+		Ephemeral: true,
+		Metadata: map[string]string{
+			"formula": "mol-worker-patrol",
+			"gc.kind": "wisp",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sp := &incompatibleRuntimeObserverProvider{
+		Fake: runtime.NewFake(),
+		compat: runtime.CompatibilityObservation{
+			Supported:  true,
+			Exists:     true,
+			Running:    true,
+			Alive:      true,
+			Compatible: false,
+			Reason:     "runtime-fingerprint-mismatch",
+			Current:    runtime.ProviderRuntimeIdentity{Fingerprint: "k8s-v1:old", Version: "k8s-v1"},
+			Desired:    runtime.ProviderRuntimeIdentity{Fingerprint: "k8s-v1:new", Version: "k8s-v1"},
+		},
+	}
+	if err := sp.Start(context.Background(), "worker-1", runtime.Config{}); err != nil {
+		t.Fatalf("Start existing session: %v", err)
+	}
+	dt := newDrainTracker()
+	handled := handleProviderRuntimeDrift(
+		"", &config.City{}, sp, store, nil, &session,
+		TemplateParams{TemplateName: "worker", InstanceName: "worker-1"},
+		"worker-1", dt, &clock.Fake{Time: time.Unix(200, 0)}, defaultDrainTimeout, events.Discard,
+		ioDiscard{}, ioDiscard{}, nil,
+	)
+	if !handled {
+		t.Fatal("handleProviderRuntimeDrift returned false, want handled drain")
+	}
+	ds := dt.get(session.ID)
+	if ds == nil || ds.reason != providerRuntimeDriftReason {
+		t.Fatalf("patrol-only assigned work should not pin provider runtime drift, got drain=%#v", ds)
+	}
+}
+
+func TestHandleProviderRuntimeDriftDefersDrainWhenPatrolWispAndLiveWorkAssigned(t *testing.T) {
+	t.Setenv("GC_K8S_RUNTIME_DRIFT_POLICY", "drain-replace")
+	store := beads.NewMemStore()
+	session, err := store.Create(beads.Bead{
+		Title:  "worker-session",
+		Type:   sessionBeadType,
+		Labels: []string{sessionBeadLabel},
+		Metadata: map[string]string{
+			"template":     "worker",
+			"session_name": "worker-1",
+			"state":        "active",
+			sessionpkg.StartedProviderRuntimeHashMetadataKey: "k8s-v1:old",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(beads.Bead{
+		Title:     "mol-worker-patrol",
+		Status:    "in_progress",
+		Assignee:  session.ID,
+		Type:      "molecule",
+		Ref:       "mol-worker-patrol",
+		Ephemeral: true,
+		Metadata: map[string]string{
+			"formula": "mol-worker-patrol",
+			"gc.kind": "wisp",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(beads.Bead{
+		Title:    "assigned work",
+		Status:   "open",
+		Assignee: session.ID,
+		Type:     "task",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sp := &incompatibleRuntimeObserverProvider{
+		Fake: runtime.NewFake(),
+		compat: runtime.CompatibilityObservation{
+			Supported:  true,
+			Exists:     true,
+			Running:    true,
+			Alive:      true,
+			Compatible: false,
+			Reason:     "runtime-fingerprint-mismatch",
+			Current:    runtime.ProviderRuntimeIdentity{Fingerprint: "k8s-v1:old", Version: "k8s-v1"},
+			Desired:    runtime.ProviderRuntimeIdentity{Fingerprint: "k8s-v1:new", Version: "k8s-v1"},
+		},
+	}
+	if err := sp.Start(context.Background(), "worker-1", runtime.Config{}); err != nil {
+		t.Fatalf("Start existing session: %v", err)
+	}
+	dt := newDrainTracker()
+	handled := handleProviderRuntimeDrift(
+		"", &config.City{}, sp, store, nil, &session,
+		TemplateParams{TemplateName: "worker", InstanceName: "worker-1"},
+		"worker-1", dt, &clock.Fake{Time: time.Unix(200, 0)}, defaultDrainTimeout, events.Discard,
+		ioDiscard{}, ioDiscard{}, nil,
+	)
+	if !handled {
+		t.Fatal("handleProviderRuntimeDrift returned false, want handled deferral")
+	}
+	if ds := dt.get(session.ID); ds != nil {
+		t.Fatalf("real assigned work should still defer provider runtime drain, got %#v", ds)
+	}
+}
+
 func TestCommitStartResult_PersistsMCPIdentityForACPStart(t *testing.T) {
 	store := beads.NewMemStore()
 	session, err := store.Create(beads.Bead{

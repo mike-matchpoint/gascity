@@ -2793,6 +2793,40 @@ func sessionHasOpenAssignedWorkForReachableStore(
 	return sessionHasOpenAssignedWorkInStoreByIdentifiers(rigStore, identifiers)
 }
 
+// sessionHasProviderRuntimeDriftBlockingAssignedWorkForReachableStore uses the
+// same store routing as sessionHasOpenAssignedWorkForReachableStore, but treats
+// assigned patrol wisps as resumable loop state rather than work that should
+// permanently pin an incompatible provider runtime.
+func sessionHasProviderRuntimeDriftBlockingAssignedWorkForReachableStore(
+	cityPath string,
+	cfg *config.City,
+	store beads.Store,
+	rigStores map[string]beads.Store,
+	session beads.Bead,
+) (bool, error) {
+	identifiers := sessionAssignmentIdentifiersForConfig(session, cfg)
+	storeRef, ok := assignedWorkStoreRefForSession(cityPath, cfg, session)
+	if !ok {
+		if has, err := sessionHasProviderRuntimeDriftBlockingAssignedWorkInStoreByIdentifiers(store, identifiers); err != nil || has {
+			return has, err
+		}
+		for _, rs := range rigStores {
+			if has, err := sessionHasProviderRuntimeDriftBlockingAssignedWorkInStoreByIdentifiers(rs, identifiers); err != nil || has {
+				return has, err
+			}
+		}
+		return false, nil
+	}
+	if storeRef == "" {
+		return sessionHasProviderRuntimeDriftBlockingAssignedWorkInStoreByIdentifiers(store, identifiers)
+	}
+	rigStore, ok := rigStores[storeRef]
+	if !ok || rigStore == nil {
+		return false, fmt.Errorf("rig store %q unavailable for session %q", storeRef, session.Metadata["session_name"])
+	}
+	return sessionHasProviderRuntimeDriftBlockingAssignedWorkInStoreByIdentifiers(rigStore, identifiers)
+}
+
 func assignedWorkStoreRefForSession(cityPath string, cfg *config.City, session beads.Bead) (string, bool) {
 	if cfg == nil {
 		return "", false
@@ -3067,8 +3101,23 @@ func sessionHasOpenAssignedWorkInStores(store beads.Store, rigStores map[string]
 }
 
 func sessionHasOpenAssignedWorkInStoreByIdentifiers(store beads.Store, identifiers []string) (bool, error) {
+	return sessionHasOpenAssignedWorkInStoreByIdentifiersMatching(store, identifiers, func(beads.Bead) bool {
+		return true
+	})
+}
+
+func sessionHasProviderRuntimeDriftBlockingAssignedWorkInStoreByIdentifiers(store beads.Store, identifiers []string) (bool, error) {
+	return sessionHasOpenAssignedWorkInStoreByIdentifiersMatching(store, identifiers, func(item beads.Bead) bool {
+		return !isPatrolWispWakeCandidate(item)
+	})
+}
+
+func sessionHasOpenAssignedWorkInStoreByIdentifiersMatching(store beads.Store, identifiers []string, include func(beads.Bead) bool) (bool, error) {
 	if store == nil {
 		return false, nil
+	}
+	if include == nil {
+		include = func(beads.Bead) bool { return true }
 	}
 	seen := make(map[string]struct{}, len(identifiers))
 	for _, status := range []string{"open", "in_progress"} {
@@ -3088,6 +3137,9 @@ func sessionHasOpenAssignedWorkInStoreByIdentifiers(store beads.Store, identifie
 			}
 			for _, item := range items {
 				if sessionpkg.IsSessionBeadOrRepairable(item) {
+					continue
+				}
+				if !include(item) {
 					continue
 				}
 				return true, nil
@@ -3433,7 +3485,7 @@ func handleProviderRuntimeDrift(
 		}
 		return true
 	}
-	hasAssignedWork, assignedErr := sessionHasOpenAssignedWorkForReachableStore(cityPath, cfg, store, rigStores, *session)
+	hasAssignedWork, assignedErr := sessionHasProviderRuntimeDriftBlockingAssignedWorkForReachableStore(cityPath, cfg, store, rigStores, *session)
 	if assignedErr != nil {
 		fmt.Fprintf(stderr, "session reconciler: checking assigned work before provider-runtime-drift drain for %s: %v\n", name, assignedErr) //nolint:errcheck
 		return true
