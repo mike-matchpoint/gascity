@@ -89,12 +89,6 @@ var (
 // orders can keep cadence without permanent static throttles.
 var orderDispatchStartupThrottleWindow = 10 * time.Minute
 
-// orderDispatchTrackingWriteBudget is longer than the generic runtime-write
-// default because one due order produces a small write chain: reservation,
-// outcome labels, then close. The per-tick create cap below keeps caller latency
-// bounded without opening a startup or steady-state write storm.
-var orderDispatchTrackingWriteBudget = 5 * time.Second
-
 func orderRunLabel(scopedName string) string {
 	return "order-run:" + scopedName
 }
@@ -897,11 +891,7 @@ func orderTrackingReservationNotStarted(err error) bool {
 }
 
 func orderDispatchTrackingWritePolicy(class beads.WriteClass, caller, idempotencyKey string) beads.WritePolicy {
-	policy := beads.RuntimeWritePolicy(class, caller, idempotencyKey)
-	if class != beads.WriteClassPostActionCritical && policy.Timeout > orderDispatchTrackingWriteBudget {
-		policy.Timeout = orderDispatchTrackingWriteBudget
-	}
-	return policy
+	return beads.RuntimeWritePolicy(class, caller, idempotencyKey)
 }
 
 func (m *memoryOrderDispatcher) controllerStartID() string {

@@ -109,6 +109,8 @@ type delayedOrderTrackingCreateStore struct {
 
 type orderDispatchTestRuntimeStore struct {
 	beads.Store
+
+	timeoutOverride time.Duration
 }
 
 type notStartedOrderTrackingStore struct {
@@ -299,7 +301,7 @@ func (s delayedOrderTrackingCreateStore) Create(b beads.Bead) (beads.Bead, error
 }
 
 func (s orderDispatchTestRuntimeStore) RuntimeCreate(ctx context.Context, b beads.Bead, policy beads.WritePolicy) (beads.Bead, error) {
-	ctx, cancel := orderDispatchTestRuntimeContext(ctx, policy)
+	ctx, cancel := orderDispatchTestRuntimeContext(ctx, policy, s.timeoutOverride)
 	defer cancel()
 	type result struct {
 		bead beads.Bead
@@ -314,7 +316,7 @@ func (s orderDispatchTestRuntimeStore) RuntimeCreate(ctx context.Context, b bead
 	case res := <-done:
 		return res.bead, res.err
 	case <-ctx.Done():
-		return beads.Bead{}, ctx.Err()
+		return beads.Bead{}, orderDispatchTestRuntimeTimeout(policy, "create", ctx.Err())
 	}
 }
 
@@ -373,7 +375,7 @@ func (s *oneCreateThenBackpressuredOrderTrackingStore) sequence() []string {
 }
 
 func (s orderDispatchTestRuntimeStore) RuntimeUpdate(ctx context.Context, id string, opts beads.UpdateOpts, policy beads.WritePolicy) error {
-	ctx, cancel := orderDispatchTestRuntimeContext(ctx, policy)
+	ctx, cancel := orderDispatchTestRuntimeContext(ctx, policy, s.timeoutOverride)
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
@@ -383,12 +385,12 @@ func (s orderDispatchTestRuntimeStore) RuntimeUpdate(ctx context.Context, id str
 	case err := <-done:
 		return err
 	case <-ctx.Done():
-		return ctx.Err()
+		return orderDispatchTestRuntimeTimeout(policy, "update", ctx.Err())
 	}
 }
 
 func (s orderDispatchTestRuntimeStore) RuntimeCloseAll(ctx context.Context, ids []string, metadata map[string]string, policy beads.WritePolicy) (int, error) {
-	ctx, cancel := orderDispatchTestRuntimeContext(ctx, policy)
+	ctx, cancel := orderDispatchTestRuntimeContext(ctx, policy, s.timeoutOverride)
 	defer cancel()
 	type result struct {
 		n   int
@@ -403,12 +405,12 @@ func (s orderDispatchTestRuntimeStore) RuntimeCloseAll(ctx context.Context, ids 
 	case res := <-done:
 		return res.n, res.err
 	case <-ctx.Done():
-		return 0, ctx.Err()
+		return 0, orderDispatchTestRuntimeTimeout(policy, "close-all", ctx.Err())
 	}
 }
 
 func (s orderDispatchTestRuntimeStore) RuntimePing(ctx context.Context, policy beads.WritePolicy) error {
-	ctx, cancel := orderDispatchTestRuntimeContext(ctx, policy)
+	ctx, cancel := orderDispatchTestRuntimeContext(ctx, policy, s.timeoutOverride)
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
@@ -418,13 +420,26 @@ func (s orderDispatchTestRuntimeStore) RuntimePing(ctx context.Context, policy b
 	case err := <-done:
 		return err
 	case <-ctx.Done():
-		return ctx.Err()
+		return orderDispatchTestRuntimeTimeout(policy, "ping", ctx.Err())
 	}
 }
 
-func orderDispatchTestRuntimeContext(ctx context.Context, policy beads.WritePolicy) (context.Context, context.CancelFunc) {
+func orderDispatchTestRuntimeTimeout(policy beads.WritePolicy, op string, err error) error {
+	return &beads.DegradedWriteError{
+		Class:     policy.Class,
+		Caller:    policy.Caller,
+		Operation: op,
+		Outcome:   beads.WriteOutcomeAmbiguousTimeout,
+		Err:       err,
+	}
+}
+
+func orderDispatchTestRuntimeContext(ctx context.Context, policy beads.WritePolicy, timeoutOverride time.Duration) (context.Context, context.CancelFunc) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if timeoutOverride > 0 {
+		return context.WithTimeout(ctx, timeoutOverride)
 	}
 	if policy.Timeout <= 0 {
 		return context.WithCancel(ctx)
@@ -1679,16 +1694,11 @@ func TestOrderDispatchSnapshotManyOrdersDoesNotExhaustSharedStoreBudget(t *testi
 }
 
 func TestOrderDispatchTrackingReservationTimeoutDefersOnlyAffectedOrder(t *testing.T) {
-	oldBudget := orderDispatchTrackingWriteBudget
-	orderDispatchTrackingWriteBudget = 200 * time.Millisecond
-	t.Cleanup(func() {
-		orderDispatchTrackingWriteBudget = oldBudget
-	})
-
+	const runtimeTimeout = 200 * time.Millisecond
 	base := beads.NewMemStore()
 	store := delayedOrderTrackingCreateStore{
 		Store: base,
-		delay: orderDispatchTrackingWriteBudget + 50*time.Millisecond,
+		delay: runtimeTimeout + 50*time.Millisecond,
 	}
 	var rec memRecorder
 	ran := make(map[string]bool)
@@ -1705,7 +1715,7 @@ func TestOrderDispatchTrackingReservationTimeoutDefersOnlyAffectedOrder(t *testi
 	mad := ad.(*memoryOrderDispatcher)
 	mad.storeFn = func(target execStoreTarget) (beads.Store, error) {
 		if strings.Contains(target.ScopeRoot, "slow") {
-			return orderDispatchTestRuntimeStore{Store: store}, nil
+			return orderDispatchTestRuntimeStore{Store: store, timeoutOverride: runtimeTimeout}, nil
 		}
 		return orderDispatchTestRuntimeStore{Store: fastStore}, nil
 	}
@@ -1792,17 +1802,62 @@ func TestOrderDispatchTrackingReservationNotStartedReleasesLocalLease(t *testing
 	}
 }
 
-func TestOrderDispatchTrackingDegradedAllowedStartsWithLocalLease(t *testing.T) {
-	oldBudget := orderDispatchTrackingWriteBudget
-	orderDispatchTrackingWriteBudget = 200 * time.Millisecond
-	t.Cleanup(func() {
-		orderDispatchTrackingWriteBudget = oldBudget
-	})
+func TestOrderDispatchTrackingReservationNotStartedRetriesNextTick(t *testing.T) {
+	base := beads.NewMemStore()
+	notStarted := notStartedOrderTrackingStore{orderDispatchTestRuntimeStore: orderDispatchTestRuntimeStore{Store: base}}
+	runtimeStore := orderDispatchTestRuntimeStore{Store: base}
+	var rec memRecorder
+	ran := false
+	fakeExec := func(_ context.Context, _, _ string, _ []string) ([]byte, error) {
+		ran = true
+		return []byte("ok\n"), nil
+	}
+	ad := buildOrderDispatcherFromListExec([]orders.Order{{
+		Name:     "tracking-required",
+		Trigger:  "cooldown",
+		Interval: "1s",
+		Exec:     "tracking-required",
+	}}, base, nil, fakeExec, &rec)
+	if ad == nil {
+		t.Fatal("expected non-nil dispatcher")
+	}
+	mad := ad.(*memoryOrderDispatcher)
+	mad.storeFn = func(execStoreTarget) (beads.Store, error) {
+		return notStarted, nil
+	}
 
+	now := time.Now().Add(time.Hour)
+	ad.dispatch(context.Background(), t.TempDir(), now)
+	ad.drain(context.Background())
+	if ran {
+		t.Fatal("tracking-required order ran after not-started reservation")
+	}
+	if got := mad.leaseStore.count(); got != 0 {
+		t.Fatalf("local leases after not-started reservation = %d, want 0", got)
+	}
+	if got := len(trackingBeads(t, base, "order-run:tracking-required")); got != 0 {
+		t.Fatalf("tracking beads after not-started reservation = %d, want none", got)
+	}
+
+	mad.storeFn = func(execStoreTarget) (beads.Store, error) {
+		return runtimeStore, nil
+	}
+	ad.dispatch(context.Background(), t.TempDir(), now.Add(2*time.Second))
+	ad.drain(context.Background())
+	if !ran {
+		t.Fatal("tracking-required order did not retry after not-started reservation")
+	}
+	if got := len(trackingBeads(t, base, "order-run:tracking-required")); got != 1 {
+		t.Fatalf("tracking beads after retry = %d, want one", got)
+	}
+}
+
+func TestOrderDispatchTrackingDegradedAllowedStartsWithLocalLease(t *testing.T) {
+	const runtimeTimeout = 200 * time.Millisecond
 	base := beads.NewMemStore()
 	store := delayedOrderTrackingCreateStore{
 		Store: base,
-		delay: orderDispatchTrackingWriteBudget + 50*time.Millisecond,
+		delay: runtimeTimeout + 50*time.Millisecond,
 	}
 	var rec memRecorder
 	ran := false
@@ -1823,6 +1878,10 @@ func TestOrderDispatchTrackingDegradedAllowedStartsWithLocalLease(t *testing.T) 
 	}}, store, nil, fakeExec, &rec)
 	if ad == nil {
 		t.Fatal("expected non-nil dispatcher")
+	}
+	mad := ad.(*memoryOrderDispatcher)
+	mad.storeFn = func(execStoreTarget) (beads.Store, error) {
+		return orderDispatchTestRuntimeStore{Store: store, timeoutOverride: runtimeTimeout}, nil
 	}
 
 	ad.dispatch(context.Background(), t.TempDir(), time.Now().Add(time.Hour))

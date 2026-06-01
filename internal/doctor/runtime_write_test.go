@@ -17,6 +17,7 @@ func TestAnalyzeRuntimeWriteTraceCountsRecentDegradationAndForbiddenCommands(t *
 		runtimeWriteTraceLine(now.Add(-2*time.Minute), "update", "bd:update", "update recent", "failed", "city", "conflict"),
 		runtimeWriteTraceLine(now.Add(-1*time.Minute), "close-all", "bd:close", "close recent", "ambiguous-timeout", "rig", "deadline exceeded"),
 		runtimeWriteTraceLine(now.Add(-45*time.Second), "get", "bd:show", "show missing", "not-found", "city", "not found"),
+		runtimeWriteTraceLine(now.Add(-40*time.Second), "update", "bd:update", "update missing", "not-found", "city", "not found"),
 		runtimeWriteTraceLine(now.Add(-30*time.Second), "ping", "bd:list", "list --json --limit 0", "success", "city", ""),
 		runtimeWriteTraceLine(now.Add(-20*time.Second), "backup-check", "bd:remote", "dolt remote -v", "success", "city", ""),
 	}
@@ -30,10 +31,10 @@ func TestAnalyzeRuntimeWriteTraceCountsRecentDegradationAndForbiddenCommands(t *
 	if err != nil {
 		t.Fatalf("AnalyzeRuntimeWriteTrace: %v", err)
 	}
-	if summary.ScannedLines != 6 {
-		t.Fatalf("ScannedLines = %d, want 6", summary.ScannedLines)
+	if summary.ScannedLines != 7 {
+		t.Fatalf("ScannedLines = %d, want 7", summary.ScannedLines)
 	}
-	if summary.RecentDegraded != 2 || summary.RecentTimeouts != 1 {
+	if summary.RecentDegraded != 3 || summary.RecentTimeouts != 1 {
 		t.Fatalf("recent summary = degraded:%d timeouts:%d", summary.RecentDegraded, summary.RecentTimeouts)
 	}
 	if summary.HotRemoteCommands != 1 {
@@ -42,7 +43,7 @@ func TestAnalyzeRuntimeWriteTraceCountsRecentDegradationAndForbiddenCommands(t *
 	if got := strings.Join(summary.StoreKeys, ","); got != "city,rig" {
 		t.Fatalf("StoreKeys = %q, want city,rig", got)
 	}
-	if summary.Outcomes["success"] != 2 || summary.Outcomes["failed"] != 2 || summary.Outcomes["ambiguous-timeout"] != 1 || summary.Outcomes["not-found"] != 1 {
+	if summary.Outcomes["success"] != 2 || summary.Outcomes["failed"] != 2 || summary.Outcomes["ambiguous-timeout"] != 1 || summary.Outcomes["not-found"] != 2 {
 		t.Fatalf("Outcomes = %+v", summary.Outcomes)
 	}
 	if summary.Healthy() {

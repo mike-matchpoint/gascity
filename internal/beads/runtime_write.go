@@ -51,11 +51,20 @@ const (
 	// can stay open-loop before it admits one bounded recovery probe.
 	RuntimeWriteBreakerRecoveryAfter = 30 * time.Second
 
+	// RuntimeWriteDeadlinePriorityWindow avoids reordering close-deadline jobs
+	// by insignificant clock skew while still letting short-budget reservation
+	// writes run before long-budget post-action work.
+	RuntimeWriteDeadlinePriorityWindow = time.Second
+
 	// RuntimeWriteStartBudgetMax bounds how much of a runtime write's timeout
 	// must remain when the queued job reaches the head of the writer. Starting a
 	// bd subprocess with only a sliver of budget left creates ambiguous outcomes
 	// even when the backing store is healthy.
 	RuntimeWriteStartBudgetMax = 5 * time.Second
+
+	// RuntimeWriteBreakerRecoverySuccesses is the number of consecutive
+	// bounded recovery probes required before normal runtime writes resume.
+	RuntimeWriteBreakerRecoverySuccesses = 3
 )
 
 // RuntimeWriteTracePath returns the default runtime-write trace path under
@@ -434,21 +443,20 @@ type RuntimeWriteClassStats struct {
 type runtimeWriteManager struct {
 	storeKey   string
 	waitBudget time.Duration
-	queue      chan *runtimeWriteJob
-	hotQueue   chan *runtimeWriteJob
 
-	mu                 sync.Mutex
-	pending            map[string]*runtimeWriteJob
-	active             int
-	activeByClass      map[WriteClass]int
-	queuedByClass      map[WriteClass]int
-	queuedTimesByClass map[WriteClass][]time.Time
-	dropped            int64
-	collapsed          int64
-	timeouts           int64
-	failures           int64
-	completed          int64
-	oldest             time.Time
+	mu            sync.Mutex
+	cond          *sync.Cond
+	queues        map[WriteClass][]*runtimeWriteJob
+	queueDepth    int
+	pending       map[string]*runtimeWriteJob
+	active        int
+	activeByClass map[WriteClass]int
+	dropped       int64
+	collapsed     int64
+	timeouts      int64
+	failures      int64
+	completed     int64
+	oldest        time.Time
 
 	breakers map[WriteClass]*runtimeWriteBreaker
 }
@@ -459,10 +467,11 @@ type runtimeWriteFailure struct {
 }
 
 type runtimeWriteBreaker struct {
-	state         RuntimeWriteBreakerState
-	opened        time.Time
-	recoveryProbe bool
-	recent        []runtimeWriteFailure
+	state             RuntimeWriteBreakerState
+	opened            time.Time
+	recoveryProbe     bool
+	recoverySuccesses int
+	recent            []runtimeWriteFailure
 }
 
 type runtimeWriteJob struct {
@@ -471,6 +480,7 @@ type runtimeWriteJob struct {
 	operation   string
 	objectKey   string
 	collapseKey string
+	recovery    bool
 	enqueued    time.Time
 	deadline    time.Time
 	payload     any
@@ -478,7 +488,6 @@ type runtimeWriteJob struct {
 	run         func(context.Context, any) (any, error)
 	waiters     []chan runtimeWriteResult
 	started     bool
-	canceled    bool
 }
 
 type runtimeWriteResult struct {
@@ -488,16 +497,14 @@ type runtimeWriteResult struct {
 
 func newRuntimeWriteManager(storeKey string, waitBudget time.Duration) *runtimeWriteManager {
 	m := &runtimeWriteManager{
-		storeKey:           storeKey,
-		waitBudget:         waitBudget,
-		queue:              make(chan *runtimeWriteJob, RuntimeWriteQueueLimit),
-		hotQueue:           make(chan *runtimeWriteJob, RuntimeWriteQueueLimit),
-		pending:            make(map[string]*runtimeWriteJob),
-		activeByClass:      make(map[WriteClass]int),
-		queuedByClass:      make(map[WriteClass]int),
-		queuedTimesByClass: make(map[WriteClass][]time.Time),
-		breakers:           make(map[WriteClass]*runtimeWriteBreaker),
+		storeKey:      storeKey,
+		waitBudget:    waitBudget,
+		queues:        make(map[WriteClass][]*runtimeWriteJob),
+		pending:       make(map[string]*runtimeWriteJob),
+		activeByClass: make(map[WriteClass]int),
+		breakers:      make(map[WriteClass]*runtimeWriteBreaker),
 	}
+	m.cond = sync.NewCond(&m.mu)
 	go m.loop()
 	return m
 }
@@ -518,7 +525,8 @@ func (m *runtimeWriteManager) doWithPayload(ctx context.Context, policy WritePol
 	}
 	waitCtx, cancel := contextWithRuntimeWriteWaitPolicy(ctx, policy, m.waitBudget)
 	defer cancel()
-	if err := m.admit(policy, op); err != nil {
+	recovery, err := m.admit(policy, op)
+	if err != nil {
 		return nil, err
 	}
 	result := make(chan runtimeWriteResult, 1)
@@ -529,6 +537,7 @@ func (m *runtimeWriteManager) doWithPayload(ctx context.Context, policy WritePol
 		operation:   op,
 		objectKey:   objectKey,
 		collapseKey: collapseKey,
+		recovery:    recovery,
 		enqueued:    time.Now(),
 		payload:     payload,
 		merge:       merge,
@@ -536,16 +545,24 @@ func (m *runtimeWriteManager) doWithPayload(ctx context.Context, policy WritePol
 		waiters:     []chan runtimeWriteResult{result},
 	}
 	job.deadline, _ = waitCtx.Deadline()
+	select {
+	case <-waitCtx.Done():
+		return nil, degradedWrite(policy, m.storeKey, op, WriteOutcomeNotStarted, waitCtx.Err())
+	default:
+	}
+
+	m.mu.Lock()
+	if waitCtx.Err() != nil {
+		m.mu.Unlock()
+		return nil, degradedWrite(policy, m.storeKey, op, WriteOutcomeNotStarted, waitCtx.Err())
+	}
 	if collapseKey != "" {
-		m.mu.Lock()
-		tracked := false
 		if existing := m.pending[collapseKey]; existing != nil {
 			switch {
 			case existing.started:
 				// A started write already captured its payload; make this job the
 				// follow-up merge target so newer updates are not lost or fanned out.
-				m.pending[collapseKey] = job
-				tracked = true
+				// The pending pointer is installed after capacity checks below.
 			case existing.merge != nil:
 				existing.payload = existing.merge(existing.payload, payload)
 				existing.waiters = append(existing.waiters, result)
@@ -559,28 +576,30 @@ func (m *runtimeWriteManager) doWithPayload(ctx context.Context, policy WritePol
 				return m.awaitResult(waitCtx, policy, op, existing, result)
 			}
 		}
-		if collapseKey != "" && !tracked {
-			m.pending[collapseKey] = job
-		}
-		m.mu.Unlock()
 	}
-	queue := m.queue
-	if runtimeWriteUsesHotQueue(policy, op) {
-		queue = m.hotQueue
-	}
-	select {
-	case queue <- job:
-		m.noteEnqueued(job)
-	case <-waitCtx.Done():
-		m.removePending(collapseKey, job)
-		return nil, degradedWrite(policy, m.storeKey, op, WriteOutcomeNotStarted, waitCtx.Err())
-	default:
-		m.mu.Lock()
+	if !m.canEnqueueLocked(job) {
 		m.dropped++
 		m.mu.Unlock()
-		m.removePending(collapseKey, job)
 		return nil, degradedWrite(policy, m.storeKey, op, WriteOutcomeNotStarted, fmt.Errorf("runtime write queue full: %d", RuntimeWriteQueueLimit))
 	}
+	var evicted []*runtimeWriteJob
+	if m.queueDepth >= RuntimeWriteQueueLimit {
+		if evictedJob := m.evictMaintenanceForLocked(job); evictedJob != nil {
+			evicted = append(evicted, evictedJob)
+		}
+	}
+	if m.queueDepth >= RuntimeWriteQueueLimit {
+		m.dropped++
+		m.mu.Unlock()
+		m.finishEvictedJobs(evicted)
+		return nil, degradedWrite(policy, m.storeKey, op, WriteOutcomeNotStarted, fmt.Errorf("runtime write queue full: %d", RuntimeWriteQueueLimit))
+	}
+	if collapseKey != "" {
+		m.pending[collapseKey] = job
+	}
+	m.enqueueLocked(job)
+	m.mu.Unlock()
+	m.finishEvictedJobs(evicted)
 	return m.awaitResult(waitCtx, policy, op, job, result)
 }
 
@@ -627,179 +646,294 @@ func (m *runtimeWriteManager) cancelQueuedWaiter(job *runtimeWriteJob, waiter <-
 		waiters = append(waiters, candidate)
 	}
 	job.waiters = waiters
-	if len(job.waiters) == 0 {
-		job.canceled = true
-		if job.collapseKey != "" && m.pending[job.collapseKey] == job {
-			delete(m.pending, job.collapseKey)
-		}
+	if !removedWaiter || len(job.waiters) > 0 {
+		return false
 	}
-	return removedWaiter
+	if !m.removeQueuedJobLocked(job) {
+		return false
+	}
+	m.dropped++
+	return true
 }
 
-func (m *runtimeWriteManager) admit(policy WritePolicy, op string) error {
+func (m *runtimeWriteManager) admit(policy WritePolicy, op string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now()
 	breaker := m.breakerForClassLocked(policy.Class)
 	switch breaker.state {
 	case RuntimeWriteBreakerClosed:
-		return nil
+		return false, nil
 	case RuntimeWriteBreakerHalfOpen:
-		if policy.Class == WriteClassHotState || op == "ping" {
-			return nil
+		if breaker.recoveryProbe {
+			if policy.Class == WriteClassHotState || op == "ping" {
+				return true, nil
+			}
+			return false, degradedWrite(policy, m.storeKey, op, WriteOutcomeNotStarted, errors.New("runtime write circuit breaker recovery probe in progress"))
 		}
-		return degradedWrite(policy, m.storeKey, op, WriteOutcomeNotStarted, errors.New("runtime write circuit breaker recovery probe in progress"))
+		breaker.recoveryProbe = true
+		return true, nil
 	default:
 		switch {
-		case policy.Class == WriteClassHotState:
-			return nil
 		case op == "ping" && !breaker.recoveryProbe:
 			breaker.state = RuntimeWriteBreakerHalfOpen
 			breaker.recoveryProbe = true
-			return nil
+			return true, nil
+		case policy.Class == WriteClassHotState && !breaker.recoveryProbe:
+			breaker.state = RuntimeWriteBreakerHalfOpen
+			breaker.recoveryProbe = true
+			return true, nil
 		case !breaker.recoveryProbe && !breaker.opened.IsZero() && now.Sub(breaker.opened) >= RuntimeWriteBreakerRecoveryAfter:
 			breaker.state = RuntimeWriteBreakerHalfOpen
 			breaker.recoveryProbe = true
-			return nil
+			return true, nil
 		default:
-			return degradedWrite(policy, m.storeKey, op, WriteOutcomeNotStarted, fmt.Errorf("runtime write circuit breaker open for class %s", policy.Class))
+			return false, degradedWrite(policy, m.storeKey, op, WriteOutcomeNotStarted, fmt.Errorf("runtime write circuit breaker open for class %s", policy.Class))
 		}
 	}
 }
 
-func (m *runtimeWriteManager) removePending(collapseKey string, job *runtimeWriteJob) {
-	if collapseKey == "" || job == nil {
-		return
+func (m *runtimeWriteManager) canEnqueueLocked(job *runtimeWriteJob) bool {
+	if m == nil || job == nil {
+		return false
 	}
-	m.mu.Lock()
-	if m.pending[collapseKey] == job {
-		delete(m.pending, collapseKey)
+	limit := runtimeWriteClassQueueLimit(job.policy.Class)
+	if limit <= 0 {
+		return false
 	}
-	m.mu.Unlock()
+	return len(m.queues[job.policy.Class]) < limit
 }
 
-func (m *runtimeWriteManager) noteEnqueued(job *runtimeWriteJob) {
-	if job == nil {
-		return
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.oldest.IsZero() || job.enqueued.Before(m.oldest) {
-		m.oldest = job.enqueued
-	}
-	class := job.policy.Class
-	m.queuedByClass[class]++
-	m.queuedTimesByClass[class] = append(m.queuedTimesByClass[class], job.enqueued)
-}
-
-func (m *runtimeWriteManager) noteDequeuedLocked(job *runtimeWriteJob) {
+func (m *runtimeWriteManager) enqueueLocked(job *runtimeWriteJob) {
 	if m == nil || job == nil {
 		return
 	}
 	class := job.policy.Class
-	if m.queuedByClass[class] <= 1 {
-		delete(m.queuedByClass, class)
-	} else {
-		m.queuedByClass[class]--
+	m.queues[class] = append(m.queues[class], job)
+	m.queueDepth++
+	if m.oldest.IsZero() || job.enqueued.Before(m.oldest) {
+		m.oldest = job.enqueued
 	}
-	times := m.queuedTimesByClass[class]
-	if len(times) <= 1 {
-		delete(m.queuedTimesByClass, class)
-	} else {
-		m.queuedTimesByClass[class] = times[1:]
-	}
+	m.cond.Signal()
 }
 
-func (m *runtimeWriteManager) loop() {
-	for {
-		if hot := m.nextHotJob(); hot != nil {
-			m.runJob(hot)
-			continue
+func (m *runtimeWriteManager) popNextLocked() *runtimeWriteJob {
+	var best *runtimeWriteJob
+	var bestClass WriteClass
+	bestIndex := -1
+	for class, queue := range m.queues {
+		for i, job := range queue {
+			if job == nil {
+				continue
+			}
+			if best == nil || runtimeWriteJobLess(job, best) {
+				best = job
+				bestClass = class
+				bestIndex = i
+			}
 		}
-		var job *runtimeWriteJob
-		select {
-		case job = <-m.hotQueue:
-		case job = <-m.queue:
-		}
-		m.runJob(job)
 	}
-}
-
-func (m *runtimeWriteManager) nextHotJob() *runtimeWriteJob {
-	select {
-	case job := <-m.hotQueue:
-		return job
-	default:
+	if best == nil || bestIndex < 0 {
 		return nil
 	}
+	queue := m.queues[bestClass]
+	copy(queue[bestIndex:], queue[bestIndex+1:])
+	queue = queue[:len(queue)-1]
+	if len(queue) == 0 {
+		delete(m.queues, bestClass)
+	} else {
+		m.queues[bestClass] = queue
+	}
+	m.queueDepth--
+	m.active++
+	if m.activeByClass == nil {
+		m.activeByClass = make(map[WriteClass]int)
+	}
+	m.activeByClass[best.policy.Class]++
+	if best.collapseKey != "" && m.pending[best.collapseKey] == best {
+		delete(m.pending, best.collapseKey)
+	}
+	m.recomputeOldestLocked()
+	return best
 }
 
-func (m *runtimeWriteManager) runJob(job *runtimeWriteJob) {
-	if job == nil {
-		return
+func runtimeWriteJobLess(a, b *runtimeWriteJob) bool {
+	if a == nil {
+		return false
 	}
-	m.mu.Lock()
-	m.noteDequeuedLocked(job)
-	if job.canceled || len(job.waiters) == 0 {
-		m.dropped++
-		if len(m.queue) == 0 && len(m.hotQueue) == 0 {
-			m.oldest = time.Time{}
+	if b == nil {
+		return true
+	}
+	if !a.deadline.IsZero() || !b.deadline.IsZero() {
+		switch {
+		case a.deadline.IsZero():
+			return false
+		case b.deadline.IsZero():
+			return true
+		case a.deadline.Before(b.deadline.Add(-RuntimeWriteDeadlinePriorityWindow)):
+			return a.deadline.Before(b.deadline)
+		case b.deadline.Before(a.deadline.Add(-RuntimeWriteDeadlinePriorityWindow)):
+			return false
 		}
-		m.mu.Unlock()
+	}
+	aRank := runtimeWriteClassRank(a.policy.Class)
+	bRank := runtimeWriteClassRank(b.policy.Class)
+	if aRank != bRank {
+		return aRank < bRank
+	}
+	if !a.enqueued.Equal(b.enqueued) {
+		return a.enqueued.Before(b.enqueued)
+	}
+	return a.collapseKey < b.collapseKey
+}
+
+func (m *runtimeWriteManager) finishJobLocked(job *runtimeWriteJob) {
+	if m == nil || job == nil {
 		return
 	}
-	if err := runtimeWriteJobStartError(job, time.Now()); err != nil {
-		m.dropped++
+	m.active--
+	if m.activeByClass != nil {
+		class := job.policy.Class
+		if m.activeByClass[class] <= 1 {
+			delete(m.activeByClass, class)
+		} else {
+			m.activeByClass[class]--
+		}
+	}
+	if job.collapseKey != "" && m.pending[job.collapseKey] == job {
+		delete(m.pending, job.collapseKey)
+	}
+	if m.queueDepth == 0 {
+		m.recomputeOldestLocked()
+	}
+}
+
+func (m *runtimeWriteManager) removeQueuedJobLocked(job *runtimeWriteJob) bool {
+	if m == nil || job == nil {
+		return false
+	}
+	queue := m.queues[job.policy.Class]
+	for i, candidate := range queue {
+		if candidate != job {
+			continue
+		}
+		copy(queue[i:], queue[i+1:])
+		queue = queue[:len(queue)-1]
+		if len(queue) == 0 {
+			delete(m.queues, job.policy.Class)
+		} else {
+			m.queues[job.policy.Class] = queue
+		}
+		m.queueDepth--
 		if job.collapseKey != "" && m.pending[job.collapseKey] == job {
 			delete(m.pending, job.collapseKey)
 		}
-		if len(m.queue) == 0 && len(m.hotQueue) == 0 {
-			m.oldest = time.Time{}
+		m.recomputeOldestLocked()
+		return true
+	}
+	return false
+}
+
+func (m *runtimeWriteManager) evictMaintenanceForLocked(incoming *runtimeWriteJob) *runtimeWriteJob {
+	if incoming == nil || runtimeWriteClassRank(incoming.policy.Class) >= runtimeWriteClassRank(WriteClassMaintenance) {
+		return nil
+	}
+	queue := m.queues[WriteClassMaintenance]
+	if len(queue) == 0 {
+		return nil
+	}
+	job := queue[len(queue)-1]
+	queue = queue[:len(queue)-1]
+	if len(queue) == 0 {
+		delete(m.queues, WriteClassMaintenance)
+	} else {
+		m.queues[WriteClassMaintenance] = queue
+	}
+	m.queueDepth--
+	if job.collapseKey != "" && m.pending[job.collapseKey] == job {
+		delete(m.pending, job.collapseKey)
+	}
+	m.recomputeOldestLocked()
+	m.dropped++
+	return job
+}
+
+func (m *runtimeWriteManager) finishEvictedJobs(jobs []*runtimeWriteJob) {
+	for _, job := range jobs {
+		if job == nil {
+			continue
 		}
-		waiters := append([]chan runtimeWriteResult(nil), job.waiters...)
-		m.mu.Unlock()
-		res := runtimeWriteResult{
-			err: degradedWrite(job.policy, m.storeKey, job.operation, WriteOutcomeNotStarted, err),
-		}
-		for _, waiter := range waiters {
+		err := degradedWrite(job.policy, m.storeKey, job.operation, WriteOutcomeNotStarted, errors.New("runtime write queue preempted by higher-priority runtime write"))
+		res := runtimeWriteResult{err: err}
+		for _, waiter := range job.waiters {
 			select {
 			case waiter <- res:
 			default:
 			}
 		}
-		return
 	}
-	m.active++
-	m.activeByClass[job.policy.Class]++
-	m.oldest = time.Now()
-	job.started = true
-	payload := job.payload
-	m.mu.Unlock()
-	runCtx, cancel := contextWithWritePolicy(job.ctx, job.policy)
-	value, err := job.run(runCtx, payload)
-	cancel()
-	res := runtimeWriteResult{value: value, err: err}
-	m.recordResult(job.policy.Class, err)
-	m.mu.Lock()
-	m.active--
-	if m.activeByClass[job.policy.Class] <= 1 {
-		delete(m.activeByClass, job.policy.Class)
-	} else {
-		m.activeByClass[job.policy.Class]--
+}
+
+func (m *runtimeWriteManager) recomputeOldestLocked() {
+	m.oldest = time.Time{}
+	for _, queue := range m.queues {
+		for _, job := range queue {
+			if job == nil {
+				continue
+			}
+			if m.oldest.IsZero() || job.enqueued.Before(m.oldest) {
+				m.oldest = job.enqueued
+			}
+		}
 	}
-	m.completed++
-	if len(m.queue) == 0 && len(m.hotQueue) == 0 {
-		m.oldest = time.Time{}
-	}
-	if job.collapseKey != "" && m.pending[job.collapseKey] == job {
-		delete(m.pending, job.collapseKey)
-	}
-	waiters := append([]chan runtimeWriteResult(nil), job.waiters...)
-	m.mu.Unlock()
-	for _, waiter := range waiters {
-		select {
-		case waiter <- res:
-		default:
+}
+
+func (m *runtimeWriteManager) loop() {
+	for {
+		m.mu.Lock()
+		for m.queueDepth == 0 {
+			m.cond.Wait()
+		}
+		job := m.popNextLocked()
+		if job == nil {
+			m.cond.Wait()
+			m.mu.Unlock()
+			continue
+		}
+		payload := job.payload
+		if err := runtimeWriteJobStartError(job, time.Now()); err != nil {
+			m.finishJobLocked(job)
+			m.dropped++
+			waiters := append([]chan runtimeWriteResult(nil), job.waiters...)
+			m.mu.Unlock()
+			res := runtimeWriteResult{
+				err: degradedWrite(job.policy, m.storeKey, job.operation, WriteOutcomeNotStarted, err),
+			}
+			for _, waiter := range waiters {
+				select {
+				case waiter <- res:
+				default:
+				}
+			}
+			continue
+		}
+		job.started = true
+		m.mu.Unlock()
+		runCtx, cancel := contextWithWritePolicy(job.ctx, job.policy)
+		value, err := job.run(runCtx, payload)
+		cancel()
+		res := runtimeWriteResult{value: value, err: err}
+		m.recordResult(job.policy.Class, job.recovery, err)
+		m.mu.Lock()
+		m.finishJobLocked(job)
+		m.completed++
+		waiters := append([]chan runtimeWriteResult(nil), job.waiters...)
+		m.mu.Unlock()
+		for _, waiter := range waiters {
+			select {
+			case waiter <- res:
+			default:
+			}
 		}
 	}
 }
@@ -839,15 +973,22 @@ func runtimeWriteMinStartBudget(policy WritePolicy) time.Duration {
 	return minStartBudget
 }
 
-func (m *runtimeWriteManager) recordResult(class WriteClass, err error) {
+func (m *runtimeWriteManager) recordResult(class WriteClass, recovery bool, err error) {
 	if err == nil {
 		m.mu.Lock()
-		breaker := m.breakerForClassLocked(class)
-		if breaker.state != RuntimeWriteBreakerClosed {
-			breaker.state = RuntimeWriteBreakerClosed
-			breaker.opened = time.Time{}
+		if recovery {
+			breaker := m.breakerForClassLocked(class)
+			breaker.recoverySuccesses++
 			breaker.recoveryProbe = false
 			breaker.recent = nil
+			if breaker.recoverySuccesses >= RuntimeWriteBreakerRecoverySuccesses {
+				breaker.state = RuntimeWriteBreakerClosed
+				breaker.opened = time.Time{}
+				breaker.recoverySuccesses = 0
+			} else if breaker.state != RuntimeWriteBreakerClosed {
+				breaker.state = RuntimeWriteBreakerOpen
+				breaker.opened = time.Now()
+			}
 		}
 		m.mu.Unlock()
 		return
@@ -860,10 +1001,14 @@ func (m *runtimeWriteManager) recordResult(class WriteClass, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	breaker := m.breakerForClassLocked(class)
-	if breaker.state == RuntimeWriteBreakerHalfOpen {
+	if breaker.state != RuntimeWriteBreakerClosed && !recovery {
+		return
+	}
+	if breaker.state == RuntimeWriteBreakerHalfOpen && recovery {
 		breaker.state = RuntimeWriteBreakerOpen
 		breaker.opened = time.Now()
 		breaker.recoveryProbe = false
+		breaker.recoverySuccesses = 0
 	}
 	if timeout {
 		m.timeouts++
@@ -891,6 +1036,7 @@ func (m *runtimeWriteManager) recordResult(class WriteClass, err error) {
 		breaker.state = RuntimeWriteBreakerOpen
 		breaker.opened = now
 		breaker.recoveryProbe = false
+		breaker.recoverySuccesses = 0
 	}
 }
 
@@ -937,7 +1083,7 @@ func (m *runtimeWriteManager) stats() RuntimeWriteManagerStats {
 	}
 	return RuntimeWriteManagerStats{
 		StoreKey:       m.storeKey,
-		QueueDepth:     len(m.queue) + len(m.hotQueue),
+		QueueDepth:     m.queueDepth,
 		QueueLimit:     RuntimeWriteQueueLimit,
 		Active:         m.active,
 		BreakerState:   m.breakerStateLocked(),
@@ -959,14 +1105,20 @@ func (m *runtimeWriteManager) statsForClass(class WriteClass) RuntimeWriteClassS
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	oldestAge := time.Duration(0)
-	if times := m.queuedTimesByClass[class]; len(times) > 0 && !times[0].IsZero() {
-		oldestAge = time.Since(times[0])
+	for _, job := range m.queues[class] {
+		if job == nil || job.enqueued.IsZero() {
+			continue
+		}
+		age := time.Since(job.enqueued)
+		if oldestAge == 0 || age > oldestAge {
+			oldestAge = age
+		}
 	}
 	breaker := m.breakerForClassLocked(class)
 	return RuntimeWriteClassStats{
 		StoreKey:       m.storeKey,
 		Class:          class,
-		QueueDepth:     m.queuedByClass[class],
+		QueueDepth:     len(m.queues[class]),
 		QueueLimit:     runtimeWriteClassQueueLimit(class),
 		Active:         m.activeByClass[class],
 		BreakerState:   breaker.state,
@@ -1024,12 +1176,36 @@ func runtimeWriteCollapseKey(policy WritePolicy, op, objectKey string) string {
 	}, "\x00")
 }
 
-func runtimeWriteUsesHotQueue(policy WritePolicy, op string) bool {
-	return policy.Class == WriteClassHotState || strings.TrimSpace(op) == "ping"
+func runtimeWriteClassPriority() []WriteClass {
+	return []WriteClass{
+		WriteClassHotState,
+		WriteClassPostActionCritical,
+		WriteClassReservation,
+		WriteClassCursorReservation,
+		WriteClassAuditRepair,
+		WriteClassForegroundAuthoritative,
+		WriteClassMaintenance,
+	}
 }
 
-func runtimeWriteClassQueueLimit(WriteClass) int {
-	return RuntimeWriteQueueLimit
+func runtimeWriteClassRank(class WriteClass) int {
+	for i, candidate := range runtimeWriteClassPriority() {
+		if candidate == class {
+			return i
+		}
+	}
+	return len(runtimeWriteClassPriority())
+}
+
+func runtimeWriteClassQueueLimit(class WriteClass) int {
+	switch class {
+	case WriteClassMaintenance:
+		return RuntimeWriteQueueLimit / 8
+	case WriteClassAuditRepair:
+		return RuntimeWriteQueueLimit / 2
+	default:
+		return RuntimeWriteQueueLimit
+	}
 }
 
 func mergeRuntimeUpdatePayload(existing, incoming any) any {

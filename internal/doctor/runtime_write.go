@@ -75,6 +75,7 @@ func AnalyzeRuntimeWriteTrace(path string, opts RuntimeWriteOptions) (RuntimeWri
 		summary.ScannedLines++
 		fields := parseRuntimeWriteTraceFields(line)
 		ts := runtimeWriteTraceTimestamp(line)
+		op := strings.TrimSpace(fields["op"])
 		outcome := strings.TrimSpace(fields["outcome"])
 		if outcome != "" {
 			outcomes[outcome]++
@@ -87,7 +88,7 @@ func AnalyzeRuntimeWriteTrace(path string, opts RuntimeWriteOptions) (RuntimeWri
 			}
 			summary.markIssue(ts)
 		}
-		if runtimeWriteOutcomeCountsAsDegraded(outcome) && runtimeWriteTraceRecent(ts, recentSince) {
+		if runtimeWriteOutcomeCountsAsDegraded(op, outcome) && runtimeWriteTraceRecent(ts, recentSince) {
 			summary.RecentDegraded++
 			if outcome == string(beads.WriteOutcomeAmbiguousTimeout) {
 				summary.RecentTimeouts++
@@ -108,11 +109,20 @@ func AnalyzeRuntimeWriteTrace(path string, opts RuntimeWriteOptions) (RuntimeWri
 	return summary, nil
 }
 
-func runtimeWriteOutcomeCountsAsDegraded(outcome string) bool {
+func runtimeWriteOutcomeCountsAsDegraded(op, outcome string) bool {
 	outcome = strings.TrimSpace(outcome)
-	return outcome != "" &&
-		outcome != "success" &&
-		outcome != string(beads.WriteOutcomeNotFound)
+	if outcome == "" || outcome == "success" {
+		return false
+	}
+	if outcome != string(beads.WriteOutcomeNotFound) {
+		return true
+	}
+	switch strings.TrimSpace(op) {
+	case "create", "update", "close", "close-all":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *RuntimeWriteSummary) markIssue(ts time.Time) {

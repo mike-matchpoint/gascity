@@ -41,6 +41,21 @@ func TestRuntimeWritePolicyDefaults(t *testing.T) {
 	}
 }
 
+func TestRuntimeWriteClassPriorityMatchesContract(t *testing.T) {
+	want := []WriteClass{
+		WriteClassHotState,
+		WriteClassPostActionCritical,
+		WriteClassReservation,
+		WriteClassCursorReservation,
+		WriteClassAuditRepair,
+		WriteClassForegroundAuthoritative,
+		WriteClassMaintenance,
+	}
+	if got := runtimeWriteClassPriority(); !slices.Equal(got, want) {
+		t.Fatalf("runtimeWriteClassPriority = %v, want %v", got, want)
+	}
+}
+
 func TestBdStoreRuntimeCreateTimeoutReturnsDegradedWithinBudget(t *testing.T) {
 	var runnerCalls atomic.Int64
 	store := NewBdStore(t.TempDir(), func(string, string, ...string) ([]byte, error) {
@@ -441,6 +456,95 @@ func TestBdStoreRuntimeWriterPrioritizesHotState(t *testing.T) {
 	}
 }
 
+func TestBdStoreRuntimeWritePrioritizesReservationAheadOfPostActionWhenDeadlineSooner(t *testing.T) {
+	holdStarted := make(chan struct{})
+	releaseHold := make(chan struct{})
+	var holdOnce sync.Once
+	var mu sync.Mutex
+	var sequence []string
+	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(ctx context.Context, _ string, _ string, args ...string) ([]byte, error) {
+		if len(args) >= 3 && args[0] == "update" && args[2] == "gc-hold" {
+			holdOnce.Do(func() { close(holdStarted) })
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-releaseHold:
+				return []byte(`[]`), nil
+			}
+		}
+		mu.Lock()
+		switch {
+		case len(args) > 0 && args[0] == "create":
+			sequence = append(sequence, "reservation")
+		case len(args) >= 3 && args[0] == "update" && args[2] == "gc-order-post-action-priority":
+			sequence = append(sequence, "post-action")
+		default:
+			sequence = append(sequence, strings.Join(args, " "))
+		}
+		mu.Unlock()
+		if len(args) > 0 && args[0] == "create" {
+			return []byte(`{"id":"gc-order-reservation","title":"reservation","status":"open","created_at":"2026-05-31T00:00:00Z"}`), nil
+		}
+		return []byte(`[]`), nil
+	})
+
+	holdErr := make(chan error, 1)
+	holdPolicy := RuntimeWritePolicy(WriteClassAuditRepair, "test.priority-hold", "hold")
+	holdPolicy.Timeout = 5 * time.Second
+	go func() {
+		holdErr <- store.RuntimeUpdate(context.Background(), "gc-hold", UpdateOpts{Metadata: map[string]string{"hold": "true"}}, holdPolicy)
+	}()
+	<-holdStarted
+
+	postActionErr := make(chan error, 1)
+	go func() {
+		policy := RuntimeWritePolicy(WriteClassPostActionCritical, "test.priority-post-action", "post-action")
+		postActionErr <- store.RuntimeUpdate(context.Background(), "gc-order-post-action-priority", UpdateOpts{Metadata: map[string]string{"post": "true"}}, policy)
+	}()
+	waitForRuntimeWriteQueueDepth(t, store, 1)
+
+	const reservations = 3
+	reservationErrs := make(chan error, reservations)
+	for i := 0; i < reservations; i++ {
+		i := i
+		go func() {
+			policy := RuntimeWritePolicy(WriteClassReservation, "test.priority-reservation", fmt.Sprintf("reservation-%d", i))
+			_, err := store.RuntimeCreate(context.Background(), Bead{ID: fmt.Sprintf("gc-order-reservation-%d", i), Title: "reservation"}, policy)
+			reservationErrs <- err
+		}()
+	}
+	waitForRuntimeWriteQueueDepth(t, store, reservations+1)
+	close(releaseHold)
+	if err := <-holdErr; err != nil {
+		t.Fatalf("hold RuntimeUpdate: %v", err)
+	}
+	if err := <-postActionErr; err != nil {
+		t.Fatalf("post-action RuntimeUpdate: %v", err)
+	}
+	for i := 0; i < reservations; i++ {
+		if err := <-reservationErrs; err != nil {
+			t.Fatalf("reservation RuntimeCreate(%d): %v", i, err)
+		}
+	}
+
+	mu.Lock()
+	got := append([]string(nil), sequence...)
+	mu.Unlock()
+	postActionIndex := slices.Index(got, "post-action")
+	lastReservationIndex := -1
+	for i, entry := range got {
+		if entry == "reservation" {
+			lastReservationIndex = i
+		}
+	}
+	if lastReservationIndex < 0 || postActionIndex < 0 {
+		t.Fatalf("sequence missing reservation/post-action: %v", got)
+	}
+	if postActionIndex < lastReservationIndex {
+		t.Fatalf("post-action ran before reservation batch drained; sequence=%v", got)
+	}
+}
+
 func TestBdStoreRuntimeWriteExecutionBudgetStartsWhenDequeued(t *testing.T) {
 	holdStarted := make(chan struct{})
 	releaseHold := make(chan struct{})
@@ -757,16 +861,22 @@ func TestBdStoreRuntimeWriteOpenBreakerAdmitsTimedRecoveryProbe(t *testing.T) {
 	})
 	openRuntimeWriteBreakerWithTimeouts(t, store, WriteClassReservation, "test.breaker")
 
-	manager := store.runtimeWriteManager()
-	manager.mu.Lock()
-	manager.breakerForClassLocked(WriteClassReservation).opened = time.Now().Add(-RuntimeWriteBreakerRecoveryAfter - time.Second)
-	manager.mu.Unlock()
 	fail.Store(false)
 
-	policy := RuntimeWritePolicy(WriteClassReservation, "test.recover-probe", "probe")
-	policy.Timeout = time.Second
-	if _, err := store.RuntimeCreate(context.Background(), Bead{ID: "gc-order-probe", Title: "probe"}, policy); err != nil {
-		t.Fatalf("RuntimeCreate recovery probe: %v", err)
+	manager := store.runtimeWriteManager()
+	for i := 0; i < RuntimeWriteBreakerRecoverySuccesses; i++ {
+		manager.mu.Lock()
+		manager.breakerForClassLocked(WriteClassReservation).opened = time.Now().Add(-RuntimeWriteBreakerRecoveryAfter - time.Second)
+		manager.mu.Unlock()
+
+		policy := RuntimeWritePolicy(WriteClassReservation, "test.recover-probe", fmt.Sprintf("probe-%d", i))
+		policy.Timeout = time.Second
+		if _, err := store.RuntimeCreate(context.Background(), Bead{ID: fmt.Sprintf("gc-order-probe-%d", i), Title: "probe"}, policy); err != nil {
+			t.Fatalf("RuntimeCreate recovery probe %d: %v", i, err)
+		}
+		if i < RuntimeWriteBreakerRecoverySuccesses-1 {
+			waitForRuntimeWriteManagerState(t, store, RuntimeWriteBreakerOpen)
+		}
 	}
 	waitForRuntimeWriteManagerState(t, store, RuntimeWriteBreakerClosed)
 }
