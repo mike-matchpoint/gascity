@@ -367,6 +367,23 @@ error; the message names the rigs so you know what to type. The literal
 `"*"` is reserved as the wildcard token and may not be used as a real rig
 name.
 
+### Pack Author Scope
+
+Pack authors can constrain where an order is discovered:
+
+```toml
+[order]
+exec = "bash $PACK_DIR/assets/scripts/global-sweep.sh"
+trigger = "cooldown"
+interval = "1m"
+scope = "city"
+```
+
+`scope = "city"` discovers the order only at city scope even when the pack is
+also imported by rigs for agents, formulas, or scripts. `scope = "rig"`
+discovers the order only for rig imports. Leaving `scope` unset preserves the
+historical behavior: the order is discovered anywhere its pack is imported.
+
 ## Order history
 
 Every time an order fires, Gas City creates a tracking bead labeled with the

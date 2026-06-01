@@ -73,18 +73,25 @@ echo "$RIGS_JSON" \
 
   work_order_sort_key() {
     local wo_file="$1"
-    local rel_path="specs/agent-work-orders/$(basename "$wo_file")"
     local epoch=""
 
-    if git -C "$RIG_PATH" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-      epoch=$(git -C "$RIG_PATH" log -1 --format=%ct -- "$rel_path" 2>/dev/null | head -1 || true)
-    fi
-    if [ -z "$epoch" ]; then
-      epoch=$(stat -c %Y "$wo_file" 2>/dev/null || stat -f %m "$wo_file" 2>/dev/null || echo 0)
-    fi
-
+    # Recency is only a priority heuristic. Avoid per-file `git log`; on
+    # hosted rigs that turns this watcher into one slow repository-history
+    # query per work order and can overrun the order timeout.
+    epoch=$(stat -c %Y "$wo_file" 2>/dev/null || stat -f %m "$wo_file" 2>/dev/null || echo 0)
     printf '%s\t%s\n' "$epoch" "$wo_file"
   }
+
+  if ! PLANNED_WO_IDS=$(gc --rig "$RIG_NAME" bd list --all --json --limit=0 \
+    | jq -r '
+        .[] |
+        ((.labels // [])[]? | select(startswith("source:work-order:")) | sub("^source:work-order:"; "")),
+        (.metadata.work_order_id? // empty)
+      ' \
+    | sort -u); then
+    echo "[spec-cartographer-watch] could not build planned work-order index for $RIG_NAME — deferring"
+    continue
+  fi
 
   find "$WO_DIR" -maxdepth 1 -name '*.md' -type f \
     ! -name 'README.md' ! -name 'work-order-template.md' \
@@ -98,19 +105,10 @@ echo "$RIGS_JSON" \
 
     # Idempotency check 1: any prior bead with this WO label or metadata
     # means the cartographer already planned it (open molecule, closed task
-    # bead, tombstone, etc.). Pass --all so closed prior-epoch beads count
-    # toward "already planned". The metadata path is required because older
-    # watcher versions stamped the root molecule with work_order_id but did
-    # not add the source label.
-    COUNT=$(
-      {
-        gc --rig "$RIG_NAME" bd list --all \
-          --label="source:work-order:${WO_ID}" --json --limit=0
-        gc --rig "$RIG_NAME" bd list --all \
-          --metadata-field "work_order_id=${WO_ID}" --json --limit=0
-      } | jq -s 'add | unique_by(.id) | length'
-    )
-    if [ "$COUNT" != "0" ]; then continue; fi
+    # bead, tombstone, etc.). Build that index once per rig; repeated
+    # per-work-order bd scans make this order exceed its timeout on large
+    # histories.
+    if printf '%s\n' "$PLANNED_WO_IDS" | grep -Fxq "$WO_ID"; then continue; fi
 
     REL_PATH="specs/agent-work-orders/$(basename "$WO_FILE")"
     echo "[spec-cartographer-watch] slinging cartographer for $RIG_NAME :: $WO_ID"

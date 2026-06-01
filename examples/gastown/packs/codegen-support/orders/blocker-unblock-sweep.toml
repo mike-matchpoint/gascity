@@ -28,5 +28,6 @@
 description = "Unblock beads whose blocker bugs have all closed"
 exec = "bash $PACK_DIR/assets/scripts/blocker-unblock-sweep.sh"
 trigger = "cooldown"
+scope = "city"
 interval = "60s"
 timeout = "30s"

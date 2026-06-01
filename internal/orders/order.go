@@ -37,6 +37,10 @@ type Order struct {
 	On string `toml:"on,omitempty"`
 	// Pool is the target agent/pool for dispatching the wisp.
 	Pool string `toml:"pool,omitempty"`
+	// Scope constrains discovery when a pack is imported at both city and
+	// rig scope. Empty preserves the historical behavior of discovering the
+	// order in every scope where its pack is imported.
+	Scope string `toml:"scope,omitempty"`
 	// Timeout is the per-order timeout. Go duration string (e.g., "90s").
 	// Defaults to 60s for exec, 30s for formula.
 	Timeout string `toml:"timeout,omitempty"`
@@ -82,6 +86,7 @@ type orderDecode struct {
 	Check                   string `toml:"check,omitempty"`
 	On                      string `toml:"on,omitempty"`
 	Pool                    string `toml:"pool,omitempty"`
+	Scope                   string `toml:"scope,omitempty"`
 	Timeout                 string `toml:"timeout,omitempty"`
 	Enabled                 *bool  `toml:"enabled,omitempty"`
 	Idempotent              bool   `toml:"idempotent,omitempty"`
@@ -104,6 +109,7 @@ func (d orderDecode) normalized() Order {
 		Check:                   d.Check,
 		On:                      d.On,
 		Pool:                    d.Pool,
+		Scope:                   d.Scope,
 		Timeout:                 d.Timeout,
 		Enabled:                 d.Enabled,
 		Idempotent:              d.Idempotent,
@@ -166,6 +172,11 @@ func Validate(a Order) error {
 	// Exec orders must not have a pool (no agent pipeline).
 	if a.Exec != "" && a.Pool != "" {
 		return fmt.Errorf("order %q: exec orders cannot have a pool", a.Name)
+	}
+	switch a.Scope {
+	case "", "all", "city", "rig":
+	default:
+		return fmt.Errorf("order %q: unknown scope %q", a.Name, a.Scope)
 	}
 	// Validate timeout if set.
 	if a.Timeout != "" {

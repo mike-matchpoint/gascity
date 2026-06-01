@@ -400,6 +400,68 @@ interval = "5m"
 	}
 }
 
+func TestScanAllHonorsOrderScopeWhenPackImportedAtCityAndRigScopes(t *testing.T) {
+	cityPath, cityLayer := orderDiscoveryCity(t)
+	packDir := filepath.Join(t.TempDir(), "shared-pack")
+	writeOrderDiscoveryFile(t, filepath.Join(packDir, "orders"), "global-sweep", `[order]
+exec = "scripts/global-sweep.sh"
+trigger = "cooldown"
+interval = "5m"
+scope = "city"
+`)
+	writeOrderDiscoveryFile(t, filepath.Join(packDir, "orders"), "rig-check", `[order]
+exec = "scripts/rig-check.sh"
+trigger = "cooldown"
+interval = "5m"
+scope = "rig"
+`)
+	writeOrderDiscoveryFile(t, filepath.Join(packDir, "orders"), "both-scopes", `[order]
+exec = "scripts/both.sh"
+trigger = "cooldown"
+interval = "5m"
+`)
+
+	cfg := &config.City{
+		FormulaLayers: config.FormulaLayers{
+			City: []string{cityLayer},
+			Rigs: map[string][]string{
+				"frontend": {cityLayer},
+			},
+		},
+		PackDirs: []string{packDir},
+		RigPackDirs: map[string][]string{
+			"frontend": {packDir},
+		},
+	}
+
+	aa, err := ScanAll(cityPath, cfg, ScanOptions{})
+	if err != nil {
+		t.Fatalf("ScanAll returned error: %v", err)
+	}
+	got := map[string]bool{}
+	for _, a := range aa {
+		got[a.ScopedName()] = true
+	}
+	for _, want := range []string{
+		"global-sweep",
+		"rig-check:rig:frontend",
+		"both-scopes",
+		"both-scopes:rig:frontend",
+	} {
+		if !got[want] {
+			t.Fatalf("missing %s in %#v", want, aa)
+		}
+	}
+	for _, notWant := range []string{
+		"global-sweep:rig:frontend",
+		"rig-check",
+	} {
+		if got[notWant] {
+			t.Fatalf("unexpected %s in %#v", notWant, aa)
+		}
+	}
+}
+
 func TestScanAllCityPackRootsPreserveTopoOrderAcrossOrdersOnlyPacks(t *testing.T) {
 	cityPath, cityLayer := orderDiscoveryCity(t)
 	packA, layerA := orderDiscoveryPackLayer(t, "pack-a")

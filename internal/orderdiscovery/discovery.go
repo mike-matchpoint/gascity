@@ -45,6 +45,7 @@ func ScanAll(cityPath string, cfg *config.City, opts ScanOptions) ([]orders.Orde
 	if err != nil {
 		return nil, err
 	}
+	cityOrders = filterOrdersForDiscoveryScope(cityOrders, "")
 
 	rigNames := make(map[string]struct{}, len(cfg.FormulaLayers.Rigs)+len(cfg.RigPackDirs))
 	for rigName := range cfg.FormulaLayers.Rigs {
@@ -74,6 +75,7 @@ func ScanAll(cityPath string, cfg *config.City, opts ScanOptions) ([]orders.Orde
 		for i := range aa {
 			aa[i].Rig = rigName
 		}
+		aa = filterOrdersForDiscoveryScope(aa, rigName)
 		rigOrders = append(rigOrders, aa...)
 	}
 
@@ -92,6 +94,25 @@ func ScanAll(cityPath string, cfg *config.City, opts ScanOptions) ([]orders.Orde
 		}
 	}
 	return allOrders, nil
+}
+
+func filterOrdersForDiscoveryScope(in []orders.Order, rigName string) []orders.Order {
+	out := in[:0]
+	for _, order := range in {
+		switch order.Scope {
+		case "", "all":
+			out = append(out, order)
+		case "city":
+			if rigName == "" {
+				out = append(out, order)
+			}
+		case "rig":
+			if rigName != "" {
+				out = append(out, order)
+			}
+		}
+	}
+	return out
 }
 
 // cityFormulaLayers returns the formula directory layers for city-level order

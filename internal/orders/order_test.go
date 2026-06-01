@@ -91,6 +91,22 @@ degraded_min_interval = "60s"
 	}
 }
 
+func TestParseScope(t *testing.T) {
+	data := []byte(`
+[order]
+exec = "true"
+trigger = "manual"
+scope = "city"
+`)
+	a, err := Parse(data)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if a.Scope != "city" {
+		t.Fatalf("Scope = %q, want city", a.Scope)
+	}
+}
+
 func TestParseInvalid(t *testing.T) {
 	_, err := Parse([]byte(`not valid toml {{{`))
 	if err == nil {
@@ -165,6 +181,20 @@ func TestValidateExecOrder(t *testing.T) {
 	a := Order{Name: "poller", Exec: "scripts/poll.sh", Trigger: "cooldown", Interval: "2m"}
 	if err := Validate(a); err != nil {
 		t.Errorf("Validate: %v", err)
+	}
+}
+
+func TestValidateScope(t *testing.T) {
+	for _, scope := range []string{"", "all", "city", "rig"} {
+		a := Order{Name: "scoped", Exec: "true", Trigger: "manual", Scope: scope}
+		if err := Validate(a); err != nil {
+			t.Fatalf("Validate(scope=%q): %v", scope, err)
+		}
+	}
+
+	a := Order{Name: "scoped", Exec: "true", Trigger: "manual", Scope: "workspace"}
+	if err := Validate(a); err == nil {
+		t.Fatal("Validate succeeded for invalid scope")
 	}
 }
 

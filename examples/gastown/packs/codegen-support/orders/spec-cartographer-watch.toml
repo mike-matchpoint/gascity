@@ -16,5 +16,6 @@
 description = "Auto-sling spec-cartographer for new work orders in any rig"
 exec = "bash $PACK_DIR/assets/scripts/spec-cartographer-watch.sh"
 trigger = "cooldown"
+scope = "city"
 interval = "60s"
 timeout = "10m"
