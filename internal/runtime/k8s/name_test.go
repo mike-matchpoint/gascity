@@ -77,3 +77,22 @@ func TestSanitizeLabel(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionKeyLabel(t *testing.T) {
+	name := "vg-support__debugger-vgc-session-3abfbbae12795c87a2da0b4dd324bcd4"
+	got := SessionKeyLabel(name)
+	if len(got) != 32 {
+		t.Fatalf("SessionKeyLabel length = %d, want 32", len(got))
+	}
+	if got != SessionKeyLabel(name) {
+		t.Fatal("SessionKeyLabel is not deterministic")
+	}
+	if got == SessionKeyLabel(name+"x") {
+		t.Fatal("SessionKeyLabel did not change for different input")
+	}
+	for _, r := range got {
+		if !((r >= 'a' && r <= 'f') || (r >= '0' && r <= '9')) {
+			t.Fatalf("SessionKeyLabel contains non-label hex character %q in %q", r, got)
+		}
+	}
+}

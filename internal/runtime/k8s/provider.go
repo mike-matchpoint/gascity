@@ -270,10 +270,9 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 		return fmt.Errorf("starting session %q: GC_K8S_IMAGE is required", name)
 	}
 	podName := SanitizeName(name)
-	label := SanitizeLabel(name)
 
 	// Check for existing pod (any phase).
-	existing, err := p.ops.listPods(ctx, "gc-session="+label, "")
+	existing, err := p.sessionPods(ctx, name, false)
 	if err == nil && len(existing) > 0 {
 		pod := &existing[0]
 		desiredIdentity, err := p.desiredProviderRuntimeIdentity(cfg)
@@ -510,9 +509,8 @@ func k8sCommandMayPromptForStartupDialog(command string) bool {
 // Stop deletes the pod for the named session. Idempotent.
 func (p *Provider) Stop(name string) error {
 	ctx := context.Background()
-	label := SanitizeLabel(name)
 
-	pods, err := p.ops.listPods(ctx, "gc-session="+label, "")
+	pods, err := p.sessionPods(ctx, name, false)
 	if err != nil {
 		return nil // best-effort
 	}
@@ -625,24 +623,26 @@ func (p *Provider) ProcessAlive(name string, processNames []string) bool {
 		return true
 	}
 	ctx := context.Background()
-	label := SanitizeLabel(name)
 
-	pods, err := p.ops.listPods(ctx, "gc-session="+label, "")
+	pods, err := p.sessionPods(ctx, name, false)
 	if err != nil || len(pods) == 0 {
 		return false
 	}
-	pod := &pods[0]
-
-	// Check deletionTimestamp — pod in graceful shutdown is not alive.
-	if pod.DeletionTimestamp != nil {
-		return false
+	var podName string
+	for i := range pods {
+		pod := &pods[i]
+		if pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		podName = pod.Name
+		break
 	}
-	if pod.Status.Phase != corev1.PodRunning {
+	if podName == "" {
 		return false
 	}
 
 	for _, pname := range processNames {
-		_, err := p.ops.execInPod(ctx, pod.Name, "agent",
+		_, err := p.ops.execInPod(ctx, podName, "agent",
 			[]string{"pgrep", "-f", pname}, nil)
 		if err == nil {
 			return true
@@ -1026,16 +1026,12 @@ func (p *Provider) findPod(ctx context.Context, name string) (string, error) {
 }
 
 func (p *Provider) findPodObject(ctx context.Context, name string, runningOnly bool) (*corev1.Pod, error) {
-	label := SanitizeLabel(name)
-	pods, err := p.agentPodSnapshot(ctx)
+	pods, err := p.sessionPods(ctx, name, true)
 	if err != nil {
 		return nil, err
 	}
 	for i := range pods {
 		pod := &pods[i]
-		if strings.TrimSpace(pod.Labels["gc-session"]) != label {
-			continue
-		}
 		if runningOnly {
 			if pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning {
 				continue
@@ -1044,6 +1040,68 @@ func (p *Provider) findPodObject(ctx context.Context, name string, runningOnly b
 		return pod.DeepCopy(), nil
 	}
 	return nil, nil
+}
+
+func (p *Provider) sessionPods(ctx context.Context, name string, cached bool) ([]corev1.Pod, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, nil
+	}
+
+	var matches []corev1.Pod
+	var keyErr error
+	if !cached {
+		keySelector := "gc-session-key=" + SessionKeyLabel(name)
+		var keyPods []corev1.Pod
+		keyPods, keyErr = p.ops.listPods(ctx, keySelector, "")
+		for i := range keyPods {
+			pod := &keyPods[i]
+			if podMatchesSessionName(pod, name) {
+				matches = append(matches, *pod.DeepCopy())
+			}
+		}
+		if len(matches) > 0 {
+			return matches, keyErr
+		}
+	}
+
+	var pods []corev1.Pod
+	var err error
+	if cached {
+		pods, err = p.agentPodSnapshot(ctx)
+	} else {
+		pods, err = p.ops.listPods(ctx, "app=gc-agent", "")
+	}
+	if err != nil {
+		if keyErr != nil {
+			return nil, keyErr
+		}
+		return nil, err
+	}
+	for i := range pods {
+		pod := &pods[i]
+		if podMatchesSessionName(pod, name) {
+			matches = append(matches, *pod.DeepCopy())
+		}
+	}
+	return matches, nil
+}
+
+func podMatchesSessionName(pod *corev1.Pod, name string) bool {
+	if pod == nil {
+		return false
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	if ann := strings.TrimSpace(pod.Annotations["gc-session-name"]); ann != "" {
+		return ann == name
+	}
+	if key := strings.TrimSpace(pod.Labels["gc-session-key"]); key != "" {
+		return key == SessionKeyLabel(name)
+	}
+	return strings.TrimSpace(pod.Labels["gc-session"]) == SanitizeLabel(name)
 }
 
 func (p *Provider) agentPodSnapshot(ctx context.Context) ([]corev1.Pod, error) {

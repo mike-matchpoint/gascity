@@ -483,6 +483,79 @@ func TestStop(t *testing.T) {
 	}
 }
 
+func TestStopMatchesLongSessionByAnnotationNotTruncatedLabel(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+
+	base := strings.Repeat("a", 70)
+	sessionA := base + "-one"
+	sessionB := base + "-two"
+	if SanitizeLabel(sessionA) != SanitizeLabel(sessionB) {
+		t.Fatal("test setup expected colliding truncated labels")
+	}
+	addRunningPodWithAnnotation(fake, "pod-one", SanitizeLabel(sessionA), sessionA)
+	addRunningPodWithAnnotation(fake, "pod-two", SanitizeLabel(sessionB), sessionB)
+
+	if err := p.Stop(sessionA); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if _, exists := fake.pods["pod-one"]; exists {
+		t.Fatal("matching long-name pod still exists after Stop")
+	}
+	if _, exists := fake.pods["pod-two"]; !exists {
+		t.Fatal("Stop deleted pod with colliding truncated label but different annotation")
+	}
+}
+
+func TestDirectOperationsMatchLongSessionByAnnotation(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+
+	sessionName := "vg-support__debugger-vgc-session-3abfbbae12795c87a2da0b4dd324bcd4"
+	podName := "vg-support--debugger-vgc-session-3abfbbae12795c87a2da0b4dd324bc"
+	addRunningPodWithAnnotation(fake, podName, SanitizeLabel(sessionName), sessionName)
+
+	err := p.Nudge(sessionName, runtime.TextContent("continue"))
+	if err != nil {
+		t.Fatalf("Nudge: %v", err)
+	}
+	var nudgePod string
+	for _, c := range fake.calls {
+		if c.method == "execInPod" && len(c.cmd) >= 3 && c.cmd[0] == "tmux" && c.cmd[1] == "send-keys" {
+			nudgePod = c.pod
+			break
+		}
+	}
+	if nudgePod != podName {
+		t.Fatalf("Nudge used pod %q, want %q", nudgePod, podName)
+	}
+}
+
+func TestSessionKeyLabelMatchesPodWithoutAnnotation(t *testing.T) {
+	fake := newFakeK8sOps()
+	p := newProviderWithOps(fake)
+
+	sessionName := "vg-support__debugger-vgc-session-3abfbbae12795c87a2da0b4dd324bcd4"
+	fake.pods["pod-keyed"] = &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "pod-keyed",
+			Labels: map[string]string{
+				"app":            "gc-agent",
+				"gc-session":     "legacy-colliding-label",
+				"gc-session-key": SessionKeyLabel(sessionName),
+			},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+
+	if err := p.Stop(sessionName); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if _, exists := fake.pods["pod-keyed"]; exists {
+		t.Fatal("session-key matched pod still exists after Stop")
+	}
+}
+
 func TestListRunning(t *testing.T) {
 	fake := newFakeK8sOps()
 	p := newProviderWithOps(fake)
@@ -956,6 +1029,9 @@ func TestStartCreatesPodsAndWaits(t *testing.T) {
 	}
 	if pod.Labels["gc-session"] != "gc-test-agent" {
 		t.Errorf("label gc-session = %q, want gc-test-agent", pod.Labels["gc-session"])
+	}
+	if pod.Labels["gc-session-key"] != SessionKeyLabel("gc-test-agent") {
+		t.Errorf("label gc-session-key = %q, want %q", pod.Labels["gc-session-key"], SessionKeyLabel("gc-test-agent"))
 	}
 	if pod.Annotations["gc-session-name"] != "gc-test-agent" {
 		t.Errorf("annotation gc-session-name = %q, want gc-test-agent", pod.Annotations["gc-session-name"])

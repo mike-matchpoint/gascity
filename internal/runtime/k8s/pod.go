@@ -198,6 +198,7 @@ func projectedPodDoltEnv(cfgEnv map[string]string, managedHost, managedPort stri
 func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error) {
 	podName := SanitizeName(name)
 	label := SanitizeLabel(name)
+	sessionKey := SessionKeyLabel(name)
 	agentName := cfg.Env["GC_ALIAS"]
 	if agentName == "" {
 		agentName = cfg.Env["GC_AGENT"]
@@ -320,9 +321,10 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 			Name:      podName,
 			Namespace: p.namespace,
 			Labels: map[string]string{
-				"app":        "gc-agent",
-				"gc-session": label,
-				"gc-agent":   agentLabel,
+				"app":            "gc-agent",
+				"gc-session":     label,
+				"gc-session-key": sessionKey,
+				"gc-agent":       agentLabel,
 			},
 			Annotations: map[string]string{
 				"gc-session-name":                           name,

@@ -8,6 +8,8 @@
 package k8s
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"time"
 	"unicode"
@@ -90,6 +92,14 @@ func SanitizeLabel(value string) string {
 		return "unknown"
 	}
 	return s
+}
+
+// SessionKeyLabel returns a stable, Kubernetes-label-safe identity key for a
+// session name. Human-readable session labels and pod names are capped at 63
+// characters, so long names must not be used as the only identity selector.
+func SessionKeyLabel(name string) string {
+	sum := sha256.Sum256([]byte(name))
+	return hex.EncodeToString(sum[:16])
 }
 
 func isAlphanumeric(r rune) bool {

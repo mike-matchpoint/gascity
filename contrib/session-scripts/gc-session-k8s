@@ -91,26 +91,65 @@ sanitize_label() {
   echo "${v:-unknown}"
 }
 
+session_key_label() {
+  local digest
+  if command -v sha256sum >/dev/null 2>&1; then
+    digest=$(printf '%s' "$1" | sha256sum | awk '{print $1}')
+  else
+    digest=$(printf '%s' "$1" | shasum -a 256 | awk '{print $1}')
+  fi
+  printf '%s\n' "${digest:0:32}"
+}
+
 # pod_name returns the pod name for a session.
 pod_name() {
   sanitize_name "$1"
 }
 
-# get_pod_name_by_label finds a pod by gc-session label, returns first match.
-get_pod_name_by_label() {
-  local label
-  label=$(sanitize_label "$1")
-  "${KUBECTL[@]}" get pods -l "gc-session=$label" \
-    --field-selector=status.phase=Running \
-    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true
+session_pod_names() {
+  local session key legacy running_only field_args matches
+  session="$1"
+  running_only="${2:-false}"
+  key=$(session_key_label "$session")
+  legacy=$(sanitize_label "$session")
+  field_args=()
+  if [ "$running_only" = "true" ]; then
+    field_args=(--field-selector=status.phase=Running)
+  fi
+
+  matches=$("${KUBECTL[@]}" get pods -l "gc-session-key=$key" "${field_args[@]}" -o json 2>/dev/null \
+    | jq -r --arg session "$session" --arg key "$key" --arg legacy "$legacy" '
+        .items[] |
+        select(
+          (.metadata.annotations["gc-session-name"] // "") == $session
+          or (((.metadata.annotations["gc-session-name"] // "") == "") and ((.metadata.labels["gc-session-key"] // "") == $key))
+          or (((.metadata.annotations["gc-session-name"] // "") == "") and ((.metadata.labels["gc-session-key"] // "") == "") and ((.metadata.labels["gc-session"] // "") == $legacy))
+        ) |
+        .metadata.name' 2>/dev/null || true)
+  if [ -n "$matches" ]; then
+    printf '%s\n' "$matches"
+    return
+  fi
+
+  "${KUBECTL[@]}" get pods -l app=gc-agent "${field_args[@]}" -o json 2>/dev/null \
+    | jq -r --arg session "$session" --arg key "$key" --arg legacy "$legacy" '
+        .items[] |
+        select(
+          (.metadata.annotations["gc-session-name"] // "") == $session
+          or (((.metadata.annotations["gc-session-name"] // "") == "") and ((.metadata.labels["gc-session-key"] // "") == $key))
+          or (((.metadata.annotations["gc-session-name"] // "") == "") and ((.metadata.labels["gc-session-key"] // "") == "") and ((.metadata.labels["gc-session"] // "") == $legacy))
+        ) |
+        .metadata.name' 2>/dev/null || true
 }
 
-# get_any_pod_by_label finds a pod by gc-session label (any phase).
+# get_pod_name_by_label finds a running pod by full session identity.
+get_pod_name_by_label() {
+  session_pod_names "$1" true | head -1
+}
+
+# get_any_pod_by_label finds a pod by full session identity (any phase).
 get_any_pod_by_label() {
-  local label
-  label=$(sanitize_label "$1")
-  "${KUBECTL[@]}" get pods -l "gc-session=$label" \
-    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true
+  session_pod_names "$1" false | head -1
 }
 
 shell_single_quote() {
@@ -159,9 +198,10 @@ case "$op" in
 
     pod=$(pod_name "$name")
     label=$(sanitize_label "$name")
+    session_key=$(session_key_label "$name")
 
     # Check if pod already exists (any phase).
-    existing=$(get_any_pod_by_label "$label")
+    existing=$(get_any_pod_by_label "$name")
     if [ -n "$existing" ]; then
       phase=$("${KUBECTL[@]}" get pod "$existing" -o jsonpath='{.status.phase}' 2>/dev/null || true)
       if [ "$phase" = "Running" ]; then
@@ -326,6 +366,7 @@ EOF
         --arg pod "$pod" \
         --arg ns "$NS" \
         --arg label "$label" \
+        --arg session_key "$session_key" \
         --arg gc_agent_label "$gc_agent_label" \
         --arg session_name "$name" \
         --arg image "$IMAGE" \
@@ -346,6 +387,7 @@ EOF
             labels: {
               app: "gc-agent",
               "gc-session": $label,
+              "gc-session-key": $session_key,
               "gc-agent": $gc_agent_label
             },
             annotations: {
@@ -403,6 +445,7 @@ EOF
         --arg pod "$pod" \
         --arg ns "$NS" \
         --arg label "$label" \
+        --arg session_key "$session_key" \
         --arg gc_agent_label "$gc_agent_label" \
         --arg session_name "$name" \
         --arg image "$IMAGE" \
@@ -423,6 +466,7 @@ EOF
             labels: {
               app: "gc-agent",
               "gc-session": $label,
+              "gc-session-key": $session_key,
               "gc-agent": $gc_agent_label
             },
             annotations: {
@@ -630,10 +674,12 @@ EOF
       echo "stop: missing session name" >&2
       exit 1
     fi
-    label=$(sanitize_label "$name")
     # Idempotent: no error if pod doesn't exist.
     # Short grace period so stop completes within exec provider timeout (30s).
-    "${KUBECTL[@]}" delete pod -l "gc-session=$label" --ignore-not-found --grace-period=5 >/dev/null 2>&1 || true
+    session_pod_names "$name" false | while IFS= read -r pod; do
+      [ -z "$pod" ] && continue
+      "${KUBECTL[@]}" delete pod "$pod" --ignore-not-found --grace-period=5 >/dev/null 2>&1 || true
+    done
     ;;
 
   interrupt)
@@ -649,10 +695,7 @@ EOF
       echo "false"
       exit 0
     fi
-    label=$(sanitize_label "$name")
-    pod=$("${KUBECTL[@]}" get pods -l "gc-session=$label" \
-      --field-selector=status.phase=Running \
-      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+    pod=$(get_pod_name_by_label "$name")
     # Pod must be Running AND tmux session alive. If Claude exits, tmux
     # dies but sleep infinity keeps the pod alive — that's not "running".
     if [ -n "$pod" ] && \
