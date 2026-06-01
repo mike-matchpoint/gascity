@@ -1971,7 +1971,10 @@ func TestOrderDispatchExecBudgetIndependentFromFormulaBudget(t *testing.T) {
 	if !ok {
 		t.Fatalf("dispatcher type = %T, want *memoryOrderDispatcher", ad)
 	}
-	md.cfg = &config.City{}
+	formulaCap := 1
+	md.cfg = &config.City{Orders: config.OrdersConfig{
+		MaxFormulaDispatchesPerTick: &formulaCap,
+	}}
 
 	md.dispatch(context.Background(), t.TempDir(), time.Now().Add(time.Hour))
 	md.drain(context.Background())
@@ -1988,6 +1991,46 @@ func TestOrderDispatchExecBudgetIndependentFromFormulaBudget(t *testing.T) {
 		}
 		if got := len(trackingBeads(t, store, "order-run:"+name)); got != 1 {
 			t.Fatalf("%s tracking beads = %d, want 1", name, got)
+		}
+	}
+}
+
+func TestOrderDispatchDefaultFormulaBudgetLiftsAfterStartup(t *testing.T) {
+	oldMax := orderDispatchMaxCreatesPerTick
+	oldExecMax := orderDispatchMaxExecCreatesPerTick
+	oldFormulaMax := orderDispatchMaxFormulaCreatesPerTick
+	orderDispatchMaxCreatesPerTick = 4
+	orderDispatchMaxExecCreatesPerTick = 4
+	orderDispatchMaxFormulaCreatesPerTick = 1
+	t.Cleanup(func() {
+		orderDispatchMaxCreatesPerTick = oldMax
+		orderDispatchMaxExecCreatesPerTick = oldExecMax
+		orderDispatchMaxFormulaCreatesPerTick = oldFormulaMax
+	})
+
+	store := beads.NewMemStore()
+	aa := []orders.Order{
+		{Name: "formula-a", Trigger: "cooldown", Interval: "1s", Formula: "missing-a"},
+		{Name: "formula-b", Trigger: "cooldown", Interval: "1s", Formula: "missing-b"},
+		{Name: "formula-c", Trigger: "cooldown", Interval: "1s", Formula: "missing-c"},
+	}
+	ad := buildOrderDispatcherFromListExec(aa, store, nil, nil, nil)
+	md, ok := ad.(*memoryOrderDispatcher)
+	if !ok {
+		t.Fatalf("dispatcher type = %T, want *memoryOrderDispatcher", ad)
+	}
+	md.cfg = &config.City{}
+
+	start := time.Date(2026, 5, 28, 1, 0, 0, 0, time.UTC)
+	md.startedAt = start
+	now := start.Add(orderDispatchStartupThrottleWindow + time.Minute)
+
+	md.dispatch(context.Background(), t.TempDir(), now)
+	md.drain(context.Background())
+
+	for _, name := range []string{"formula-a", "formula-b", "formula-c"} {
+		if got := len(trackingBeads(t, store, "order-run:"+name)); got != 1 {
+			t.Fatalf("%s tracking beads = %d, want 1 after default formula cap lifts", name, got)
 		}
 	}
 }
@@ -2055,14 +2098,17 @@ func TestOrderDispatchRoundRobinDoesNotStarveFrontOrders(t *testing.T) {
 	}
 }
 
-// TestOrderDispatchLimitRemainsActiveAfterStartup proves the create cap stays
-// active after controller startup. Live Dolt needs steady-state backpressure;
-// round-robin fairness, not an uncapped burst, keeps due orders on cadence.
-func TestOrderDispatchLimitRemainsActiveAfterStartup(t *testing.T) {
+// TestOrderDispatchLiftsDefaultCreateBudgetAfterStartup proves the default
+// total/exec create caps are startup burst throttles, not permanent scheduler
+// ceilings. Runtime writer stats own steady-state write backpressure.
+func TestOrderDispatchLiftsDefaultCreateBudgetAfterStartup(t *testing.T) {
 	oldMax := orderDispatchMaxCreatesPerTick
+	oldExecMax := orderDispatchMaxExecCreatesPerTick
 	orderDispatchMaxCreatesPerTick = 4
+	orderDispatchMaxExecCreatesPerTick = 4
 	t.Cleanup(func() {
 		orderDispatchMaxCreatesPerTick = oldMax
+		orderDispatchMaxExecCreatesPerTick = oldExecMax
 	})
 
 	store := beads.NewMemStore()
@@ -2084,7 +2130,8 @@ func TestOrderDispatchLimitRemainsActiveAfterStartup(t *testing.T) {
 	}
 	md.cfg = &config.City{}
 
-	// Controller started well before this tick. The cap still applies.
+	// Controller started well before this tick. The default startup throttle has
+	// lifted so steady-state due orders can catch up in one tick.
 	start := time.Date(2026, 5, 28, 1, 0, 0, 0, time.UTC)
 	md.startedAt = start
 	now := start.Add(time.Hour)
@@ -2098,8 +2145,50 @@ func TestOrderDispatchLimitRemainsActiveAfterStartup(t *testing.T) {
 			dispatched++
 		}
 	}
-	if dispatched != orderDispatchMaxCreatesPerTick {
-		t.Fatalf("dispatched orders = %d, want cap %d", dispatched, orderDispatchMaxCreatesPerTick)
+	if dispatched != orderCount {
+		t.Fatalf("dispatched orders = %d, want all %d due orders", dispatched, orderCount)
+	}
+}
+
+func TestOrderDispatchKeepsExplicitCreateBudgetAfterStartup(t *testing.T) {
+	store := beads.NewMemStore()
+	fakeExec := func(_ context.Context, _, _ string, _ []string) ([]byte, error) {
+		return []byte("ok\n"), nil
+	}
+	const orderCount = 10
+	aa := make([]orders.Order, 0, orderCount)
+	for i := 0; i < orderCount; i++ {
+		name := fmt.Sprintf("order-%02d", i)
+		aa = append(aa, orders.Order{Name: name, Trigger: "cooldown", Interval: "1s", Exec: name})
+	}
+	ad := buildOrderDispatcherFromListExec(aa, store, nil, fakeExec, nil)
+	md, ok := ad.(*memoryOrderDispatcher)
+	if !ok {
+		t.Fatalf("dispatcher type = %T, want *memoryOrderDispatcher", ad)
+	}
+	totalCap := 3
+	execCap := 3
+	md.cfg = &config.City{Orders: config.OrdersConfig{
+		MaxDispatchesPerTick:     &totalCap,
+		MaxExecDispatchesPerTick: &execCap,
+	}}
+
+	start := time.Date(2026, 5, 28, 1, 0, 0, 0, time.UTC)
+	md.startedAt = start
+	now := start.Add(time.Hour)
+
+	md.dispatch(context.Background(), t.TempDir(), now)
+	md.drain(context.Background())
+
+	dispatched := 0
+	for i := 0; i < orderCount; i++ {
+		name := fmt.Sprintf("order-%02d", i)
+		if got := len(trackingBeads(t, store, "order-run:"+name)); got > 0 {
+			dispatched++
+		}
+	}
+	if dispatched != totalCap {
+		t.Fatalf("dispatched orders = %d, want explicit cap %d", dispatched, totalCap)
 	}
 }
 

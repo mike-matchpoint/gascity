@@ -83,6 +83,12 @@ var (
 	orderDispatchMaxFormulaCreatesPerTick = 1
 )
 
+// orderDispatchStartupThrottleWindow bounds how long the default dispatch caps
+// apply after controller construction. The defaults protect city reloads from a
+// due-order burst; steady state relies on runtime writer backpressure so due
+// orders can keep cadence without permanent static throttles.
+var orderDispatchStartupThrottleWindow = 10 * time.Minute
+
 // orderDispatchTrackingWriteBudget is longer than the generic runtime-write
 // default because one due order produces a small write chain: reservation,
 // outcome labels, then close. The per-tick create cap below keeps caller latency
@@ -701,18 +707,42 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 	}
 }
 
-func (m *memoryOrderDispatcher) effectiveCreateCaps(_ time.Time) orderDispatchCreateCaps {
+func (m *memoryOrderDispatcher) effectiveCreateCaps(now time.Time) orderDispatchCreateCaps {
 	caps := orderDispatchCreateCaps{
 		total: orderDispatchMaxCreatesPerTick,
 		exec:  orderDispatchMaxExecCreatesPerTick,
 		wisp:  orderDispatchMaxFormulaCreatesPerTick,
 	}
+	explicitTotalCap := false
+	explicitExecCap := false
+	explicitWispCap := false
 	if m != nil && m.cfg != nil {
+		explicitTotalCap = m.cfg.Orders.MaxDispatchesPerTick != nil
+		explicitExecCap = m.cfg.Orders.MaxExecDispatchesPerTick != nil
+		explicitWispCap = m.cfg.Orders.MaxFormulaDispatchesPerTick != nil
 		caps.total = m.cfg.Orders.MaxDispatchesPerTickOrDefault(caps.total)
 		caps.exec = m.cfg.Orders.MaxExecDispatchesPerTickOrDefault(caps.exec)
 		caps.wisp = m.cfg.Orders.MaxFormulaDispatchesPerTickOrDefault(caps.wisp)
 	}
+	if m.defaultDispatchStartupThrottleElapsed(now) {
+		if !explicitTotalCap {
+			caps.total = 0
+		}
+		if !explicitExecCap {
+			caps.exec = 0
+		}
+		if !explicitWispCap {
+			caps.wisp = 0
+		}
+	}
 	return caps
+}
+
+func (m *memoryOrderDispatcher) defaultDispatchStartupThrottleElapsed(now time.Time) bool {
+	if m == nil || orderDispatchStartupThrottleWindow <= 0 || m.startedAt.IsZero() {
+		return false
+	}
+	return !now.Before(m.startedAt.Add(orderDispatchStartupThrottleWindow))
 }
 
 // rotateDispatchCandidates rotates candidates so the order at the persistent
