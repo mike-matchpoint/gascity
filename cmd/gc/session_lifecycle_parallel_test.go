@@ -7098,6 +7098,71 @@ func TestHandleProviderRuntimeDriftDefersDrainWhenPatrolWispAndLiveWorkAssigned(
 	}
 }
 
+func TestProviderRuntimeDriftBlockingWorkTreatsPatrolMoleculeAsResumable(t *testing.T) {
+	store := beads.NewMemStore()
+	if _, err := store.Create(beads.Bead{
+		Title:    "mol-witness-patrol",
+		Status:   "in_progress",
+		Assignee: "rig/gastown.witness",
+		Type:     "molecule",
+		Ref:      "mol-witness-patrol",
+		Metadata: map[string]string{
+			"gc.kind": "wisp",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	has, err := sessionHasProviderRuntimeDriftBlockingAssignedWorkInStoreByIdentifiers(store, []string{"rig/gastown.witness"})
+	if err != nil {
+		t.Fatalf("blocking work check: %v", err)
+	}
+	if has {
+		t.Fatal("patrol molecule should be resumable during provider runtime drift")
+	}
+}
+
+func TestProviderRuntimeDriftBlockingWorkStillBlocksNonPatrolMolecule(t *testing.T) {
+	store := beads.NewMemStore()
+	if _, err := store.Create(beads.Bead{
+		Title:    "mol-witness-investigation",
+		Status:   "in_progress",
+		Assignee: "rig/gastown.witness",
+		Type:     "molecule",
+		Ref:      "mol-witness-investigation",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	has, err := sessionHasProviderRuntimeDriftBlockingAssignedWorkInStoreByIdentifiers(store, []string{"rig/gastown.witness"})
+	if err != nil {
+		t.Fatalf("blocking work check: %v", err)
+	}
+	if !has {
+		t.Fatal("non-patrol molecule should block provider runtime drift")
+	}
+}
+
+func TestProviderRuntimeDriftBlockingWorkDoesNotIgnorePatrolNamedTask(t *testing.T) {
+	store := beads.NewMemStore()
+	if _, err := store.Create(beads.Bead{
+		Title:    "validate patrol handoff",
+		Status:   "open",
+		Assignee: "rig/gastown.witness",
+		Type:     "task",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	has, err := sessionHasProviderRuntimeDriftBlockingAssignedWorkInStoreByIdentifiers(store, []string{"rig/gastown.witness"})
+	if err != nil {
+		t.Fatalf("blocking work check: %v", err)
+	}
+	if !has {
+		t.Fatal("ordinary task should still block provider runtime drift")
+	}
+}
+
 func TestCommitStartResult_PersistsMCPIdentityForACPStart(t *testing.T) {
 	store := beads.NewMemStore()
 	session, err := store.Create(beads.Bead{

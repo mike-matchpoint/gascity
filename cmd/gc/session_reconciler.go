@@ -3108,8 +3108,31 @@ func sessionHasOpenAssignedWorkInStoreByIdentifiers(store beads.Store, identifie
 
 func sessionHasProviderRuntimeDriftBlockingAssignedWorkInStoreByIdentifiers(store beads.Store, identifiers []string) (bool, error) {
 	return sessionHasOpenAssignedWorkInStoreByIdentifiersMatching(store, identifiers, func(item beads.Bead) bool {
-		return !isPatrolWispWakeCandidate(item)
+		return !isProviderRuntimeDriftResumablePatrolWork(item)
 	})
+}
+
+func isProviderRuntimeDriftResumablePatrolWork(item beads.Bead) bool {
+	if isPatrolWispWakeCandidate(item) {
+		return true
+	}
+	if item.Type != "molecule" {
+		return false
+	}
+	values := []string{
+		item.Title,
+		item.Ref,
+		item.Metadata["formula"],
+		item.Metadata["gc.formula"],
+		item.Metadata["wisp_type"],
+		item.Metadata["gc.wisp_type"],
+	}
+	for _, value := range values {
+		if isPatrolFormulaSignal(value) {
+			return true
+		}
+	}
+	return false
 }
 
 func sessionHasOpenAssignedWorkInStoreByIdentifiersMatching(store beads.Store, identifiers []string, include func(beads.Bead) bool) (bool, error) {
