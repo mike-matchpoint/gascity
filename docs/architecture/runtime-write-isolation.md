@@ -72,6 +72,13 @@ Runtime write methods deliberately unwrap `CachingStore` before writing. Hot
 writes must not invoke `CachingStore` post-write `Get` readbacks or silently
 fall back to foreground Beads CLI semantics after a runtime timeout.
 
+Runtime writes normally preserve caller deadlines for compatibility. A caller
+that must preserve the full class budget across a shorter scheduler tick must
+opt in through `beads.WritePolicy.DetachCallerDeadline`. That policy-level
+contract preserves context values and explicit `context.Canceled` shutdown,
+but ignores caller `context.DeadlineExceeded` so the runtime writer's class
+budget remains authoritative.
+
 ## Observability
 
 Runtime write errors must carry enough information for order dispatch, session
@@ -113,15 +120,19 @@ deadline, but not dispatcher cancellation. A long dispatch tick can spend most
 of its deadline closing or labeling earlier order work; the next reservation
 must still enter the runtime writer with the reservation class budget so the
 write path increases throughput instead of suppressing later orders. The
-reservation context therefore strips only the parent deadline and preserves the
-parent `Done`/`Err` cancellation signal.
+reservation write policy therefore opts into
+`beads.WritePolicy.DetachCallerDeadline`; this is a shared runtime writer
+contract, not an order-specific context shim.
 
 Local order leases remain subordinate to durable tracking rows. If a local
 lease from a prior controller start suppresses dispatch, and the referenced
 tracking bead is already durably closed with order-tracking labels, the
 dispatcher may release that stale local lease and retry reservation. A lease
 from the current controller start still suppresses dispatch so an active order
-cannot be duplicated.
+cannot be duplicated. The durable tracking row lookup must use
+`beads.RuntimeGet` with a hot authoritative read policy, never a foreground
+`Store.Get`, so stale-lease reconciliation does not reintroduce unbounded Beads
+hydration into the dispatch loop.
 
 Live soak acceptance for this cutover is:
 

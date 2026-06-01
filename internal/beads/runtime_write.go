@@ -101,6 +101,12 @@ type WritePolicy struct {
 	Timeout        time.Duration
 	IdempotencyKey string
 	AllowFallback  bool
+	// DetachCallerDeadline lets the runtime writer apply the policy timeout
+	// even when the caller is running inside a shorter scheduling tick. Context
+	// values are preserved and explicit context.Canceled shutdown still
+	// propagates, but context.DeadlineExceeded from the caller does not shrink
+	// the write class budget.
+	DetachCallerDeadline bool
 }
 
 // RuntimeWritePolicy returns a policy with the documented default budget and
@@ -359,16 +365,60 @@ func contextWithWritePolicy(ctx context.Context, policy WritePolicy) (context.Co
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	callerCtx, releaseCallerCtx := runtimeWriteCallerContext(ctx, policy)
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline)
-		if remaining <= policy.Timeout {
-			return context.WithCancel(ctx)
+		if remaining <= policy.Timeout && !policy.DetachCallerDeadline {
+			child, cancel := context.WithCancel(callerCtx)
+			return child, func() {
+				cancel()
+				releaseCallerCtx()
+			}
 		}
 	}
 	if policy.Timeout <= 0 {
-		return context.WithCancel(ctx)
+		child, cancel := context.WithCancel(callerCtx)
+		return child, func() {
+			cancel()
+			releaseCallerCtx()
+		}
 	}
-	return context.WithTimeout(ctx, policy.Timeout)
+	child, cancel := context.WithTimeout(callerCtx, policy.Timeout)
+	return child, func() {
+		cancel()
+		releaseCallerCtx()
+	}
+}
+
+func runtimeWriteCallerContext(ctx context.Context, policy WritePolicy) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		return context.Background(), func() {}
+	}
+	if !policy.DetachCallerDeadline {
+		return ctx, func() {}
+	}
+	base := context.WithoutCancel(ctx)
+	if ctx.Done() == nil {
+		return base, func() {}
+	}
+	detached, cancel := context.WithCancel(base)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.Canceled) {
+				cancel()
+			}
+		case <-done:
+		}
+	}()
+	var once sync.Once
+	return detached, func() {
+		once.Do(func() {
+			close(done)
+			cancel()
+		})
+	}
 }
 
 func contextWithRuntimeWriteWaitPolicy(ctx context.Context, policy WritePolicy, waitBudget time.Duration) (context.Context, context.CancelFunc) {

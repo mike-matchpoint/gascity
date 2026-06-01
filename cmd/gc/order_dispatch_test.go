@@ -114,6 +114,14 @@ type orderDispatchTestRuntimeStore struct {
 	createDeadlineRemaining chan time.Duration
 }
 
+type orderDispatchNoForegroundGetStore struct {
+	beads.Store
+
+	mu               sync.Mutex
+	getCalled        bool
+	runtimeGetCalled bool
+}
+
 type notStartedOrderTrackingStore struct {
 	orderDispatchTestRuntimeStore
 
@@ -331,6 +339,41 @@ func (s orderDispatchTestRuntimeStore) RuntimeCreate(ctx context.Context, b bead
 	}
 }
 
+func (s orderDispatchTestRuntimeStore) RuntimeGet(ctx context.Context, id string, policy beads.ReadPolicy) (beads.Bead, error) {
+	if runtimeStore, ok := s.Store.(interface {
+		RuntimeGet(context.Context, string, beads.ReadPolicy) (beads.Bead, error)
+	}); ok {
+		return runtimeStore.RuntimeGet(ctx, id, policy)
+	}
+	return s.Get(id)
+}
+
+func (s *orderDispatchNoForegroundGetStore) Get(id string) (beads.Bead, error) {
+	s.mu.Lock()
+	s.getCalled = true
+	s.mu.Unlock()
+	return beads.Bead{}, fmt.Errorf("foreground Get called for %s", id)
+}
+
+func (s *orderDispatchNoForegroundGetStore) RuntimeGet(ctx context.Context, id string, policy beads.ReadPolicy) (beads.Bead, error) {
+	s.mu.Lock()
+	s.runtimeGetCalled = true
+	s.mu.Unlock()
+	return beads.RuntimeGet(ctx, s.Store, id, policy)
+}
+
+func (s *orderDispatchNoForegroundGetStore) foregroundGetCalled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.getCalled
+}
+
+func (s *orderDispatchNoForegroundGetStore) runtimeGetWasCalled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.runtimeGetCalled
+}
+
 func (s notStartedOrderTrackingStore) RuntimeCreate(_ context.Context, _ beads.Bead, policy beads.WritePolicy) (beads.Bead, error) {
 	return s.createResult, &beads.DegradedWriteError{
 		Class:     policy.Class,
@@ -448,6 +491,9 @@ func orderDispatchTestRuntimeTimeout(policy beads.WritePolicy, op string, err er
 func orderDispatchTestRuntimeContext(ctx context.Context, policy beads.WritePolicy, timeoutOverride time.Duration) (context.Context, context.CancelFunc) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if policy.DetachCallerDeadline {
+		ctx = context.WithoutCancel(ctx)
 	}
 	if timeoutOverride > 0 {
 		return context.WithTimeout(ctx, timeoutOverride)
@@ -1908,26 +1954,60 @@ func TestOrderDispatchTrackingReservationUsesWriteBudgetNotTickDeadline(t *testi
 	}
 }
 
-func TestOrderDispatchTrackingReservationStillHonorsCanceledTick(t *testing.T) {
-	parent, cancel := context.WithCancel(context.Background())
-	ctx := orderDispatchReservationWriteContext(parent)
-	cancel()
+func TestOrderDispatchTrackingReservationOutlivesTickDeadline(t *testing.T) {
+	base := beads.NewMemStore()
+	store := orderDispatchTestRuntimeStore{
+		Store: delayedOrderTrackingCreateStore{
+			Store: base,
+			delay: 75 * time.Millisecond,
+		},
+	}
+	m := &memoryOrderDispatcher{
+		stderr:     lockedStderr(&bytes.Buffer{}),
+		leaseStore: newOrderRuntimeLeaseStore(""),
+		cfg:        &config.City{},
+		startedAt:  time.Now(),
+	}
+	order := orders.Order{
+		Name:     "late-reservation",
+		Trigger:  "cooldown",
+		Interval: "1m",
+		Exec:     "true",
+	}
+	stats := &orderDispatchTickStats{
+		startedAt:     time.Now(),
+		storesTouched: make(map[string]struct{}),
+		deferReasons:  make(map[string]int),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
 
-	select {
-	case <-ctx.Done():
-	default:
-		t.Fatal("reservation write context did not preserve cancellation")
+	run, _, ok := m.reserveOrderForDispatch(ctx, store, "city", "gc", order, time.Now(), 0, orderTrackingLabels(order.ScopedName()), stats)
+	if !ok {
+		t.Fatalf("reservation was canceled by tick deadline; stats=%+v", stats)
 	}
-	if err := ctx.Err(); !errors.Is(err, context.Canceled) {
-		t.Fatalf("reservation write context Err() = %v, want context.Canceled", err)
+	if !run.TrackingReserved {
+		t.Fatal("run was not marked tracking-reserved")
 	}
-	if _, ok := ctx.Deadline(); ok {
-		t.Fatal("reservation write context should not preserve parent deadline")
+}
+
+func TestOrderDispatchReservationPolicyDetachesCallerDeadline(t *testing.T) {
+	policy := orderDispatchTrackingWritePolicy(beads.WriteClassReservation, "test.reservation", "reservation")
+	if !policy.DetachCallerDeadline {
+		t.Fatal("reservation write policy should detach caller deadline")
+	}
+	if policy.Timeout != beads.RuntimeWriteReservationBudget {
+		t.Fatalf("reservation write policy timeout = %s, want %s", policy.Timeout, beads.RuntimeWriteReservationBudget)
+	}
+	postAction := orderDispatchTrackingWritePolicy(beads.WriteClassPostActionCritical, "test.post-action", "post-action")
+	if postAction.DetachCallerDeadline {
+		t.Fatal("post-action write policy unexpectedly detached caller deadline")
 	}
 }
 
 func TestOrderDispatchClosedPriorControllerTrackingLeaseDoesNotSuppressRedispatch(t *testing.T) {
 	store := beads.NewMemStore()
+	runtimeStore := &orderDispatchNoForegroundGetStore{Store: store}
 	order := orders.Order{
 		Name:     "closed-prior-lease",
 		Trigger:  "cooldown",
@@ -1954,7 +2034,7 @@ func TestOrderDispatchClosedPriorControllerTrackingLeaseDoesNotSuppressRedispatc
 		}
 		return []byte("ok\n"), nil
 	}
-	ad := buildOrderDispatcherFromListExec([]orders.Order{order}, store, nil, fakeExec, &rec)
+	ad := buildOrderDispatcherFromListExec([]orders.Order{order}, runtimeStore, nil, fakeExec, &rec)
 	if ad == nil {
 		t.Fatal("expected non-nil dispatcher")
 	}
@@ -1980,6 +2060,12 @@ func TestOrderDispatchClosedPriorControllerTrackingLeaseDoesNotSuppressRedispatc
 	}
 	if _, ok := mad.leaseStore.load(oldTrackingID); ok {
 		t.Fatal("prior-controller local lease still present after durable closed tracking reconciliation")
+	}
+	if !runtimeStore.runtimeGetWasCalled() {
+		t.Fatal("closed tracking reconciliation did not use runtime get")
+	}
+	if runtimeStore.foregroundGetCalled() {
+		t.Fatal("closed tracking reconciliation used foreground Get")
 	}
 	all := trackingBeads(t, store, "order-run:"+order.ScopedName())
 	if len(all) != 2 {

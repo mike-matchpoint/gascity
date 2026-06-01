@@ -41,6 +41,79 @@ func TestRuntimeWritePolicyDefaults(t *testing.T) {
 	}
 }
 
+func TestContextWithWritePolicyDetachCallerDeadlineUsesPolicyBudget(t *testing.T) {
+	type contextKey string
+
+	parent := context.WithValue(context.Background(), contextKey("request"), "tick")
+	parent, cancel := context.WithTimeout(parent, 10*time.Millisecond)
+	defer cancel()
+	policy := RuntimeWritePolicy(WriteClassReservation, "test.detach-deadline", "reservation")
+	policy.Timeout = 100 * time.Millisecond
+	policy.DetachCallerDeadline = true
+
+	writeCtx, release := contextWithWritePolicy(parent, policy)
+	defer release()
+
+	<-parent.Done()
+	if err := parent.Err(); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("parent Err() = %v, want deadline exceeded", err)
+	}
+	select {
+	case <-writeCtx.Done():
+		t.Fatal("write context was canceled by parent deadline")
+	default:
+	}
+	if got := writeCtx.Value(contextKey("request")); got != "tick" {
+		t.Fatalf("write context value = %v, want preserved parent value", got)
+	}
+	deadline, ok := writeCtx.Deadline()
+	if !ok {
+		t.Fatal("write context missing policy deadline")
+	}
+	if remaining := time.Until(deadline); remaining <= 50*time.Millisecond {
+		t.Fatalf("write context deadline remaining = %s, want policy budget not parent deadline", remaining)
+	}
+}
+
+func TestContextWithWritePolicyDetachCallerDeadlinePreservesExplicitCancel(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	policy := RuntimeWritePolicy(WriteClassReservation, "test.detach-cancel", "reservation")
+	policy.Timeout = time.Second
+	policy.DetachCallerDeadline = true
+
+	writeCtx, release := contextWithWritePolicy(parent, policy)
+	defer release()
+	cancel()
+
+	select {
+	case <-writeCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("write context did not observe explicit parent cancellation")
+	}
+	if err := writeCtx.Err(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("write context Err() = %v, want context canceled", err)
+	}
+}
+
+func TestContextWithWritePolicyPreservesCallerDeadlineByDefault(t *testing.T) {
+	parent, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	policy := RuntimeWritePolicy(WriteClassReservation, "test.default-deadline", "reservation")
+	policy.Timeout = 100 * time.Millisecond
+
+	writeCtx, release := contextWithWritePolicy(parent, policy)
+	defer release()
+
+	select {
+	case <-writeCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("write context did not observe parent deadline")
+	}
+	if err := writeCtx.Err(); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("write context Err() = %v, want deadline exceeded", err)
+	}
+}
+
 func TestRuntimeWriteClassPriorityMatchesContract(t *testing.T) {
 	want := []WriteClass{
 		WriteClassHotState,
