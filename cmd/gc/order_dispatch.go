@@ -38,6 +38,7 @@ const (
 
 	orderTrackingSweepOrder                = "order-tracking-sweep"
 	defaultOrderTrackingSweepStaleAfter    = 10 * time.Minute
+	defaultOrderWispSweepStaleAfter        = 24 * time.Hour
 	orderTrackingSweepWatchdogInterval     = 30 * time.Second
 	orderTrackingSweepWatchdogStaleAfter   = 2 * time.Minute
 	orderTrackingSweepMetadataReason       = "stale-order-tracking"
@@ -2117,6 +2118,10 @@ func sweepStaleOrderTracking(store beads.Store, now time.Time, staleAfter time.D
 }
 
 func sweepStaleOrderTrackingAcrossStores(stores []beads.Store, now time.Time, staleAfter time.Duration, onlyOrders map[string]struct{}, initiator string, includeWispSubtrees bool) (orderTrackingSweepResult, error) {
+	return sweepStaleOrderTrackingAcrossStoresWithOptions(stores, now, staleAfter, onlyOrders, initiator, includeWispSubtrees, false)
+}
+
+func sweepStaleOrderTrackingAcrossStoresWithOptions(stores []beads.Store, now time.Time, staleAfter time.Duration, onlyOrders map[string]struct{}, initiator string, includeWispSubtrees, requireAbandonedWisps bool) (orderTrackingSweepResult, error) {
 	if staleAfter <= 0 {
 		return orderTrackingSweepResult{}, fmt.Errorf("stale-after must be positive")
 	}
@@ -2129,7 +2134,7 @@ func sweepStaleOrderTrackingAcrossStores(stores []beads.Store, now time.Time, st
 		if store == nil {
 			continue
 		}
-		partial, err := sweepStaleOrderTrackingWithOptions(store, now, staleAfter, onlyOrders, initiator, includeWispSubtrees)
+		partial, err := sweepStaleOrderTrackingWithWispOptions(store, now, staleAfter, onlyOrders, initiator, includeWispSubtrees, requireAbandonedWisps)
 		result.trackingClosed += partial.trackingClosed
 		result.wispClosed += partial.wispClosed
 		if err != nil {
@@ -2170,6 +2175,10 @@ func orderTrackingSweepStoreLabel(store beads.Store, index int) string {
 }
 
 func sweepStaleOrderTrackingWithOptions(store beads.Store, now time.Time, staleAfter time.Duration, onlyOrders map[string]struct{}, initiator string, includeWispSubtrees bool) (orderTrackingSweepResult, error) {
+	return sweepStaleOrderTrackingWithWispOptions(store, now, staleAfter, onlyOrders, initiator, includeWispSubtrees, false)
+}
+
+func sweepStaleOrderTrackingWithWispOptions(store beads.Store, now time.Time, staleAfter time.Duration, onlyOrders map[string]struct{}, initiator string, includeWispSubtrees, requireAbandonedWisps bool) (orderTrackingSweepResult, error) {
 	if staleAfter <= 0 {
 		return orderTrackingSweepResult{}, fmt.Errorf("stale-after must be positive")
 	}
@@ -2219,7 +2228,7 @@ func sweepStaleOrderTrackingWithOptions(store beads.Store, now time.Time, staleA
 	}
 
 	if includeWispSubtrees {
-		n, err := sweepStaleOrderWispSubtrees(store, cutoff, onlyOrders, initiator)
+		n, err := sweepStaleOrderWispSubtreesWithOptions(store, cutoff, onlyOrders, initiator, requireAbandonedWisps)
 		result.wispClosed = n
 		if err != nil {
 			return result, err
@@ -2264,6 +2273,10 @@ func listOrderTrackingCandidates(store beads.Store, onlyOrders map[string]struct
 }
 
 func sweepStaleOrderWispSubtrees(store beads.Store, cutoff time.Time, onlyOrders map[string]struct{}, initiator string) (int, error) {
+	return sweepStaleOrderWispSubtreesWithOptions(store, cutoff, onlyOrders, initiator, false)
+}
+
+func sweepStaleOrderWispSubtreesWithOptions(store beads.Store, cutoff time.Time, onlyOrders map[string]struct{}, initiator string, requireAbandoned bool) (int, error) {
 	roots, err := staleOrderWispRoots(store, cutoff, onlyOrders)
 	if err != nil {
 		return 0, err
@@ -2296,6 +2309,9 @@ func sweepStaleOrderWispSubtrees(store beads.Store, cutoff time.Time, onlyOrders
 		if !openSubtreeOlderThan(subtree, cutoff) {
 			continue
 		}
+		if requireAbandoned && orderWispSubtreeHasActiveOwner(subtree) {
+			continue
+		}
 		for _, id := range staleOrderWispSubtreeCloseIDs(subtree) {
 			if _, ok := seen[id]; ok {
 				continue
@@ -2324,6 +2340,21 @@ func sweepStaleOrderWispSubtrees(store beads.Store, cutoff time.Time, onlyOrders
 		return n, fmt.Errorf("closing stale order wisp subtrees: %w", err)
 	}
 	return n, nil
+}
+
+func orderWispSubtreeHasActiveOwner(subtree []beads.Bead) bool {
+	for _, b := range subtree {
+		if b.Status == "closed" {
+			continue
+		}
+		if strings.TrimSpace(b.Assignee) != "" {
+			return true
+		}
+		if status := strings.TrimSpace(b.Status); status != "" && status != "open" {
+			return true
+		}
+	}
+	return false
 }
 
 func staleOrderWispRoots(store beads.Store, cutoff time.Time, onlyOrders map[string]struct{}) ([]beads.Bead, error) {

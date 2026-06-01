@@ -4724,6 +4724,94 @@ func TestSweepStaleOrderTrackingWithWispsSkipsFreshOpenDescendant(t *testing.T) 
 	}
 }
 
+func TestSweepStaleOrderTrackingWithWispsRequireAbandonedSkipsAssignedOrInProgress(t *testing.T) {
+	store := beads.NewMemStore()
+
+	abandonedRoot, err := store.Create(beads.Bead{
+		Title:  "mol-digest-abandoned",
+		Type:   "molecule",
+		Labels: []string{"order-run:digest"},
+	})
+	if err != nil {
+		t.Fatalf("Create(abandoned root): %v", err)
+	}
+	abandonedChild, err := store.Create(beads.Bead{
+		Title:    "abandoned-step",
+		ParentID: abandonedRoot.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create(abandoned child): %v", err)
+	}
+	assignedRoot, err := store.Create(beads.Bead{
+		Title:  "mol-digest-assigned",
+		Type:   "molecule",
+		Labels: []string{"order-run:digest"},
+	})
+	if err != nil {
+		t.Fatalf("Create(assigned root): %v", err)
+	}
+	assignedChild, err := store.Create(beads.Bead{
+		Title:    "assigned-step",
+		ParentID: assignedRoot.ID,
+		Assignee: "dog",
+	})
+	if err != nil {
+		t.Fatalf("Create(assigned child): %v", err)
+	}
+	inProgressRoot, err := store.Create(beads.Bead{
+		Title:  "mol-digest-in-progress",
+		Type:   "molecule",
+		Labels: []string{"order-run:digest"},
+	})
+	if err != nil {
+		t.Fatalf("Create(in-progress root): %v", err)
+	}
+	inProgressChild, err := store.Create(beads.Bead{
+		Title:    "in-progress-step",
+		ParentID: inProgressRoot.ID,
+		Assignee: "dog",
+	})
+	if err != nil {
+		t.Fatalf("Create(in-progress child): %v", err)
+	}
+	inProgressStatus := "in_progress"
+	if err := store.Update(inProgressChild.ID, beads.UpdateOpts{Status: &inProgressStatus}); err != nil {
+		t.Fatalf("Update(in-progress child): %v", err)
+	}
+
+	closed, err := sweepStaleOrderWispSubtreesWithOptions(
+		store,
+		abandonedRoot.CreatedAt.Add(time.Hour),
+		orderFilterForTest("digest"),
+		orderTrackingSweepMetadataInitiator,
+		true,
+	)
+	if err != nil {
+		t.Fatalf("sweepStaleOrderWispSubtreesWithOptions: %v", err)
+	}
+	if closed != 2 {
+		t.Fatalf("closed = %d, want 2 abandoned beads only", closed)
+	}
+	for _, id := range []string{abandonedRoot.ID, abandonedChild.ID} {
+		got, err := store.Get(id)
+		if err != nil {
+			t.Fatalf("Get(%s): %v", id, err)
+		}
+		if got.Status != "closed" {
+			t.Fatalf("%s status = %q, want closed", id, got.Status)
+		}
+	}
+	for _, id := range []string{assignedRoot.ID, assignedChild.ID, inProgressRoot.ID, inProgressChild.ID} {
+		got, err := store.Get(id)
+		if err != nil {
+			t.Fatalf("Get(%s): %v", id, err)
+		}
+		if got.Status == "closed" {
+			t.Fatalf("%s status = closed, want active subtree left open", id)
+		}
+	}
+}
+
 func TestSweepStaleOrderTrackingWithWispsPropagatesDescendantListError(t *testing.T) {
 	base := beads.NewMemStore()
 

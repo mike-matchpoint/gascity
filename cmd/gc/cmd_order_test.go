@@ -1189,6 +1189,210 @@ prefix = "fe"
 	}
 }
 
+func TestCmdOrderSweepTrackingConfiguredWispsClosesFormulaOrderSubtree(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	t.Setenv("GC_BEADS_SCOPE_ROOT", "")
+
+	cityDir := t.TempDir()
+	t.Setenv("GC_CITY", cityDir)
+	t.Setenv("GC_CITY_PATH", cityDir)
+	t.Setenv("GC_CITY_ROOT", cityDir)
+	t.Setenv("GC_RIG", "")
+	t.Setenv("GC_RIG_ROOT", "")
+	t.Chdir(cityDir)
+
+	writeFile(t, filepath.Join(cityDir, "city.toml"), `[workspace]
+name = "test-city"
+prefix = "ct"
+`)
+	if err := os.MkdirAll(filepath.Join(cityDir, "orders"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(cityDir, "orders", "stale-formula.toml"), `[order]
+formula = "mol-stale"
+trigger = "cooldown"
+interval = "1m"
+pool = "dog"
+`)
+	writeFile(t, filepath.Join(cityDir, "orders", "manual-formula.toml"), `[order]
+formula = "mol-manual"
+trigger = "manual"
+pool = "dog"
+`)
+	writeFile(t, filepath.Join(cityDir, "orders", "unrouted-formula.toml"), `[order]
+formula = "mol-unrouted"
+trigger = "cooldown"
+interval = "1m"
+`)
+	writeFile(t, filepath.Join(cityDir, "orders", "exec-cleanup.toml"), `[order]
+exec = "true"
+trigger = "cooldown"
+interval = "1m"
+`)
+	if err := ensureScopedFileStoreLayout(cityDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensurePersistedScopeLocalFileStore(cityDir); err != nil {
+		t.Fatal(err)
+	}
+	store, err := openStoreAtForCity(cityDir, cityDir)
+	if err != nil {
+		t.Fatalf("openStoreAtForCity(city): %v", err)
+	}
+	tracking, err := store.Create(beads.Bead{
+		Title:  "order:stale-formula",
+		Labels: []string{"order-run:stale-formula", labelOrderTracking},
+	})
+	if err != nil {
+		t.Fatalf("Create(tracking): %v", err)
+	}
+	formulaRoot, err := store.Create(beads.Bead{
+		Title:  "mol-stale",
+		Type:   "molecule",
+		Labels: []string{"order-run:stale-formula"},
+		Metadata: map[string]string{
+			"formula":      "mol-stale",
+			"gc.routed_to": "dog",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create(formula root): %v", err)
+	}
+	formulaChild, err := store.Create(beads.Bead{
+		Title:    "run stale formula",
+		Type:     "step",
+		ParentID: formulaRoot.ID,
+		Metadata: map[string]string{
+			"formula":      "mol-stale",
+			"gc.routed_to": "dog",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create(formula child): %v", err)
+	}
+	manualRoot, err := store.Create(beads.Bead{
+		Title:  "mol-manual",
+		Type:   "molecule",
+		Labels: []string{"order-run:manual-formula"},
+	})
+	if err != nil {
+		t.Fatalf("Create(manual root): %v", err)
+	}
+	unroutedRoot, err := store.Create(beads.Bead{
+		Title:  "mol-unrouted",
+		Type:   "molecule",
+		Labels: []string{"order-run:unrouted-formula"},
+	})
+	if err != nil {
+		t.Fatalf("Create(unrouted root): %v", err)
+	}
+	unconfiguredRoot, err := store.Create(beads.Bead{
+		Title:  "mol-unconfigured",
+		Type:   "molecule",
+		Labels: []string{"order-run:not-configured"},
+	})
+	if err != nil {
+		t.Fatalf("Create(unconfigured root): %v", err)
+	}
+	time.Sleep(time.Millisecond)
+
+	var stdout, stderr bytes.Buffer
+	code := cmdOrderSweepTrackingWithOptions(orderSweepTrackingOptions{
+		StaleAfter:             time.Nanosecond,
+		WispStaleAfter:         time.Nanosecond,
+		WispStaleAfterExplicit: true,
+		IncludeConfiguredWisps: true,
+		OrderNames:             nil,
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("cmdOrderSweepTrackingWithOptions = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "closed 1 stale order-tracking bead(s), 2 stale order wisp bead(s)") {
+		t.Fatalf("stdout = %q, want tracking and wisp close counts", stdout.String())
+	}
+	for _, id := range []string{tracking.ID, formulaChild.ID, formulaRoot.ID} {
+		got, err := store.Get(id)
+		if err != nil {
+			t.Fatalf("Get(%s): %v", id, err)
+		}
+		if got.Status != "closed" {
+			t.Fatalf("%s status = %q, want closed", id, got.Status)
+		}
+	}
+	for _, id := range []string{manualRoot.ID, unroutedRoot.ID, unconfiguredRoot.ID} {
+		got, err := store.Get(id)
+		if err != nil {
+			t.Fatalf("Get(%s): %v", id, err)
+		}
+		if got.Status != "open" {
+			t.Fatalf("%s status = %q, want open", id, got.Status)
+		}
+	}
+}
+
+func TestCmdOrderSweepTrackingExplicitWispsDefaultToStaleAfter(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	t.Setenv("GC_BEADS_SCOPE_ROOT", "")
+
+	cityDir := t.TempDir()
+	t.Setenv("GC_CITY", cityDir)
+	t.Setenv("GC_CITY_PATH", cityDir)
+	t.Setenv("GC_CITY_ROOT", cityDir)
+	t.Setenv("GC_RIG", "")
+	t.Setenv("GC_RIG_ROOT", "")
+	t.Chdir(cityDir)
+
+	writeFile(t, filepath.Join(cityDir, "city.toml"), `[workspace]
+name = "test-city"
+prefix = "ct"
+`)
+	if err := ensureScopedFileStoreLayout(cityDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensurePersistedScopeLocalFileStore(cityDir); err != nil {
+		t.Fatal(err)
+	}
+	store, err := openStoreAtForCity(cityDir, cityDir)
+	if err != nil {
+		t.Fatalf("openStoreAtForCity(city): %v", err)
+	}
+	root, err := store.Create(beads.Bead{
+		Title:  "mol-digest",
+		Type:   "molecule",
+		Labels: []string{"order-run:digest"},
+	})
+	if err != nil {
+		t.Fatalf("Create(root): %v", err)
+	}
+	child, err := store.Create(beads.Bead{
+		Title:    "digest-step",
+		ParentID: root.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create(child): %v", err)
+	}
+	time.Sleep(time.Millisecond)
+
+	var stdout, stderr bytes.Buffer
+	code := cmdOrderSweepTrackingWithOptions(orderSweepTrackingOptions{
+		StaleAfter:   time.Nanosecond,
+		IncludeWisps: true,
+		OrderNames:   []string{"digest"},
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("cmdOrderSweepTrackingWithOptions = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	for _, id := range []string{root.ID, child.ID} {
+		got, err := store.Get(id)
+		if err != nil {
+			t.Fatalf("Get(%s): %v", id, err)
+		}
+		if got.Status != "closed" {
+			t.Fatalf("%s status = %q, want closed", id, got.Status)
+		}
+	}
+}
+
 func TestOrderRunEventFormulaLatestSeqErrorDoesNotInstantiate(t *testing.T) {
 	aa := []orders.Order{{
 		Name:         "release-watch",

@@ -2015,9 +2015,15 @@ This is intended for maintenance exec orders. It only closes tracking beads
 older than --stale-after so a fresh in-flight order is not interrupted.
 
 Use --include-wisps for operator recovery of abandoned order-run wisp
-subtrees whose open descendants are also older than --stale-after. Pass one
-or more scoped order names when --include-wisps is set; wisp recovery is
-order-scoped to avoid scanning unrelated beads.
+subtrees whose open descendants are also older than --wisp-stale-after. Pass
+one or more scoped order names when --include-wisps is set. When
+--wisp-stale-after is omitted, explicit operator recovery uses --stale-after.
+
+Use --include-configured-wisps for autonomous maintenance recovery. It derives
+the order allowlist from enabled, pool-backed, non-manual formula orders in the
+current city config, keeping wisp recovery order-scoped without requiring
+operators to hard-code every formula order name. Autonomous recovery only
+closes unassigned open subtrees; assigned or in-progress work is left alone.
 
 ```
 gc order sweep-tracking [order ...] [flags]
@@ -2025,9 +2031,11 @@ gc order sweep-tracking [order ...] [flags]
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
+| `--include-configured-wisps` | bool |  | also close stale unassigned order-run wisp subtrees for enabled pool-backed non-manual formula orders |
 | `--include-wisps` | bool |  | also close stale order-run wisp subtrees with open descendants |
 | `--quiet` | bool |  | suppress success output |
 | `--stale-after` | duration | `10m0s` | minimum age for an open tracking bead to be closed |
+| `--wisp-stale-after` | duration | `0s` | minimum age for an abandoned order-run wisp subtree to be closed; defaults to --stale-after for --include-wisps and 24h for --include-configured-wisps |
 
 ## gc pack
 

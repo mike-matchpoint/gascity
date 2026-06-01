@@ -184,9 +184,12 @@ name. Use --rig to filter by rig.`,
 
 func newOrderSweepTrackingCmd(stdout, stderr io.Writer) *cobra.Command {
 	staleAfter := defaultOrderTrackingSweepStaleAfter
+	wispStaleAfter := time.Duration(0)
 	includeWisps := false
+	includeConfiguredWisps := false
 	quiet := false
-	cmd := &cobra.Command{
+	var cmd *cobra.Command
+	cmd = &cobra.Command{
 		Use:   "sweep-tracking [order ...]",
 		Short: "Close stale order-tracking beads",
 		Long: `Close stale open order-tracking beads.
@@ -195,12 +198,27 @@ This is intended for maintenance exec orders. It only closes tracking beads
 older than --stale-after so a fresh in-flight order is not interrupted.
 
 Use --include-wisps for operator recovery of abandoned order-run wisp
-subtrees whose open descendants are also older than --stale-after. Pass one
-or more scoped order names when --include-wisps is set; wisp recovery is
-order-scoped to avoid scanning unrelated beads.`,
+subtrees whose open descendants are also older than --wisp-stale-after. Pass
+one or more scoped order names when --include-wisps is set. When
+--wisp-stale-after is omitted, explicit operator recovery uses --stale-after.
+
+Use --include-configured-wisps for autonomous maintenance recovery. It derives
+the order allowlist from enabled, pool-backed, non-manual formula orders in the
+current city config, keeping wisp recovery order-scoped without requiring
+operators to hard-code every formula order name. Autonomous recovery only
+closes unassigned open subtrees; assigned or in-progress work is left alone.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(_ *cobra.Command, args []string) error {
-			if cmdOrderSweepTracking(staleAfter, includeWisps, quiet, args, stdout, stderr) != 0 {
+			opts := orderSweepTrackingOptions{
+				StaleAfter:             staleAfter,
+				WispStaleAfter:         wispStaleAfter,
+				WispStaleAfterExplicit: cmd.Flags().Changed("wisp-stale-after"),
+				IncludeWisps:           includeWisps,
+				IncludeConfiguredWisps: includeConfiguredWisps,
+				Quiet:                  quiet,
+				OrderNames:             args,
+			}
+			if cmdOrderSweepTrackingWithOptions(opts, stdout, stderr) != 0 {
 				return errExit
 			}
 			return nil
@@ -208,7 +226,9 @@ order-scoped to avoid scanning unrelated beads.`,
 		ValidArgsFunction: completeOrderNames,
 	}
 	cmd.Flags().DurationVar(&staleAfter, "stale-after", defaultOrderTrackingSweepStaleAfter, "minimum age for an open tracking bead to be closed")
+	cmd.Flags().DurationVar(&wispStaleAfter, "wisp-stale-after", 0, "minimum age for an abandoned order-run wisp subtree to be closed; defaults to --stale-after for --include-wisps and 24h for --include-configured-wisps")
 	cmd.Flags().BoolVar(&includeWisps, "include-wisps", false, "also close stale order-run wisp subtrees with open descendants")
+	cmd.Flags().BoolVar(&includeConfiguredWisps, "include-configured-wisps", false, "also close stale unassigned order-run wisp subtrees for enabled pool-backed non-manual formula orders")
 	cmd.Flags().BoolVar(&quiet, "quiet", false, "suppress success output")
 	return cmd
 }
@@ -1426,10 +1446,41 @@ type orderHistoryJSONSummary struct {
 
 // --- gc order sweep-tracking ---
 
+type orderSweepTrackingOptions struct {
+	StaleAfter             time.Duration
+	WispStaleAfter         time.Duration
+	WispStaleAfterExplicit bool
+	IncludeWisps           bool
+	IncludeConfiguredWisps bool
+	Quiet                  bool
+	OrderNames             []string
+}
+
 func cmdOrderSweepTracking(staleAfter time.Duration, includeWisps, quiet bool, orderNames []string, stdout, stderr io.Writer) int {
-	if staleAfter <= 0 {
+	return cmdOrderSweepTrackingWithOptions(orderSweepTrackingOptions{
+		StaleAfter:             staleAfter,
+		WispStaleAfter:         staleAfter,
+		WispStaleAfterExplicit: true,
+		IncludeWisps:           includeWisps,
+		Quiet:                  quiet,
+		OrderNames:             orderNames,
+	}, stdout, stderr)
+}
+
+func cmdOrderSweepTrackingWithOptions(opts orderSweepTrackingOptions, stdout, stderr io.Writer) int {
+	if opts.StaleAfter <= 0 {
 		fmt.Fprintln(stderr, "gc order sweep-tracking: --stale-after must be positive") //nolint:errcheck // best-effort stderr
 		return 1
+	}
+	if opts.WispStaleAfterExplicit && opts.WispStaleAfter <= 0 {
+		fmt.Fprintln(stderr, "gc order sweep-tracking: --wisp-stale-after must be positive") //nolint:errcheck // best-effort stderr
+		return 1
+	}
+	explicitWispStaleAfter := opts.WispStaleAfter
+	configuredWispStaleAfter := opts.WispStaleAfter
+	if !opts.WispStaleAfterExplicit {
+		explicitWispStaleAfter = opts.StaleAfter
+		configuredWispStaleAfter = defaultOrderWispSweepStaleAfter
 	}
 	cityPath, err := resolveCity()
 	if err != nil {
@@ -1441,8 +1492,24 @@ func cmdOrderSweepTracking(staleAfter time.Duration, includeWisps, quiet bool, o
 		fmt.Fprintf(stderr, "gc order sweep-tracking: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}
-	onlyOrders := orderNameFilter(orderNames)
-	requiredTargets, err := orderTrackingSweepRequiredTargetKeysForOrders(cityPath, cfg, onlyOrders)
+	explicitOrders := orderNameFilter(opts.OrderNames)
+	configuredOrders := map[string]struct{}(nil)
+	if opts.IncludeConfiguredWisps {
+		configured, code := configuredFormulaOrderFilter(cityPath, cfg, stderr)
+		if code != 0 {
+			return code
+		}
+		configuredOrders = configured
+	}
+	if opts.IncludeWisps && len(explicitOrders) == 0 {
+		fmt.Fprintln(stderr, "gc order sweep-tracking: --include-wisps requires at least one order name") //nolint:errcheck // best-effort stderr
+		return 1
+	}
+	requiredOrders := cloneOrderNameFilter(explicitOrders)
+	if opts.IncludeConfiguredWisps {
+		requiredOrders = mergeOrderNameFilters(requiredOrders, configuredOrders)
+	}
+	requiredTargets, err := orderTrackingSweepRequiredTargetKeysForOrders(cityPath, cfg, requiredOrders)
 	if err != nil {
 		fmt.Fprintf(stderr, "gc order sweep-tracking: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
@@ -1456,7 +1523,18 @@ func cmdOrderSweepTracking(staleAfter time.Duration, includeWisps, quiet bool, o
 		}
 		return 1
 	}
-	result, sweepErr := sweepStaleOrderTrackingAcrossStores(stores, time.Now(), staleAfter, onlyOrders, orderTrackingSweepMetadataInitiator, includeWisps)
+	now := time.Now()
+	result, sweepErr := sweepStaleOrderTrackingAcrossStores(stores, now, opts.StaleAfter, explicitOrders, orderTrackingSweepMetadataInitiator, false)
+	if opts.IncludeWisps && len(explicitOrders) > 0 {
+		wispResult, err := sweepStaleOrderTrackingAcrossStores(stores, now, explicitWispStaleAfter, explicitOrders, orderTrackingSweepMetadataInitiator, true)
+		mergeOrderTrackingSweepResults(&result, wispResult)
+		sweepErr = errors.Join(sweepErr, err)
+	}
+	if opts.IncludeConfiguredWisps && len(configuredOrders) > 0 {
+		wispResult, err := sweepStaleOrderTrackingAcrossStoresWithOptions(stores, now, configuredWispStaleAfter, configuredOrders, orderTrackingSweepMetadataInitiator, true, true)
+		mergeOrderTrackingSweepResults(&result, wispResult)
+		sweepErr = errors.Join(sweepErr, err)
+	}
 	if err := errors.Join(openErr, sweepErr); err != nil {
 		fmt.Fprintf(stderr, "gc order sweep-tracking: %v\n", err) //nolint:errcheck // best-effort stderr
 		if result.storesSwept == 0 {
@@ -1467,14 +1545,77 @@ func cmdOrderSweepTracking(staleAfter time.Duration, includeWisps, quiet bool, o
 		fmt.Fprintf(stderr, "gc order sweep-tracking: target store was not swept for %s\n", strings.Join(missing, ", ")) //nolint:errcheck // best-effort stderr
 		return 1
 	}
-	if !quiet {
-		if includeWisps {
+	if !opts.Quiet {
+		if opts.IncludeWisps || opts.IncludeConfiguredWisps {
 			fmt.Fprintf(stdout, "closed %d stale order-tracking bead(s), %d stale order wisp bead(s)\n", result.trackingClosed, result.wispClosed) //nolint:errcheck // best-effort stdout
 		} else {
 			fmt.Fprintf(stdout, "closed %d stale order-tracking bead(s)\n", result.trackingClosed) //nolint:errcheck // best-effort stdout
 		}
 	}
 	return 0
+}
+
+func configuredFormulaOrderFilter(cityPath string, cfg *config.City, stderr io.Writer) (map[string]struct{}, int) {
+	aa, code := loadActiveOrdersForCity(cityPath, cfg, stderr, "gc order sweep-tracking")
+	if code != 0 {
+		return nil, code
+	}
+	out := make(map[string]struct{})
+	for _, order := range aa {
+		if order.IsExec() || order.Trigger == "manual" || strings.TrimSpace(order.Pool) == "" {
+			continue
+		}
+		if scoped := strings.TrimSpace(order.ScopedName()); scoped != "" {
+			out[scoped] = struct{}{}
+		}
+	}
+	if len(out) == 0 {
+		return nil, 0
+	}
+	return out, 0
+}
+
+func cloneOrderNameFilter(src map[string]struct{}) map[string]struct{} {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(src))
+	for name := range src {
+		out[name] = struct{}{}
+	}
+	return out
+}
+
+func mergeOrderNameFilters(dst, src map[string]struct{}) map[string]struct{} {
+	if len(src) == 0 {
+		return dst
+	}
+	if dst == nil {
+		dst = make(map[string]struct{}, len(src))
+	}
+	for name := range src {
+		dst[name] = struct{}{}
+	}
+	return dst
+}
+
+func mergeOrderTrackingSweepResults(dst *orderTrackingSweepResult, src orderTrackingSweepResult) {
+	if dst == nil {
+		return
+	}
+	dst.trackingClosed += src.trackingClosed
+	dst.wispClosed += src.wispClosed
+	if len(src.sweptStoreKeys) == 0 {
+		dst.storesSwept += src.storesSwept
+		return
+	}
+	if dst.sweptStoreKeys == nil {
+		dst.sweptStoreKeys = make(map[string]struct{}, len(src.sweptStoreKeys))
+	}
+	for key := range src.sweptStoreKeys {
+		dst.sweptStoreKeys[key] = struct{}{}
+	}
+	dst.storesSwept = len(dst.sweptStoreKeys)
 }
 
 func orderTrackingSweepRequiredTargetKeysForOrders(cityPath string, cfg *config.City, onlyOrders map[string]struct{}) (map[string][]string, error) {
