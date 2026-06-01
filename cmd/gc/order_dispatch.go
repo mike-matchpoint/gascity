@@ -830,6 +830,16 @@ func (m *memoryOrderDispatcher) reserveOrderForDispatch(ctx context.Context, sto
 		return orderDispatchRun{}, time.Time{}, false
 	}
 	if !acquired {
+		if m.releaseSuppressedLeaseIfTrackingClosed(store, lease) {
+			lease, acquired, err = m.leaseStore.acquire(reservation.Lease)
+			if err != nil {
+				logDispatchError(m.stderr, "gc: order dispatch: reacquiring runtime lease for %s after closed tracking reconciliation: %v", scoped, err)
+				stats.recordDeferred("local_lease")
+				return orderDispatchRun{}, time.Time{}, false
+			}
+		}
+	}
+	if !acquired {
 		stats.recordDeferred("local_lease")
 		logDispatchError(m.stderr, "gc: order dispatch: suppressing %s behind runtime lease %s state=%s", scoped, lease.LeaseID, lease.State)
 		return orderDispatchRun{}, time.Time{}, false
@@ -858,7 +868,7 @@ func (m *memoryOrderDispatcher) reserveOrderForDispatch(ctx context.Context, sto
 		},
 	}
 	policy := orderDispatchTrackingWritePolicy(beads.WriteClassReservation, "order.dispatch.tracking-reservation", reservation.Hash)
-	created, err := beads.RuntimeCreate(ctx, store, bead, policy)
+	created, err := beads.RuntimeCreate(orderDispatchReservationWriteContext(ctx), store, bead, policy)
 	if err == nil {
 		run.TrackingReserved = true
 		reservedAt := created.CreatedAt
@@ -885,6 +895,25 @@ func (m *memoryOrderDispatcher) reserveOrderForDispatch(ctx context.Context, sto
 	return run, now, true
 }
 
+func (m *memoryOrderDispatcher) releaseSuppressedLeaseIfTrackingClosed(store beads.Store, lease orderRuntimeLease) bool {
+	if m == nil || m.leaseStore == nil || store == nil || lease.LeaseID == "" || lease.TrackingBeadID == "" {
+		return false
+	}
+	currentController := m.controllerStartID()
+	if currentController != "" && lease.ControllerStartID == currentController {
+		return false
+	}
+	tracking, err := store.Get(lease.TrackingBeadID)
+	if err != nil || tracking.Status != "closed" || !beadLabelsContain(tracking.Labels, labelOrderTracking) {
+		return false
+	}
+	m.leaseStore.completeAndRemove(lease.LeaseID)
+	if m.stderr != nil {
+		fmt.Fprintf(m.stderr, "gc: order dispatch: released stale runtime lease %s for %s because tracking bead %s is closed\n", lease.LeaseID, lease.ScopedOrder, lease.TrackingBeadID) //nolint:errcheck // best-effort recovery trace
+	}
+	return true
+}
+
 func orderTrackingReservationNotStarted(err error) bool {
 	var degraded *beads.DegradedWriteError
 	return errors.As(err, &degraded) && degraded.Outcome == beads.WriteOutcomeNotStarted
@@ -892,6 +921,21 @@ func orderTrackingReservationNotStarted(err error) bool {
 
 func orderDispatchTrackingWritePolicy(class beads.WriteClass, caller, idempotencyKey string) beads.WritePolicy {
 	return beads.RuntimeWritePolicy(class, caller, idempotencyKey)
+}
+
+type orderDispatchNoDeadlineContext struct {
+	context.Context
+}
+
+func (c orderDispatchNoDeadlineContext) Deadline() (time.Time, bool) {
+	return time.Time{}, false
+}
+
+func orderDispatchReservationWriteContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return orderDispatchNoDeadlineContext{Context: ctx}
 }
 
 func (m *memoryOrderDispatcher) controllerStartID() string {

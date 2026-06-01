@@ -110,7 +110,8 @@ type delayedOrderTrackingCreateStore struct {
 type orderDispatchTestRuntimeStore struct {
 	beads.Store
 
-	timeoutOverride time.Duration
+	timeoutOverride         time.Duration
+	createDeadlineRemaining chan time.Duration
 }
 
 type notStartedOrderTrackingStore struct {
@@ -303,6 +304,16 @@ func (s delayedOrderTrackingCreateStore) Create(b beads.Bead) (beads.Bead, error
 func (s orderDispatchTestRuntimeStore) RuntimeCreate(ctx context.Context, b beads.Bead, policy beads.WritePolicy) (beads.Bead, error) {
 	ctx, cancel := orderDispatchTestRuntimeContext(ctx, policy, s.timeoutOverride)
 	defer cancel()
+	if s.createDeadlineRemaining != nil {
+		remaining := time.Duration(-1)
+		if deadline, ok := ctx.Deadline(); ok {
+			remaining = time.Until(deadline)
+		}
+		select {
+		case s.createDeadlineRemaining <- remaining:
+		default:
+		}
+	}
 	type result struct {
 		bead beads.Bead
 		err  error
@@ -1849,6 +1860,223 @@ func TestOrderDispatchTrackingReservationNotStartedRetriesNextTick(t *testing.T)
 	}
 	if got := len(trackingBeads(t, base, "order-run:tracking-required")); got != 1 {
 		t.Fatalf("tracking beads after retry = %d, want one", got)
+	}
+}
+
+func TestOrderDispatchTrackingReservationUsesWriteBudgetNotTickDeadline(t *testing.T) {
+	base := beads.NewMemStore()
+	deadlines := make(chan time.Duration, 1)
+	store := orderDispatchTestRuntimeStore{
+		Store:                   base,
+		createDeadlineRemaining: deadlines,
+	}
+	m := &memoryOrderDispatcher{
+		stderr:     lockedStderr(&bytes.Buffer{}),
+		leaseStore: newOrderRuntimeLeaseStore(""),
+		cfg:        &config.City{},
+		startedAt:  time.Now(),
+	}
+	order := orders.Order{
+		Name:     "late-reservation",
+		Trigger:  "cooldown",
+		Interval: "1m",
+		Exec:     "true",
+	}
+	stats := &orderDispatchTickStats{
+		startedAt:     time.Now(),
+		storesTouched: make(map[string]struct{}),
+		deferReasons:  make(map[string]int),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	run, _, ok := m.reserveOrderForDispatch(ctx, store, "city", "gc", order, time.Now(), 0, orderTrackingLabels(order.ScopedName()), stats)
+	if !ok {
+		t.Fatalf("reservation was not created; stats=%+v", stats)
+	}
+	if !run.TrackingReserved {
+		t.Fatal("run was not marked tracking-reserved")
+	}
+
+	select {
+	case remaining := <-deadlines:
+		if remaining < 5*time.Second {
+			t.Fatalf("reservation create inherited tick deadline; remaining=%s, want reservation write budget", remaining)
+		}
+	default:
+		t.Fatal("runtime create deadline was not observed")
+	}
+}
+
+func TestOrderDispatchTrackingReservationStillHonorsCanceledTick(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	ctx := orderDispatchReservationWriteContext(parent)
+	cancel()
+
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("reservation write context did not preserve cancellation")
+	}
+	if err := ctx.Err(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("reservation write context Err() = %v, want context.Canceled", err)
+	}
+	if _, ok := ctx.Deadline(); ok {
+		t.Fatal("reservation write context should not preserve parent deadline")
+	}
+}
+
+func TestOrderDispatchClosedPriorControllerTrackingLeaseDoesNotSuppressRedispatch(t *testing.T) {
+	store := beads.NewMemStore()
+	order := orders.Order{
+		Name:     "closed-prior-lease",
+		Trigger:  "cooldown",
+		Interval: "1ns",
+		Exec:     "closed-prior-lease",
+	}
+	oldTrackingID := "gc-order-old-closed-prior-lease"
+	if _, err := store.Create(beads.Bead{
+		ID:     oldTrackingID,
+		Title:  "order:" + order.ScopedName(),
+		Labels: orderTrackingLabels(order.ScopedName()),
+	}); err != nil {
+		t.Fatalf("Create(old tracking): %v", err)
+	}
+	if _, err := store.CloseAll([]string{oldTrackingID}, map[string]string{"close_reason": orphanedOrderTrackingCloseReason}); err != nil {
+		t.Fatalf("CloseAll(old tracking): %v", err)
+	}
+
+	var rec memRecorder
+	ran := false
+	fakeExec := func(_ context.Context, command, _ string, _ []string) ([]byte, error) {
+		if command == order.Exec {
+			ran = true
+		}
+		return []byte("ok\n"), nil
+	}
+	ad := buildOrderDispatcherFromListExec([]orders.Order{order}, store, nil, fakeExec, &rec)
+	if ad == nil {
+		t.Fatal("expected non-nil dispatcher")
+	}
+	mad := ad.(*memoryOrderDispatcher)
+	mustAcquireOrderRuntimeLease(t, mad.leaseStore, orderRuntimeLease{
+		Order:              order.Name,
+		ScopedOrder:        order.ScopedName(),
+		LeaseID:            oldTrackingID,
+		TriggerKind:        order.Trigger,
+		TrackingBeadID:     oldTrackingID,
+		State:              orderRuntimeLeaseActive,
+		ExpiresAt:          time.Now().Add(time.Hour),
+		ControllerPID:      os.Getpid(),
+		ControllerStartID:  "previous-controller",
+		TriggerFingerprint: "previous-fingerprint",
+	})
+
+	ad.dispatch(context.Background(), t.TempDir(), time.Now().Add(time.Hour))
+	ad.drain(context.Background())
+
+	if !ran {
+		t.Fatal("order did not run after closed prior-controller tracking lease reconciliation")
+	}
+	if _, ok := mad.leaseStore.load(oldTrackingID); ok {
+		t.Fatal("prior-controller local lease still present after durable closed tracking reconciliation")
+	}
+	all := trackingBeads(t, store, "order-run:"+order.ScopedName())
+	if len(all) != 2 {
+		t.Fatalf("tracking beads = %d, want old closed tracking bead plus new dispatch tracking bead", len(all))
+	}
+	for _, b := range all {
+		if b.Status != "closed" {
+			t.Fatalf("tracking bead %s status = %q, want closed", b.ID, b.Status)
+		}
+	}
+	event, ok := rec.orderDispatchTickEvent()
+	if !ok {
+		t.Fatal("missing order dispatch tick event")
+	}
+	var payload events.OrderDispatchTickPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatalf("decode tick payload: %v; raw=%s", err, event.Payload)
+	}
+	if payload.DispatchesCreated != 1 || payload.OrdersDeferred != 0 {
+		t.Fatalf("tick payload = %+v, want one dispatch and no deferrals", payload)
+	}
+	if got := payload.DeferReasons["local_lease"]; got != 0 {
+		t.Fatalf("local_lease defer reason = %d, want 0; payload=%+v", got, payload)
+	}
+}
+
+func TestOrderDispatchCurrentControllerTrackingLeaseStillSuppresses(t *testing.T) {
+	store := beads.NewMemStore()
+	order := orders.Order{
+		Name:     "current-lease",
+		Trigger:  "cooldown",
+		Interval: "1ns",
+		Exec:     "current-lease",
+	}
+	trackingID := "gc-order-current-controller-lease"
+	if _, err := store.Create(beads.Bead{
+		ID:     trackingID,
+		Title:  "order:" + order.ScopedName(),
+		Labels: orderTrackingLabels(order.ScopedName()),
+	}); err != nil {
+		t.Fatalf("Create(tracking): %v", err)
+	}
+	if _, err := store.CloseAll([]string{trackingID}, map[string]string{"close_reason": completedOrderTrackingCloseReason}); err != nil {
+		t.Fatalf("CloseAll(tracking): %v", err)
+	}
+
+	var rec memRecorder
+	ran := false
+	fakeExec := func(_ context.Context, _, _ string, _ []string) ([]byte, error) {
+		ran = true
+		return []byte("ok\n"), nil
+	}
+	ad := buildOrderDispatcherFromListExec([]orders.Order{order}, store, nil, fakeExec, &rec)
+	if ad == nil {
+		t.Fatal("expected non-nil dispatcher")
+	}
+	mad := ad.(*memoryOrderDispatcher)
+	mad.startedAt = time.Now().Add(-time.Minute)
+	mustAcquireOrderRuntimeLease(t, mad.leaseStore, orderRuntimeLease{
+		Order:              order.Name,
+		ScopedOrder:        order.ScopedName(),
+		LeaseID:            trackingID,
+		TriggerKind:        order.Trigger,
+		TrackingBeadID:     trackingID,
+		State:              orderRuntimeLeaseActive,
+		ExpiresAt:          time.Now().Add(time.Hour),
+		ControllerPID:      os.Getpid(),
+		ControllerStartID:  mad.controllerStartID(),
+		TriggerFingerprint: "current-fingerprint",
+	})
+
+	ad.dispatch(context.Background(), t.TempDir(), time.Now().Add(time.Hour))
+	ad.drain(context.Background())
+
+	if ran {
+		t.Fatal("order ran while current-controller active lease should still suppress")
+	}
+	if _, ok := mad.leaseStore.load(trackingID); !ok {
+		t.Fatal("current-controller local lease was released")
+	}
+	all := trackingBeads(t, store, "order-run:"+order.ScopedName())
+	if len(all) != 1 {
+		t.Fatalf("tracking beads = %d, want only the pre-existing closed tracking bead", len(all))
+	}
+	event, ok := rec.orderDispatchTickEvent()
+	if !ok {
+		t.Fatal("missing order dispatch tick event")
+	}
+	var payload events.OrderDispatchTickPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatalf("decode tick payload: %v; raw=%s", err, event.Payload)
+	}
+	if payload.DispatchesCreated != 0 || payload.OrdersDeferred != 1 {
+		t.Fatalf("tick payload = %+v, want one local lease deferral", payload)
+	}
+	if got := payload.DeferReasons["local_lease"]; got != 1 {
+		t.Fatalf("local_lease defer reason = %d, want 1; payload=%+v", got, payload)
 	}
 }
 

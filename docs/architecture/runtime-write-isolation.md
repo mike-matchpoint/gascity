@@ -108,6 +108,21 @@ context. Once an order action has started, recording the execution result and
 closing the tracking bead are completion/audit work and should not be canceled
 just because the action context expired.
 
+Order tracking reservation writes are allowed to outlive the dispatch tick
+deadline, but not dispatcher cancellation. A long dispatch tick can spend most
+of its deadline closing or labeling earlier order work; the next reservation
+must still enter the runtime writer with the reservation class budget so the
+write path increases throughput instead of suppressing later orders. The
+reservation context therefore strips only the parent deadline and preserves the
+parent `Done`/`Err` cancellation signal.
+
+Local order leases remain subordinate to durable tracking rows. If a local
+lease from a prior controller start suppresses dispatch, and the referenced
+tracking bead is already durably closed with order-tracking labels, the
+dispatcher may release that stale local lease and retry reservation. A lease
+from the current controller start still suppresses dispatch so an active order
+cannot be duplicated.
+
 Live soak acceptance for this cutover is:
 
 - Warmup: allow the existing reload gate and `order-firing-current` warning for
