@@ -45,5 +45,7 @@ func newSessionManagerWithConfig(cityPath string, store beads.Store, sp runtime.
 			return "", false
 		}
 		return strings.TrimSpace(resolved.ProviderSessionCreateTransport()), false
+	}).WithDeferredSubmitPollerEnabled(func(string) bool {
+		return cfg.Daemon.NudgeDispatcherMode() != "supervisor"
 	})
 }

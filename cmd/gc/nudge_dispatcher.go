@@ -8,9 +8,13 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/nudgequeue"
 	"github.com/gastownhall/gascity/internal/runtime"
@@ -21,6 +25,23 @@ import (
 // missing socket — legacy-mode cities and pre-start producers expect the
 // dial to fail fast.
 const pingNudgeWakeSocketDialTimeout = 200 * time.Millisecond
+
+type legacyNudgePollerSweepResult struct {
+	Signaled     int
+	RemovedStale int
+	Skipped      int
+}
+
+var (
+	legacyNudgePollerProcessRunning = func(pid int) bool {
+		err := syscall.Kill(pid, 0)
+		return err == nil || errors.Is(err, syscall.EPERM)
+	}
+	legacyNudgePollerProcessArgs = readProcessArgs
+	legacyNudgePollerSignal      = func(pid int) error {
+		return syscall.Kill(pid, syscall.SIGTERM)
+	}
+)
 
 // pingNudgeWakeSocket sends a best-effort wake signal to the supervisor's
 // nudge dispatcher. Callers invoke this after enqueueing a queued nudge so
@@ -41,6 +62,124 @@ func pingNudgeWakeSocket(cityPath string) {
 	defer conn.Close() //nolint:errcheck // best-effort signaling
 	_ = conn.SetWriteDeadline(time.Now().Add(pingNudgeWakeSocketDialTimeout))
 	_, _ = conn.Write([]byte{1})
+}
+
+func retireLegacyNudgePollersForSupervisor(cityPath string, stderr io.Writer, logPrefix string) {
+	result, err := sweepLegacyNudgePollersForSupervisor(cityPath)
+	if err != nil {
+		if stderr != nil {
+			fmt.Fprintf(stderr, "%s: nudge dispatcher: legacy poller sweep: %v\n", logPrefix, err) //nolint:errcheck
+		}
+		return
+	}
+	if stderr != nil && (result.Signaled > 0 || result.RemovedStale > 0) {
+		fmt.Fprintf(stderr, "%s: nudge dispatcher: retired legacy pollers signaled=%d stale_pidfiles=%d skipped=%d\n", logPrefix, result.Signaled, result.RemovedStale, result.Skipped) //nolint:errcheck
+	}
+}
+
+func sweepLegacyNudgePollersForSupervisor(cityPath string) (legacyNudgePollerSweepResult, error) {
+	var result legacyNudgePollerSweepResult
+	if strings.TrimSpace(cityPath) == "" {
+		return result, nil
+	}
+	pollerDir := citylayout.RuntimePath(cityPath, "nudges", "pollers")
+	entries, err := os.ReadDir(pollerDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return result, nil
+	}
+	if err != nil {
+		return result, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".pid" {
+			continue
+		}
+		pidPath := filepath.Join(pollerDir, entry.Name())
+		sessionName := strings.TrimSuffix(entry.Name(), ".pid")
+		if err := withNudgePollerPIDLock(pidPath, func() error {
+			pid, ok, err := readLegacyNudgePollerPID(pidPath)
+			if err != nil {
+				return err
+			}
+			if !ok || !legacyNudgePollerProcessRunning(pid) {
+				_ = os.Remove(pidPath)
+				result.RemovedStale++
+				return nil
+			}
+			args, ok := legacyNudgePollerProcessArgs(pid)
+			if !ok || !legacyNudgePollerArgsMatch(args, cityPath, sessionName) {
+				result.Skipped++
+				return nil
+			}
+			if err := legacyNudgePollerSignal(pid); err != nil && !errors.Is(err, syscall.ESRCH) {
+				result.Skipped++
+				return nil
+			}
+			_ = os.Remove(pidPath)
+			result.Signaled++
+			return nil
+		}); err != nil {
+			return result, err
+		}
+	}
+	return result, nil
+}
+
+func readLegacyNudgePollerPID(pidPath string) (int, bool, error) {
+	data, err := os.ReadFile(pidPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	pidText := strings.TrimSpace(string(data))
+	if pidText == "" {
+		return 0, false, nil
+	}
+	pid, err := strconv.Atoi(pidText)
+	if err != nil || pid <= 0 {
+		return 0, false, nil
+	}
+	return pid, true, nil
+}
+
+func readProcessArgs(pid int) ([]string, bool) {
+	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
+	if err != nil || len(data) == 0 {
+		return nil, false
+	}
+	raw := strings.TrimRight(string(data), "\x00")
+	if raw == "" {
+		return nil, false
+	}
+	return strings.Split(raw, "\x00"), true
+}
+
+func legacyNudgePollerArgsMatch(args []string, cityPath, sessionName string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	hasNudgePoll := false
+	hasCity := false
+	hasSession := false
+	cleanCity := filepath.Clean(cityPath)
+	for i, arg := range args {
+		if arg == "nudge" && i+1 < len(args) && args[i+1] == "poll" {
+			hasNudgePoll = true
+		}
+		switch {
+		case arg == "--city" && i+1 < len(args):
+			hasCity = filepath.Clean(args[i+1]) == cleanCity
+		case strings.HasPrefix(arg, "--city="):
+			hasCity = filepath.Clean(strings.TrimPrefix(arg, "--city=")) == cleanCity
+		case arg == "--session" && i+1 < len(args):
+			hasSession = args[i+1] == sessionName
+		case strings.HasPrefix(arg, "--session="):
+			hasSession = strings.TrimPrefix(arg, "--session=") == sessionName
+		}
+	}
+	return hasNudgePoll && hasCity && hasSession
 }
 
 // startNudgeWakeListener opens the supervisor wake socket and spawns an

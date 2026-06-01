@@ -71,6 +71,9 @@ func workerFactoryWithConfig(cityPath string, store beads.Store, sp runtime.Prov
 		SearchPaths:           searchPaths,
 		ResolveTransport:      resolveTransport,
 		ResolveSessionRuntime: workerSessionRuntimeResolverWithConfig(cityPath, cfg),
+		DeferredSubmitPollerEnabled: func(string) bool {
+			return cfg == nil || cfg.Daemon.NudgeDispatcherMode() != "supervisor"
+		},
 	})
 }
 

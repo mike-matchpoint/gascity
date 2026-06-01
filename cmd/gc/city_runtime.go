@@ -629,6 +629,7 @@ func (cr *CityRuntime) run(ctx context.Context) {
 	// restart). Legacy mode skips the listener entirely; per-session
 	// pollers continue to own delivery.
 	if nudgeDispatcherIsSupervisor(cr.cfg) && cr.cityPath != "" {
+		retireLegacyNudgePollersForSupervisor(cr.cityPath, cr.stderr, cr.logPrefix)
 		if _, err := startNudgeWakeListener(ctx, cr.cityPath, cr.nudgeWakeCh, cr.stderr, cr.logPrefix); err != nil {
 			fmt.Fprintf(cr.stderr, "%s: nudge dispatcher: %v (falling back to patrol-only delivery)\n", cr.logPrefix, err) //nolint:errcheck // best-effort stderr
 		}

@@ -437,6 +437,46 @@ func TestSubmitFollowUpQueuesDeferredMessageAndStartsCodexPoller(t *testing.T) {
 	}
 }
 
+func TestSubmitFollowUpQueuesDeferredMessageWithoutPollerWhenPolicyDisabled(t *testing.T) {
+	store := beads.NewMemStore()
+	sp := runtime.NewFake()
+	cityPath := t.TempDir()
+	mgr := NewManagerWithCityPath(store, sp, cityPath).WithDeferredSubmitPollerEnabled(func(string) bool {
+		return false
+	})
+
+	info, err := mgr.Create(context.Background(), "helper", "", "codex", t.TempDir(), "codex", nil, ProviderResume{}, runtime.Config{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	var pollerCalls int
+	origPoller := startSessionSubmitPoller
+	startSessionSubmitPoller = func(_, _, _ string) error {
+		pollerCalls++
+		return nil
+	}
+	defer func() { startSessionSubmitPoller = origPoller }()
+
+	outcome, err := mgr.Submit(context.Background(), info.ID, "follow up later", BuildResumeCommand(info), runtime.Config{WorkDir: info.WorkDir}, SubmitIntentFollowUp)
+	if err != nil {
+		t.Fatalf("Submit(follow_up): %v", err)
+	}
+	if !outcome.Queued {
+		t.Fatal("Submit(follow_up) should report queued")
+	}
+	state, err := nudgequeue.LoadState(cityPath)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if len(state.Pending) != 1 {
+		t.Fatalf("pending queued submits = %d, want 1", len(state.Pending))
+	}
+	if pollerCalls != 0 {
+		t.Fatalf("pollerCalls = %d, want 0 when policy disables legacy pollers", pollerCalls)
+	}
+}
+
 func TestEnsureSessionSubmitPollerRejectsGoTestExecutable(t *testing.T) {
 	cityPath := t.TempDir()
 	exe := filepath.Join(t.TempDir(), "session.test")

@@ -136,11 +136,12 @@ type ProviderResume struct {
 // Manager orchestrates chat session lifecycle using beads for persistence
 // and runtime.Provider for runtime.
 type Manager struct {
-	store             beads.Store
-	sp                runtime.Provider
-	cityPath          string
-	transportResolver func(template, provider string) transportResolution
-	clk               clock.Clock
+	store                       beads.Store
+	sp                          runtime.Provider
+	cityPath                    string
+	transportResolver           func(template, provider string) transportResolution
+	deferredSubmitPollerEnabled func(cityPath string) bool
+	clk                         clock.Clock
 }
 
 // PruneResult reports which sessions were pruned and which queued wait nudges
@@ -347,6 +348,23 @@ func NewManagerWithTransportPolicyResolverAndCityPath(
 			}
 		},
 	}
+}
+
+// WithDeferredSubmitPollerEnabled configures whether this manager may spawn
+// the legacy per-session submit poller after queueing deferred submits. The
+// zero-value policy permits pollers, preserving local/legacy behavior.
+func (m *Manager) WithDeferredSubmitPollerEnabled(enabled func(cityPath string) bool) *Manager {
+	if m != nil {
+		m.deferredSubmitPollerEnabled = enabled
+	}
+	return m
+}
+
+func (m *Manager) deferredSubmitPollerAllowed() bool {
+	if m == nil || m.deferredSubmitPollerEnabled == nil {
+		return true
+	}
+	return m.deferredSubmitPollerEnabled(m.cityPath)
 }
 
 // Create creates a new chat session bead and starts the runtime session.

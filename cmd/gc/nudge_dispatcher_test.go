@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -107,6 +110,77 @@ func TestStartNudgeWakeListenerStopsOnContextCancel(t *testing.T) {
 		t.Fatal("expected dial to fail after ctx cancel; listener still accepting")
 	}
 	_ = lis
+}
+
+func TestSweepLegacyNudgePollersForSupervisorSignalsOnlyVerifiedPollers(t *testing.T) {
+	dir := t.TempDir()
+	pollerDir := filepath.Dir(nudgePollerPIDPath(dir, "worker-session"))
+	if err := os.MkdirAll(pollerDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(pollerDir): %v", err)
+	}
+	writePID := func(sessionName string, pid int) string {
+		t.Helper()
+		pidPath := nudgePollerPIDPath(dir, sessionName)
+		if err := os.WriteFile(pidPath, []byte(fmt.Sprintf("%d\n", pid)), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s): %v", pidPath, err)
+		}
+		return pidPath
+	}
+	verifiedPath := writePID("worker-session", 111)
+	foreignPath := writePID("foreign-session", 222)
+	stalePath := writePID("stale-session", 333)
+	wrongSessionPath := writePID("wrong-session", 444)
+
+	origRunning := legacyNudgePollerProcessRunning
+	origArgs := legacyNudgePollerProcessArgs
+	origSignal := legacyNudgePollerSignal
+	t.Cleanup(func() {
+		legacyNudgePollerProcessRunning = origRunning
+		legacyNudgePollerProcessArgs = origArgs
+		legacyNudgePollerSignal = origSignal
+	})
+
+	legacyNudgePollerProcessRunning = func(pid int) bool {
+		return pid != 333
+	}
+	legacyNudgePollerProcessArgs = func(pid int) ([]string, bool) {
+		switch pid {
+		case 111:
+			return []string{"/usr/local/bin/gc", "nudge", "poll", "--city", dir, "--session", "worker-session", "worker"}, true
+		case 222:
+			return []string{"/bin/sleep", "999"}, true
+		case 444:
+			return []string{"/usr/local/bin/gc", "nudge", "poll", "--city", dir, "--session", "different-session", "worker"}, true
+		default:
+			return nil, false
+		}
+	}
+	var signaled []int
+	legacyNudgePollerSignal = func(pid int) error {
+		signaled = append(signaled, pid)
+		return nil
+	}
+
+	result, err := sweepLegacyNudgePollersForSupervisor(dir)
+	if err != nil {
+		t.Fatalf("sweepLegacyNudgePollersForSupervisor: %v", err)
+	}
+	if result.Signaled != 1 || result.RemovedStale != 1 || result.Skipped != 2 {
+		t.Fatalf("result = %+v, want signaled=1 stale=1 skipped=2", result)
+	}
+	if len(signaled) != 1 || signaled[0] != 111 {
+		t.Fatalf("signaled = %v, want [111]", signaled)
+	}
+	for _, path := range []string{verifiedPath, stalePath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("%s stat err = %v, want not exist", path, err)
+		}
+	}
+	for _, path := range []string{foreignPath, wrongSessionPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("%s should remain for unverified running process: %v", path, err)
+		}
+	}
 }
 
 func TestDispatchAllQueuedNudgesNoOpInLegacyMode(t *testing.T) {

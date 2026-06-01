@@ -21,6 +21,9 @@ func (s *Server) workerFactory(store beads.Store) (*worker.Factory, error) {
 		Recorder:              s.state.EventProvider(),
 		ResolveTransport:      resolveTransport,
 		ResolveSessionRuntime: s.resolveWorkerSessionRuntimeWithMetadata,
+		DeferredSubmitPollerEnabled: func(string) bool {
+			return cfg == nil || cfg.Daemon.NudgeDispatcherMode() != "supervisor"
+		},
 	})
 }
 

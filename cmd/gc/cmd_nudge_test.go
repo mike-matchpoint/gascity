@@ -2118,6 +2118,84 @@ func TestAcquireNudgePollerLeaseAllowsBootstrapPID(t *testing.T) {
 	}
 }
 
+func TestNudgePollerShouldYieldToSupervisorReloadsConfig(t *testing.T) {
+	cityDir := t.TempDir()
+	write := func(mode string) {
+		t.Helper()
+		body := `[workspace]
+name = "test-city"
+
+[daemon]
+`
+		if mode != "" {
+			body += fmt.Sprintf("nudge_dispatcher = %q\n", mode)
+		}
+		if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile(city.toml): %v", err)
+		}
+	}
+
+	write("")
+	if nudgePollerShouldYieldToSupervisor(cityDir, ioDiscard{}) {
+		t.Fatal("legacy/default dispatcher should not stop legacy poller")
+	}
+
+	write("supervisor")
+	if !nudgePollerShouldYieldToSupervisor(cityDir, ioDiscard{}) {
+		t.Fatal("supervisor dispatcher should stop legacy poller")
+	}
+}
+
+func TestCmdNudgePollExitsWithoutPIDInSupervisorMode(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	cityDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cityDir, ".gc"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.gc): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`[workspace]
+name = "test-city"
+
+[daemon]
+nudge_dispatcher = "supervisor"
+
+[[agent]]
+name = "worker"
+provider = "codex"
+start_command = "echo"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(city.toml): %v", err)
+	}
+	t.Chdir(cityDir)
+
+	store, err := openCityStoreAt(cityDir)
+	if err != nil {
+		t.Fatalf("openCityStoreAt: %v", err)
+	}
+	sessionBead, err := store.Create(beads.Bead{
+		Type:   session.BeadType,
+		Status: "open",
+		Title:  "worker session",
+		Labels: []string{sessionBeadLabel, "agent:worker"},
+		Metadata: map[string]string{
+			"session_name": "sess-worker",
+			"agent_name":   "worker",
+			"template":     "worker",
+			"transport":    "tmux",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create(session): %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := cmdNudgePoll([]string{sessionBead.ID}, "sess-worker", time.Millisecond, 0, &stdout, &stderr); code != 0 {
+		t.Fatalf("cmdNudgePoll code = %d, stderr=%s", code, stderr.String())
+	}
+	if _, err := os.Stat(nudgePollerPIDPath(cityDir, "sess-worker")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("poller pid file exists in supervisor mode: %v", err)
+	}
+}
+
 func TestSplitQueuedNudgesForTarget_RejectsFencedNudgesWithoutResolvedSession(t *testing.T) {
 	items := []queuedNudge{
 		{ID: "n1", SessionID: "gc-1", ContinuationEpoch: "2"},

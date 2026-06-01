@@ -38,6 +38,7 @@ const (
 	defaultNudgePollQuiescence      = 3 * time.Second
 	defaultNudgePollStartGrace      = 15 * time.Second
 	defaultNudgeWaitIdleTimeout     = 30 * time.Second
+	defaultNudgePollDispatcherCheck = 30 * time.Second
 )
 
 var errNudgeSessionFenceMismatch = errors.New("queued nudge session fence mismatch")
@@ -477,6 +478,9 @@ func cmdNudgePoll(args []string, sessionName string, interval, quiescence time.D
 		fmt.Fprintln(stderr, "gc nudge poll: session name unavailable") //nolint:errcheck
 		return 1
 	}
+	if nudgeDispatcherIsSupervisor(target.cfg) {
+		return 0
+	}
 
 	release, err := acquireNudgePollerLease(target.cityPath, target.sessionName)
 	if err != nil {
@@ -495,7 +499,15 @@ func cmdNudgePoll(args []string, sessionName string, interval, quiescence time.D
 		return 1
 	}
 	var missingSince time.Time
+	nextDispatcherCheck := time.Now().Add(defaultNudgePollDispatcherCheck)
 	for {
+		now := time.Now()
+		if !now.Before(nextDispatcherCheck) {
+			if nudgePollerShouldYieldToSupervisor(target.cityPath, stderr) {
+				return 0
+			}
+			nextDispatcherCheck = now.Add(defaultNudgePollDispatcherCheck)
+		}
 		obs, err := workerObserveNudgeTarget(target, store, sp)
 		if err != nil {
 			fmt.Fprintf(stderr, "gc nudge poll: %v\n", err) //nolint:errcheck
@@ -522,6 +534,19 @@ func cmdNudgePoll(args []string, sessionName string, interval, quiescence time.D
 		}
 		time.Sleep(interval)
 	}
+}
+
+var nudgePollerLoadCityConfig = loadCityConfig
+
+func nudgePollerShouldYieldToSupervisor(cityPath string, stderr io.Writer) bool {
+	if cityPath == "" {
+		return false
+	}
+	cfg, err := nudgePollerLoadCityConfig(cityPath, stderr)
+	if err != nil {
+		return false
+	}
+	return nudgeDispatcherIsSupervisor(cfg)
 }
 
 func shouldKeepNudgePollerAlive(target nudgeTarget, missingSince, now time.Time) bool {

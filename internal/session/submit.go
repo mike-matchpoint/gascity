@@ -533,7 +533,7 @@ func (m *Manager) enqueueDeferredSubmitLocked(b beads.Bead, sessName, message st
 	}); err != nil {
 		return fmt.Errorf("queueing deferred submit: %w", err)
 	}
-	if m.supportsFollowUpLocked(b) {
+	if m.supportsFollowUpLocked(b) && m.deferredSubmitPollerAllowed() {
 		_ = startSessionSubmitPoller(m.cityPath, deferredSubmitAgentKey(b), sessName)
 	}
 	return nil

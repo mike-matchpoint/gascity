@@ -20,7 +20,9 @@ func (s *Server) sessionManager(store beads.Store) *session.Manager {
 		func(template, provider string) (string, bool) {
 			return configuredSessionTransportResolution(cfg, template, provider)
 		},
-	)
+	).WithDeferredSubmitPollerEnabled(func(string) bool {
+		return cfg.Daemon.NudgeDispatcherMode() != "supervisor"
+	})
 }
 
 func configuredSessionTransport(cfg *config.City, template, provider string) string {
