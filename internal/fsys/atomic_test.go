@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -324,6 +325,10 @@ func TestWriteFileAtomic_SweepsDeadPIDOrphans(t *testing.T) {
 	if err := os.WriteFile(deadSeqOrphan, nil, 0o644); err != nil {
 		t.Fatalf("seed dead sequence orphan: %v", err)
 	}
+	recentDeadOrphan := fmt.Sprintf("%s.tmp.%d.%s.1", target, deadPID, strconv.FormatInt(time.Now().UnixNano(), 36))
+	if err := os.WriteFile(recentDeadOrphan, nil, 0o644); err != nil {
+		t.Fatalf("seed recent dead orphan: %v", err)
+	}
 
 	livePID := os.Getpid()
 	liveOrphan := fmt.Sprintf("%s.tmp.%d.di258dn070o5", target, livePID)
@@ -345,6 +350,9 @@ func TestWriteFileAtomic_SweepsDeadPIDOrphans(t *testing.T) {
 	}
 	if _, err := os.Stat(deadSeqOrphan); !os.IsNotExist(err) {
 		t.Errorf("dead-PID sequence orphan still present: stat err = %v", err)
+	}
+	if _, err := os.Stat(recentDeadOrphan); err != nil {
+		t.Errorf("recent dead-PID orphan unexpectedly removed: stat err = %v", err)
 	}
 	if _, err := os.Stat(liveOrphan); err != nil {
 		t.Errorf("live-PID orphan unexpectedly removed: stat err = %v", err)

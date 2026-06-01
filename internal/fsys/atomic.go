@@ -16,6 +16,8 @@ import (
 
 var atomicTempSeq atomic.Uint64
 
+const atomicTempMinSweepAge = 30 * time.Minute
+
 // WriteFileAtomic writes data to path atomically using a temp file + rename.
 // The temp file is created in the same directory as path to ensure the rename
 // is on the same filesystem (required for atomic rename on POSIX). Permissions
@@ -56,7 +58,9 @@ func atomicTempSuffix() string {
 // Only siblings of `target` matching the WriteFileAtomic suffix scheme
 // (`<basename>.tmp.<pid>.<unixnano-base36>[.<seq-base36>]`) are considered.
 // PIDs that are still alive — including in-progress writers from concurrent
-// calls — are preserved.
+// calls — are preserved. Recent temp files are also preserved even when the
+// PID is not visible locally; that can happen on shared filesystems mounted
+// into separate PID namespaces, such as Kubernetes pods sharing a PVC.
 func sweepDeadAtomicOrphans(fs FS, target string) {
 	dir := filepath.Dir(target)
 	prefix := filepath.Base(target) + ".tmp."
@@ -64,6 +68,7 @@ func sweepDeadAtomicOrphans(fs FS, target string) {
 	if err != nil {
 		return
 	}
+	now := time.Now()
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -72,8 +77,11 @@ func sweepDeadAtomicOrphans(fs FS, target string) {
 		if !strings.HasPrefix(name, prefix) {
 			continue
 		}
-		pid, ok := parseAtomicTempPID(name[len(prefix):])
+		pid, createdAt, ok := parseAtomicTempSuffix(name[len(prefix):])
 		if !ok {
+			continue
+		}
+		if !atomicTempOldEnoughForSweep(createdAt, now) {
 			continue
 		}
 		if pidutil.Alive(pid) {
@@ -83,27 +91,38 @@ func sweepDeadAtomicOrphans(fs FS, target string) {
 	}
 }
 
-// parseAtomicTempPID parses the `<pid>.<unixnano-base36>[.<seq-base36>]`
-// suffix produced by WriteFileAtomic and returns the PID. Returns ok=false
-// when the input does not match the scheme (e.g., no dot, non-numeric PID).
-func parseAtomicTempPID(suffix string) (int, bool) {
+// parseAtomicTempSuffix parses the `<pid>.<unixnano-base36>[.<seq-base36>]`
+// suffix produced by WriteFileAtomic and returns the PID and creation time.
+// Returns ok=false when the input does not match the scheme.
+func parseAtomicTempSuffix(suffix string) (int, time.Time, bool) {
 	parts := strings.Split(suffix, ".")
 	if len(parts) < 2 {
-		return 0, false
+		return 0, time.Time{}, false
 	}
 	pid, err := strconv.Atoi(parts[0])
 	if err != nil || pid <= 0 {
-		return 0, false
+		return 0, time.Time{}, false
 	}
-	for _, part := range parts[1:] {
+	unixNano, err := strconv.ParseInt(parts[1], 36, 64)
+	if err != nil || unixNano <= 0 {
+		return 0, time.Time{}, false
+	}
+	for _, part := range parts[2:] {
 		if part == "" {
-			return 0, false
+			return 0, time.Time{}, false
 		}
 		if _, err := strconv.ParseUint(part, 36, 64); err != nil {
-			return 0, false
+			return 0, time.Time{}, false
 		}
 	}
-	return pid, true
+	return pid, time.Unix(0, unixNano), true
+}
+
+func atomicTempOldEnoughForSweep(createdAt, now time.Time) bool {
+	if createdAt.IsZero() || createdAt.After(now) {
+		return false
+	}
+	return now.Sub(createdAt) >= atomicTempMinSweepAge
 }
 
 // WriteFileIfChangedAtomic writes data to path atomically only when the
