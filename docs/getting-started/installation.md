@@ -27,7 +27,7 @@ for you; the other methods require manual installation.
 | jq | Yes | — | `brew install jq` | `apt install jq` | JSON processing |
 | git | Yes | — | (built-in) | (built-in) | Version control |
 | dolt | Yes | 1.86.2 or newer | `brew install dolt` | [releases](https://github.com/dolthub/dolt/releases) | Beads data plane |
-| bd (Beads CLI) | Yes | 1.0.0 | `brew install beads` | [releases](https://github.com/gastownhall/beads/releases) | Issue tracking |
+| bd (Beads CLI) | Yes | 1.0.6 | [fork release](https://github.com/Matchpoint-Intelligence/Beads-Dev/releases) | [fork release](https://github.com/Matchpoint-Intelligence/Beads-Dev/releases) | Issue tracking |
 | flock | Yes | — | `brew install flock` | (built-in via util-linux) | File locking |
 | gh | Optional | — | `brew install gh` | [cli.github.com](https://cli.github.com/) | GitHub gate checks |
 | Go 1.25+ | Source only | 1.25 | `brew install go` | [golang.org](https://go.dev/dl/) | Compiler |

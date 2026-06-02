@@ -10,7 +10,8 @@ permissions:
 
 env:
   DOLT_VERSION: "2.0.3"
-  BD_VERSION: "v1.0.4"
+  BD_VERSION: "v1.0.6"
+  BD_GITHUB_TOKEN: ${{ secrets.GASCITY_HOSTED_TOKEN || github.token }}
 
 jobs:
   tier-b:

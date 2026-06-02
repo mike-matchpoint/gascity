@@ -174,6 +174,7 @@ jobs:
       - name: Prepare image build inputs
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          BD_GITHUB_TOKEN: ${{ secrets.GASCITY_HOSTED_TOKEN || github.token }}
         run: |
           set -euo pipefail
           . ./deps.env

@@ -55,6 +55,38 @@ esac
 
 version_no_v="${version#v}"
 platform_tuple="${os}_${arch}"
+owner_repo="${BD_REPO:-Matchpoint-Intelligence/Beads-Dev}"
+github_token="${BD_GITHUB_TOKEN:-${GITHUB_TOKEN:-${GH_TOKEN:-}}}"
+
+github_curl() {
+  if [[ -n "$github_token" ]]; then
+    curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --retry-connrefused \
+      -H "Authorization: Bearer ${github_token}" \
+      "$@"
+  else
+    curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --retry-connrefused "$@"
+  fi
+}
+
+github_release_json() {
+  local owner_repo="$1"
+  local tag="$2"
+  local json
+  if [[ -n "$github_token" ]]; then
+    github_curl \
+      -H "Accept: application/vnd.github+json" \
+      "https://api.github.com/repos/${owner_repo}/releases/tags/${tag}"
+    return
+  fi
+  if command -v gh >/dev/null 2>&1 && json="$(gh api "repos/${owner_repo}/releases/tags/${tag}" 2>/dev/null)"; then
+    printf '%s\n' "$json"
+    return
+  fi
+  github_curl \
+    -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/${owner_repo}/releases/tags/${tag}"
+}
+
 expected_sha=""
 case "${version}:${platform_tuple}" in
   v1.0.4:linux_amd64) expected_sha="643e602e27f666c8726abff0f22001e2b5883988fa960204bde20a3129d448a5" ;;
@@ -79,25 +111,52 @@ github_release_asset_sha() {
     echo "jq is required to resolve GitHub release asset checksums" >&2
     exit 1
   fi
-  local auth_header=()
-  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-    auth_header=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
-  fi
-  curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --retry-connrefused "${auth_header[@]}" \
-    -H "Accept: application/vnd.github+json" \
-    "https://api.github.com/repos/${owner_repo}/releases/tags/${tag}" \
+  github_release_json "$owner_repo" "$tag" \
     | jq -r --arg asset "$asset" '.assets[] | select(.name == $asset) | .digest // empty' \
     | sed 's/^sha256://'
 }
 
 archive="beads_${version_no_v}_${platform_tuple}.tar.gz"
 if [[ -z "$expected_sha" ]]; then
-  expected_sha="$(github_release_asset_sha "gastownhall/beads" "$version" "$archive")"
+  expected_sha="$(github_release_asset_sha "$owner_repo" "$version" "$archive")"
   if [[ -z "$expected_sha" ]]; then
-    echo "No bd checksum found for ${version}/${platform_tuple}" >&2
+    echo "No bd checksum found for ${owner_repo}/${version}/${platform_tuple}" >&2
     exit 1
   fi
 fi
+
+download_release_asset() {
+  local owner_repo="$1"
+  local tag="$2"
+  local asset="$3"
+  local dst="$4"
+
+  if command -v gh >/dev/null 2>&1; then
+    if [[ -n "$github_token" ]]; then
+      GH_TOKEN="$github_token" gh release download "$tag" --repo "$owner_repo" --pattern "$asset" --dir "$(dirname "$dst")" >/dev/null || true
+    else
+      gh release download "$tag" --repo "$owner_repo" --pattern "$asset" --dir "$(dirname "$dst")" >/dev/null || true
+    fi
+    if [[ -f "$dst" ]]; then
+      return 0
+    fi
+  fi
+
+  local api_json asset_api_url
+  api_json="$(github_release_json "$owner_repo" "$tag")"
+  asset_api_url="$(jq -r --arg asset "$asset" '.assets[] | select(.name == $asset) | .url // empty' <<<"$api_json")"
+  if [[ -n "$asset_api_url" ]]; then
+    github_curl \
+      -H "Accept: application/octet-stream" \
+      -o "$dst" \
+      "$asset_api_url"
+    return 0
+  fi
+
+  github_curl \
+    -o "$dst" \
+    "https://github.com/${owner_repo}/releases/download/${tag}/${asset}"
+}
 
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -143,11 +202,10 @@ if [[ -x "$target" ]]; then
 else
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
-  curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --retry-connrefused -o "${tmp}/${archive}" \
-    "https://github.com/gastownhall/beads/releases/download/${version}/${archive}"
+  download_release_asset "$owner_repo" "$version" "$archive" "${tmp}/${archive}"
   actual_sha="$(sha256_file "${tmp}/${archive}")"
   if [[ "$actual_sha" != "$expected_sha" ]]; then
-    echo "bd checksum mismatch for ${version}/${platform_tuple}" >&2
+    echo "bd checksum mismatch for ${owner_repo}/${version}/${platform_tuple}" >&2
     echo "expected: $expected_sha" >&2
     echo "actual:   $actual_sha" >&2
     exit 1

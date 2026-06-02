@@ -57,7 +57,7 @@
         "BD_VERSION:\\s*\"(?<currentValue>v?\\d+\\.\\d+\\.\\d+)\""
       ],
       "datasourceTemplate": "github-releases",
-      "depNameTemplate": "gastownhall/beads"
+      "depNameTemplate": "Matchpoint-Intelligence/Beads-Dev"
     },
     {
       "customType": "regex",
