@@ -273,6 +273,216 @@ func TestDoctorRoutedWorkDemandContractWarnsOnUnclaimableRoutedWork(t *testing.T
 	}
 }
 
+func TestDoctorRoutedWorkDemandContractAllowsDefaultRoutedWorkWithoutSelector(t *testing.T) {
+	cityDir := t.TempDir()
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Agents: []config.Agent{{
+			Name:              "dog",
+			BindingName:       "gastown",
+			MaxActiveSessions: intPtr(3),
+		}},
+	}
+	store := beads.NewMemStoreFrom(0, []beads.Bead{{
+		ID:       "CITY-TASK",
+		Title:    "default routed work",
+		Type:     "task",
+		Status:   "open",
+		Metadata: map[string]string{routedwork.RoutedToMetadataKey: "gastown.dog"},
+	}}, nil)
+
+	result := newRoutedWorkDemandContractCheck(cfg, cityDir, func(path string) (beads.Store, error) {
+		if path != cityDir {
+			return nil, fmt.Errorf("unexpected store path %q", path)
+		}
+		return store, nil
+	}).Run(&doctor.CheckContext{})
+
+	if result.Status != doctor.StatusOK {
+		t.Fatalf("status = %v, want ok: %#v", result.Status, result)
+	}
+}
+
+func TestDoctorRoutedWorkDemandContractAllowsPassiveUnconfiguredParkingRoute(t *testing.T) {
+	cityDir := t.TempDir()
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Agents: []config.Agent{{
+			Name:              "dog",
+			BindingName:       "gastown",
+			MaxActiveSessions: intPtr(3),
+		}},
+	}
+	store := beads.NewMemStoreFrom(0, []beads.Bead{{
+		ID:       "CITY-HUMAN",
+		Title:    "needs human review",
+		Type:     "task",
+		Status:   "open",
+		Metadata: map[string]string{routedwork.RoutedToMetadataKey: "human-escalation"},
+	}}, nil)
+
+	result := newRoutedWorkDemandContractCheck(cfg, cityDir, func(path string) (beads.Store, error) {
+		if path != cityDir {
+			return nil, fmt.Errorf("unexpected store path %q", path)
+		}
+		return store, nil
+	}).Run(&doctor.CheckContext{})
+
+	if result.Status != doctor.StatusOK {
+		t.Fatalf("status = %v, want ok for passive parking route: %#v", result.Status, result)
+	}
+}
+
+func TestDoctorRoutedWorkDemandContractWarnsOnActiveUnknownNamespacedRoute(t *testing.T) {
+	cityDir := t.TempDir()
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Agents: []config.Agent{{
+			Name:              "dog",
+			BindingName:       "gastown",
+			MaxActiveSessions: intPtr(3),
+		}},
+	}
+	store := beads.NewMemStoreFrom(0, []beads.Bead{{
+		ID:       "CITY-GHOST",
+		Title:    "unknown agent",
+		Type:     "task",
+		Status:   "open",
+		Metadata: map[string]string{routedwork.RoutedToMetadataKey: "gastown.ghost"},
+	}}, nil)
+
+	result := newRoutedWorkDemandContractCheck(cfg, cityDir, func(path string) (beads.Store, error) {
+		if path != cityDir {
+			return nil, fmt.Errorf("unexpected store path %q", path)
+		}
+		return store, nil
+	}).Run(&doctor.CheckContext{})
+
+	if result.Status != doctor.StatusWarning {
+		t.Fatalf("status = %v, want warning: %#v", result.Status, result)
+	}
+	details := strings.Join(result.Details, "\n")
+	for _, want := range []string{
+		"unclaimable routed work",
+		"CITY-GHOST",
+		`gc.routed_to="gastown.ghost"`,
+		"no configured target can claim it",
+	} {
+		if !strings.Contains(details, want) {
+			t.Fatalf("details missing %q:\n%s", want, details)
+		}
+	}
+}
+
+func TestDoctorRoutedWorkDemandContractWarnsOnReadyTypedSelectorMismatch(t *testing.T) {
+	cityDir := t.TempDir()
+	rigDir := t.TempDir()
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Rigs:      []config.Rig{{Name: "repo", Path: rigDir}},
+		Agents: []config.Agent{{
+			Name:              "cartographer",
+			Dir:               "repo",
+			MaxActiveSessions: intPtr(1),
+			WorkSelector: config.WorkSelector{
+				Status:     "open",
+				Type:       "step",
+				Unassigned: true,
+				Ready:      true,
+				Metadata: map[string]string{
+					routedwork.RoutedToMetadataKey: "repo/cartographer",
+					"formula":                      "spec-cartographer",
+				},
+			},
+		}},
+	}
+	cityStore := beads.NewMemStore()
+	rigStore := beads.NewMemStoreFrom(0, []beads.Bead{{
+		ID:       "STEP-READY",
+		Title:    "ready but selector-invisible",
+		Type:     "step",
+		Status:   "open",
+		Metadata: map[string]string{routedwork.RoutedToMetadataKey: "repo/cartographer"},
+	}}, nil)
+	stores := map[string]beads.Store{cityDir: cityStore, rigDir: rigStore}
+
+	result := newRoutedWorkDemandContractCheck(cfg, cityDir, func(path string) (beads.Store, error) {
+		store, ok := stores[path]
+		if !ok {
+			return nil, fmt.Errorf("unexpected store path %q", path)
+		}
+		return store, nil
+	}).Run(&doctor.CheckContext{})
+
+	if result.Status != doctor.StatusWarning {
+		t.Fatalf("status = %v, want warning: %#v", result.Status, result)
+	}
+	details := strings.Join(result.Details, "\n")
+	for _, want := range []string{
+		"unclaimable routed work",
+		"STEP-READY",
+		"does not match work_selector",
+	} {
+		if !strings.Contains(details, want) {
+			t.Fatalf("details missing %q:\n%s", want, details)
+		}
+	}
+}
+
+func TestDoctorRoutedWorkDemandContractIgnoresBlockedTypedSelectorMismatch(t *testing.T) {
+	cityDir := t.TempDir()
+	rigDir := t.TempDir()
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Rigs:      []config.Rig{{Name: "repo", Path: rigDir}},
+		Agents: []config.Agent{{
+			Name:              "cartographer",
+			Dir:               "repo",
+			MaxActiveSessions: intPtr(1),
+			WorkSelector: config.WorkSelector{
+				Status:     "open",
+				Type:       "step",
+				Unassigned: true,
+				Ready:      true,
+				Metadata: map[string]string{
+					routedwork.RoutedToMetadataKey: "repo/cartographer",
+					"formula":                      "spec-cartographer",
+				},
+			},
+		}},
+	}
+	cityStore := beads.NewMemStore()
+	rigStore := beads.NewMemStoreFrom(0, []beads.Bead{{
+		ID:     "BLOCKER",
+		Title:  "blocking prerequisite",
+		Type:   "task",
+		Status: "open",
+	}, {
+		ID:       "STEP-FUTURE",
+		Title:    "blocked future step",
+		Type:     "step",
+		Status:   "open",
+		Metadata: map[string]string{routedwork.RoutedToMetadataKey: "repo/cartographer"},
+	}}, []beads.Dep{{
+		IssueID:     "STEP-FUTURE",
+		DependsOnID: "BLOCKER",
+		Type:        "blocks",
+	}})
+	stores := map[string]beads.Store{cityDir: cityStore, rigDir: rigStore}
+
+	result := newRoutedWorkDemandContractCheck(cfg, cityDir, func(path string) (beads.Store, error) {
+		store, ok := stores[path]
+		if !ok {
+			return nil, fmt.Errorf("unexpected store path %q", path)
+		}
+		return store, nil
+	}).Run(&doctor.CheckContext{})
+
+	if result.Status != doctor.StatusOK {
+		t.Fatalf("status = %v, want ok for non-ready selector mismatch: %#v", result.Status, result)
+	}
+}
+
 func TestDoctorRoutedWorkDemandContractWarnsOnWrongClaimStore(t *testing.T) {
 	cityDir := t.TempDir()
 	rigDir := t.TempDir()

@@ -80,11 +80,16 @@ func (c *routedWorkDemandContractCheck) Run(_ *doctor.CheckContext) *doctor.Chec
 			skipped = append(skipped, fmt.Sprintf("%s skipped: listing open routed beads: %v", scope.label, err))
 			continue
 		}
+		defaultDemandIDs, err := c.defaultRoutedDemandIDs(store)
+		if err != nil {
+			skipped = append(skipped, fmt.Sprintf("%s skipped: evaluating default routed demand: %v", scope.label, err))
+			continue
+		}
 		for _, bead := range items {
 			if strings.TrimSpace(bead.Metadata[routedwork.RoutedToMetadataKey]) == "" {
 				continue
 			}
-			c.scanDemandBead(scope, store, bead, claimCache, &findings, &skipped)
+			c.scanDemandBead(scope, store, bead, defaultDemandIDs, claimCache, &findings, &skipped)
 		}
 	}
 
@@ -123,28 +128,23 @@ func (c *routedWorkDemandContractCheck) scopes() []routedWorkDemandScope {
 	return scopes
 }
 
-func (c *routedWorkDemandContractCheck) scanDemandBead(scope routedWorkDemandScope, store beads.Store, bead beads.Bead, claimCache map[string]routedWorkClaimCacheEntry, findings, skipped *[]string) {
+func (c *routedWorkDemandContractCheck) scanDemandBead(scope routedWorkDemandScope, store beads.Store, bead beads.Bead, defaultDemandIDs map[string]bool, claimCache map[string]routedWorkClaimCacheEntry, findings, skipped *[]string) {
 	route := strings.TrimSpace(bead.Metadata[routedwork.RoutedToMetadataKey])
 	if route == "" {
 		return
 	}
-	if isFormulaOrderRootMissingPoolDemand(bead) {
+	missingPoolDemand := isFormulaOrderRootMissingPoolDemand(bead)
+	if missingPoolDemand {
 		*findings = append(*findings, fmt.Sprintf("missing order demand sentinel: %s bead %s has gc.routed_to=%q and an order-run label but missing %s=%q",
 			scope.label, bead.ID, route, routedwork.PoolDemandMetadataKey, routedwork.PoolDemandOrderValue))
 	}
 
 	plan, err := routedwork.PlanRoute(c.cfg, route, routedwork.DemandGeneric)
 	if err != nil {
-		if strings.TrimSpace(bead.Assignee) == "" {
+		if shouldWarnUnconfiguredRoutedDemand(bead, route, defaultDemandIDs[bead.ID], missingPoolDemand) {
 			*findings = append(*findings, fmt.Sprintf("unclaimable routed work: %s bead %s has gc.routed_to=%q but no configured target can claim it: %v",
 				scope.label, bead.ID, route, err))
 		}
-		return
-	}
-	wantStore := routeCreateStoreRoot(c.cfg, c.cityPath, plan)
-	if strings.TrimSpace(wantStore) != "" && !samePath(wantStore, scope.path) {
-		*findings = append(*findings, fmt.Sprintf("wrong claim store: %s bead %s has gc.routed_to=%q but target %q claims from %s",
-			scope.label, bead.ID, route, plan.Target, routedWorkScopeLabelForPath(c.cfg, c.cityPath, wantStore)))
 		return
 	}
 	if strings.TrimSpace(bead.Assignee) != "" {
@@ -154,6 +154,25 @@ func (c *routedWorkDemandContractCheck) scanDemandBead(scope routedWorkDemandSco
 	if !ok {
 		*findings = append(*findings, fmt.Sprintf("unclaimable routed work: %s bead %s has gc.routed_to=%q but resolved target %q is not configured",
 			scope.label, bead.ID, route, plan.Target))
+		return
+	}
+	selectorDemand := false
+	if !agentCfg.WorkSelector.IsZero() {
+		var demandErr error
+		selectorDemand, demandErr = c.selectorDemandWindow(store, bead, agentCfg.WorkSelector)
+		if demandErr != nil {
+			*skipped = append(*skipped, fmt.Sprintf("%s skipped: evaluating routed demand readiness for %s bead %s: %v", scope.label, plan.Target, bead.ID, demandErr))
+			return
+		}
+	}
+	activeDemand := defaultDemandIDs[bead.ID] || selectorDemand
+	if !activeDemand {
+		return
+	}
+	wantStore := routeCreateStoreRoot(c.cfg, c.cityPath, plan)
+	if strings.TrimSpace(wantStore) != "" && !samePath(wantStore, scope.path) {
+		*findings = append(*findings, fmt.Sprintf("wrong claim store: %s bead %s has gc.routed_to=%q but target %q claims from %s",
+			scope.label, bead.ID, route, plan.Target, routedWorkScopeLabelForPath(c.cfg, c.cityPath, wantStore)))
 		return
 	}
 	if agentCfg.Suspended {
@@ -167,8 +186,6 @@ func (c *routedWorkDemandContractCheck) scanDemandBead(scope routedWorkDemandSco
 		return
 	}
 	if agentCfg.WorkSelector.IsZero() {
-		*findings = append(*findings, fmt.Sprintf("unclaimable routed work: %s bead %s has gc.routed_to=%q but target %q has no work_selector",
-			scope.label, bead.ID, route, plan.Target))
 		return
 	}
 	ids, err := c.claimableIDs(scope, store, agentCfg, claimCache)
@@ -179,6 +196,126 @@ func (c *routedWorkDemandContractCheck) scanDemandBead(scope routedWorkDemandSco
 	if !ids[bead.ID] {
 		*findings = append(*findings, fmt.Sprintf("unclaimable routed work: %s bead %s has gc.routed_to=%q but target %q does not match work_selector",
 			scope.label, bead.ID, route, plan.Target))
+	}
+}
+
+func (c *routedWorkDemandContractCheck) defaultRoutedDemandIDs(store beads.Store) (map[string]bool, error) {
+	ready, err := store.Ready()
+	if err != nil {
+		return nil, err
+	}
+	ids := make(map[string]bool, len(ready))
+	for _, bead := range ready {
+		if strings.TrimSpace(bead.Assignee) != "" {
+			continue
+		}
+		if strings.TrimSpace(bead.Metadata[routedwork.RoutedToMetadataKey]) == "" {
+			continue
+		}
+		if bead.Type == "epic" {
+			continue
+		}
+		ids[bead.ID] = true
+	}
+	poolDemand, err := store.List(beads.ListQuery{
+		Status:   "open",
+		Metadata: poolDemandMetadataPair(),
+		TierMode: beads.TierBoth,
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, bead := range poolDemand {
+		if strings.TrimSpace(bead.Assignee) != "" {
+			continue
+		}
+		if strings.TrimSpace(bead.Metadata[routedwork.RoutedToMetadataKey]) == "" {
+			continue
+		}
+		if bead.Type == "epic" {
+			continue
+		}
+		ids[bead.ID] = true
+	}
+	return ids, nil
+}
+
+func shouldWarnUnconfiguredRoutedDemand(bead beads.Bead, route string, defaultDemand bool, missingPoolDemand bool) bool {
+	if strings.TrimSpace(bead.Assignee) != "" {
+		return false
+	}
+	if missingPoolDemand {
+		return true
+	}
+	if strings.TrimSpace(bead.Metadata[routedwork.PoolDemandMetadataKey]) == routedwork.PoolDemandOrderValue {
+		return true
+	}
+	if !defaultDemand {
+		return false
+	}
+	return routeLooksLikeConfiguredTarget(route)
+}
+
+func routeLooksLikeConfiguredTarget(route string) bool {
+	route = strings.TrimSpace(route)
+	return strings.Contains(route, "/") || strings.Contains(route, ".")
+}
+
+func (c *routedWorkDemandContractCheck) selectorDemandWindow(store beads.Store, bead beads.Bead, selector config.WorkSelector) (bool, error) {
+	if strings.TrimSpace(bead.Assignee) != "" || bead.Status != "open" {
+		return false, nil
+	}
+	if strings.TrimSpace(bead.Metadata[routedwork.RoutedToMetadataKey]) == "" {
+		return false, nil
+	}
+	if !selectorRequiresReady(selector) {
+		return true, nil
+	}
+	return routedBeadReady(store, bead)
+}
+
+func selectorRequiresReady(selector config.WorkSelector) bool {
+	if len(selector.Any) == 0 {
+		return selector.Ready
+	}
+	for _, clause := range selector.Any {
+		if !selectorRequiresReady(clause) {
+			return false
+		}
+	}
+	return len(selector.Any) > 0
+}
+
+func routedBeadReady(store beads.Store, bead beads.Bead) (bool, error) {
+	deps := bead.Dependencies
+	if len(deps) == 0 {
+		var err error
+		deps, err = store.DepList(bead.ID, "down")
+		if err != nil {
+			return false, err
+		}
+	}
+	for _, dep := range deps {
+		if !routedDemandBlockingDep(dep.Type) {
+			continue
+		}
+		depBead, err := store.Get(dep.DependsOnID)
+		if err != nil {
+			return false, err
+		}
+		if depBead.Status != "closed" {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func routedDemandBlockingDep(depType string) bool {
+	switch strings.TrimSpace(depType) {
+	case "blocks", "waits-for", "conditional-blocks":
+		return true
+	default:
+		return false
 	}
 }
 
