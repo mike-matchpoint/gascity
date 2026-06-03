@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -11,7 +10,6 @@ import (
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/doctor"
 	"github.com/gastownhall/gascity/internal/routedwork"
-	"github.com/gastownhall/gascity/internal/workselect"
 )
 
 type v2RoutedToNamespaceCheck struct {
@@ -33,11 +31,6 @@ type routedWorkDemandContractCheck struct {
 type routedWorkDemandScope struct {
 	label string
 	path  string
-}
-
-type routedWorkClaimCacheEntry struct {
-	ids map[string]bool
-	err error
 }
 
 func newRoutedWorkDemandContractCheck(cfg *config.City, cityPath string, newStore func(string) (beads.Store, error)) *routedWorkDemandContractCheck {
@@ -63,7 +56,6 @@ func (c *routedWorkDemandContractCheck) Run(_ *doctor.CheckContext) *doctor.Chec
 
 	var findings []string
 	var skipped []string
-	claimCache := map[string]routedWorkClaimCacheEntry{}
 	for _, scope := range c.scopes() {
 		store, err := c.newStore(scope.path)
 		if err != nil {
@@ -89,7 +81,7 @@ func (c *routedWorkDemandContractCheck) Run(_ *doctor.CheckContext) *doctor.Chec
 			if strings.TrimSpace(bead.Metadata[routedwork.RoutedToMetadataKey]) == "" {
 				continue
 			}
-			c.scanDemandBead(scope, store, bead, defaultDemandIDs, claimCache, &findings, &skipped)
+			c.scanDemandBead(scope, store, bead, defaultDemandIDs, &findings, &skipped)
 		}
 	}
 
@@ -128,7 +120,7 @@ func (c *routedWorkDemandContractCheck) scopes() []routedWorkDemandScope {
 	return scopes
 }
 
-func (c *routedWorkDemandContractCheck) scanDemandBead(scope routedWorkDemandScope, store beads.Store, bead beads.Bead, defaultDemandIDs map[string]bool, claimCache map[string]routedWorkClaimCacheEntry, findings, skipped *[]string) {
+func (c *routedWorkDemandContractCheck) scanDemandBead(scope routedWorkDemandScope, store beads.Store, bead beads.Bead, defaultDemandIDs map[string]bool, findings, skipped *[]string) {
 	route := strings.TrimSpace(bead.Metadata[routedwork.RoutedToMetadataKey])
 	if route == "" {
 		return
@@ -185,18 +177,10 @@ func (c *routedWorkDemandContractCheck) scanDemandBead(scope routedWorkDemandSco
 			scope.label, bead.ID, route, plan.Target))
 		return
 	}
-	if agentCfg.WorkSelector.IsZero() {
-		return
-	}
-	ids, err := c.claimableIDs(scope, store, agentCfg, claimCache)
-	if err != nil {
-		*skipped = append(*skipped, fmt.Sprintf("%s skipped: evaluating work_selector for %s: %v", scope.label, plan.Target, err))
-		return
-	}
-	if !ids[bead.ID] {
-		*findings = append(*findings, fmt.Sprintf("unclaimable routed work: %s bead %s has gc.routed_to=%q but target %q does not match work_selector",
-			scope.label, bead.ID, route, plan.Target))
-	}
+	// work_selector is an optional static selector used by some typed tooling.
+	// The routed work contract is gc.routed_to plus the resolved route target;
+	// runtime claiming is allowed through the default routed work query even
+	// when a selector is absent or narrower than the active routed queue.
 }
 
 func (c *routedWorkDemandContractCheck) defaultRoutedDemandIDs(store beads.Store) (map[string]bool, error) {
@@ -317,23 +301,6 @@ func routedDemandBlockingDep(depType string) bool {
 	default:
 		return false
 	}
-}
-
-func (c *routedWorkDemandContractCheck) claimableIDs(scope routedWorkDemandScope, store beads.Store, agentCfg config.Agent, claimCache map[string]routedWorkClaimCacheEntry) (map[string]bool, error) {
-	key := scope.path + "\x00" + agentCfg.QualifiedName()
-	if cached, ok := claimCache[key]; ok {
-		return cached.ids, cached.err
-	}
-	selector := expandWorkSelectorTemplates(c.cityPath, loadedCityName(c.cfg, c.cityPath), &agentCfg, c.cfg.Rigs, "work_selector", agentCfg.WorkSelector, io.Discard)
-	items, err := workselect.List(store, selector, 0)
-	entry := routedWorkClaimCacheEntry{ids: map[string]bool{}, err: err}
-	if err == nil {
-		for _, item := range items {
-			entry.ids[item.ID] = true
-		}
-	}
-	claimCache[key] = entry
-	return entry.ids, entry.err
 }
 
 func isFormulaOrderRootMissingPoolDemand(bead beads.Bead) bool {

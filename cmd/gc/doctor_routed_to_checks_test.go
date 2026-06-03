@@ -224,7 +224,7 @@ func (s *routeQuerySpyStore) List(query beads.ListQuery) ([]beads.Bead, error) {
 	return s.Store.List(query)
 }
 
-func TestDoctorRoutedWorkDemandContractWarnsOnUnclaimableRoutedWork(t *testing.T) {
+func TestDoctorRoutedWorkDemandContractAllowsDefaultRoutedWorkWithNarrowSelector(t *testing.T) {
 	cityDir := t.TempDir()
 	cfg := &config.City{
 		Workspace: config.Workspace{Name: "test-city"},
@@ -257,19 +257,12 @@ func TestDoctorRoutedWorkDemandContractWarnsOnUnclaimableRoutedWork(t *testing.T
 		return store, nil
 	}).Run(&doctor.CheckContext{})
 
-	if result.Status != doctor.StatusWarning {
-		t.Fatalf("status = %v, want warning: %#v", result.Status, result)
+	if result.Status != doctor.StatusOK {
+		t.Fatalf("status = %v, want ok: %#v", result.Status, result)
 	}
 	details := strings.Join(result.Details, "\n")
-	for _, want := range []string{
-		"unclaimable routed work",
-		"CITY-RAW",
-		`gc.routed_to="gastown.dog"`,
-		"does not match work_selector",
-	} {
-		if !strings.Contains(details, want) {
-			t.Fatalf("details missing %q:\n%s", want, details)
-		}
+	if strings.Contains(details, "does not match work_selector") {
+		t.Fatalf("details contain obsolete selector mismatch warning:\n%s", details)
 	}
 }
 
@@ -374,7 +367,7 @@ func TestDoctorRoutedWorkDemandContractWarnsOnActiveUnknownNamespacedRoute(t *te
 	}
 }
 
-func TestDoctorRoutedWorkDemandContractWarnsOnReadyTypedSelectorMismatch(t *testing.T) {
+func TestDoctorRoutedWorkDemandContractAllowsReadyRoutedWorkWithNarrowSelector(t *testing.T) {
 	cityDir := t.TempDir()
 	rigDir := t.TempDir()
 	cfg := &config.City{
@@ -414,18 +407,12 @@ func TestDoctorRoutedWorkDemandContractWarnsOnReadyTypedSelectorMismatch(t *test
 		return store, nil
 	}).Run(&doctor.CheckContext{})
 
-	if result.Status != doctor.StatusWarning {
-		t.Fatalf("status = %v, want warning: %#v", result.Status, result)
+	if result.Status != doctor.StatusOK {
+		t.Fatalf("status = %v, want ok: %#v", result.Status, result)
 	}
 	details := strings.Join(result.Details, "\n")
-	for _, want := range []string{
-		"unclaimable routed work",
-		"STEP-READY",
-		"does not match work_selector",
-	} {
-		if !strings.Contains(details, want) {
-			t.Fatalf("details missing %q:\n%s", want, details)
-		}
+	if strings.Contains(details, "does not match work_selector") {
+		t.Fatalf("details contain obsolete selector mismatch warning:\n%s", details)
 	}
 }
 
