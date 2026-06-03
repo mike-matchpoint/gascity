@@ -193,11 +193,13 @@ func resolveWorkCommandContext(opts workCommandOptions, stderr io.Writer) (workC
 		return workCommandContext{}, fmt.Errorf("agent %q not found in config", agentName)
 	}
 	selector := agentCfg.WorkSelector
+	selectorField := "work_selector"
 	if selector.IsZero() {
-		return workCommandContext{}, fmt.Errorf("agent %q has no work_selector", agentCfg.QualifiedName())
+		selector = defaultRoutedWorkSelector(agentCfg)
+		selectorField = "default_gc_routed_to"
 	}
 	cityName := loadedCityName(cfg, cityPath)
-	selector = expandWorkSelectorTemplates(cityPath, cityName, &agentCfg, cfg.Rigs, "work_selector", selector, stderr)
+	selector = expandWorkSelectorTemplates(cityPath, cityName, &agentCfg, cfg.Rigs, selectorField, selector, stderr)
 	storeRoot := agentStoreRoot(cityPath, cfg, &agentCfg)
 	store, err := openStoreAtForCity(storeRoot, cityPath)
 	if err != nil {
@@ -211,6 +213,21 @@ func resolveWorkCommandContext(opts workCommandOptions, stderr io.Writer) (workC
 		store:         store,
 		assignmentIDs: workAssignmentIdentifiers(),
 	}, nil
+}
+
+func defaultRoutedWorkSelector(agent config.Agent) config.WorkSelector {
+	target := strings.TrimSpace(agent.PoolName)
+	if target == "" {
+		target = agent.QualifiedName()
+	}
+	return config.WorkSelector{
+		Status:      "open",
+		ExcludeType: "epic",
+		Unassigned:  true,
+		Ready:       true,
+		Metadata:    map[string]string{"gc.routed_to": target},
+		Sort:        "created_asc",
+	}
 }
 
 func workSelectorCountForCommand(store beads.Store, selector config.WorkSelector, assignmentIDs []string) (int, error) {

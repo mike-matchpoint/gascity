@@ -55,6 +55,40 @@ ready = true
 	return store
 }
 
+func setupRoutedWorkCommandCity(t *testing.T) beads.Store {
+	t.Helper()
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+	resetFlags(t)
+	t.Setenv("GC_BEADS", "file")
+	t.Setenv("GC_BEADS_SCOPE_ROOT", "")
+	cityDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cityDir, ".gc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureScopedFileStoreLayout(cityDir); err != nil {
+		t.Fatalf("ensure scoped file store layout: %v", err)
+	}
+	if err := ensurePersistedScopeLocalFileStore(cityDir); err != nil {
+		t.Fatalf("ensure file store: %v", err)
+	}
+	cityToml := `[workspace]
+name = "routed-work-test"
+
+[[agent]]
+name = "worker"
+`
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(cityToml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GC_CITY", cityDir)
+	store, err := openCityStoreAt(cityDir)
+	if err != nil {
+		t.Fatalf("open city store: %v", err)
+	}
+	return store
+}
+
 func TestCmdHookTypedSelectorReturnsAssignedInProgressWork(t *testing.T) {
 	store := setupTypedWorkCommandCity(t)
 	work, err := store.Create(beads.Bead{
@@ -78,6 +112,133 @@ func TestCmdHookTypedSelectorReturnsAssignedInProgressWork(t *testing.T) {
 	}
 	if out := stdout.String(); !strings.Contains(out, work.ID) {
 		t.Fatalf("stdout = %q, want assigned work %s", out, work.ID)
+	}
+}
+
+func TestCmdWorkNextFallsBackToRoutedToWhenSelectorAbsent(t *testing.T) {
+	store := setupRoutedWorkCommandCity(t)
+	work, err := store.Create(beads.Bead{
+		Title: "routed task",
+		Type:  "task",
+		Metadata: map[string]string{
+			"gc.routed_to": "worker",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create work: %v", err)
+	}
+	epic, err := store.Create(beads.Bead{
+		Title: "parent epic",
+		Type:  "epic",
+		Metadata: map[string]string{
+			"gc.routed_to": "worker",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create epic: %v", err)
+	}
+	t.Setenv("GC_TEMPLATE", "worker")
+
+	var stdout, stderr bytes.Buffer
+	code := cmdWorkNext(workCommandOptions{JSON: true}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("cmdWorkNext() = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, work.ID) {
+		t.Fatalf("stdout = %q, want routed work %s", out, work.ID)
+	}
+	if strings.Contains(out, epic.ID) {
+		t.Fatalf("stdout = %q, should not claim parent epic %s", out, epic.ID)
+	}
+}
+
+func TestCmdWorkCountFallsBackToRoutedToWhenSelectorAbsent(t *testing.T) {
+	store := setupRoutedWorkCommandCity(t)
+	if _, err := store.Create(beads.Bead{
+		Title: "first routed task",
+		Type:  "task",
+		Metadata: map[string]string{
+			"gc.routed_to": "worker",
+		},
+	}); err != nil {
+		t.Fatalf("create first work: %v", err)
+	}
+	if _, err := store.Create(beads.Bead{
+		Title:    "assigned work",
+		Type:     "task",
+		Assignee: "worker-session",
+	}); err != nil {
+		t.Fatalf("create assigned work: %v", err)
+	}
+	if _, err := store.Create(beads.Bead{
+		Title: "other route",
+		Type:  "task",
+		Metadata: map[string]string{
+			"gc.routed_to": "other",
+		},
+	}); err != nil {
+		t.Fatalf("create other work: %v", err)
+	}
+	t.Setenv("GC_TEMPLATE", "worker")
+	t.Setenv("GC_SESSION_NAME", "worker-session")
+
+	var stdout, stderr bytes.Buffer
+	code := cmdWorkCount(workCommandOptions{JSON: true}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("cmdWorkCount() = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	if out := stdout.String(); !strings.Contains(out, `"count":2`) {
+		t.Fatalf("stdout = %q, want count 2", out)
+	}
+}
+
+func TestCmdWorkClaimFallsBackToRoutedToWhenSelectorAbsent(t *testing.T) {
+	store := setupRoutedWorkCommandCity(t)
+	work, err := store.Create(beads.Bead{
+		Title: "claim routed task",
+		Type:  "task",
+		Metadata: map[string]string{
+			"gc.routed_to": "worker",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create work: %v", err)
+	}
+	other, err := store.Create(beads.Bead{
+		Title: "other route",
+		Type:  "task",
+		Metadata: map[string]string{
+			"gc.routed_to": "other",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create other work: %v", err)
+	}
+	t.Setenv("GC_TEMPLATE", "worker")
+	t.Setenv("GC_SESSION_NAME", "worker-session")
+
+	var stdout, stderr bytes.Buffer
+	code := cmdWorkClaim(workCommandOptions{JSON: true, Status: "in_progress"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("cmdWorkClaim() = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	if out := stdout.String(); !strings.Contains(out, work.ID) {
+		t.Fatalf("stdout = %q, want routed work %s", out, work.ID)
+	}
+	final, err := store.Get(work.ID)
+	if err != nil {
+		t.Fatalf("get final: %v", err)
+	}
+	if final.Status != "in_progress" || final.Assignee != "worker-session" {
+		t.Fatalf("final status=%q assignee=%q, want in_progress worker-session", final.Status, final.Assignee)
+	}
+	otherFinal, err := store.Get(other.ID)
+	if err != nil {
+		t.Fatalf("get other final: %v", err)
+	}
+	if otherFinal.Status != "open" || otherFinal.Assignee != "" {
+		t.Fatalf("other route status=%q assignee=%q, want untouched open/unassigned", otherFinal.Status, otherFinal.Assignee)
 	}
 }
 
