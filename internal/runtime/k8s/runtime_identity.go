@@ -22,27 +22,28 @@ const (
 )
 
 type runtimeIdentitySpec struct {
-	Provider              string                 `json:"provider"`
-	Image                 string                 `json:"image"`
-	ShareProcessNamespace bool                   `json:"share_process_namespace"`
-	LaunchMaterialMode    string                 `json:"launch_material_mode"`
-	InitImage             string                 `json:"init_image,omitempty"`
-	ServiceAccount        string                 `json:"service_account,omitempty"`
-	Resources             runtimeResourceSpec    `json:"resources"`
-	WorkspaceMode         string                 `json:"workspace_mode"`
-	WorkspacePVC          string                 `json:"workspace_pvc,omitempty"`
-	WorkspaceRoot         string                 `json:"workspace_root,omitempty"`
-	WorkspaceReadyMarkers []string               `json:"workspace_ready_markers,omitempty"`
-	CredentialSecrets     []runtimeSecretSpec    `json:"credential_secrets,omitempty"`
-	CredentialEnv         []runtimeSecretEnvSpec `json:"credential_env,omitempty"`
-	ProviderHome          string                 `json:"provider_home"`
-	LinuxUsername         string                 `json:"linux_username,omitempty"`
-	NodeSelector          map[string]string      `json:"node_selector,omitempty"`
-	Tolerations           []corev1.Toleration    `json:"tolerations,omitempty"`
-	Affinity              *corev1.Affinity       `json:"affinity,omitempty"`
-	PriorityClassName     string                 `json:"priority_class_name,omitempty"`
-	ManagedDoltEnv        map[string]string      `json:"managed_dolt_env,omitempty"`
-	AgentEnv              map[string]string      `json:"agent_env,omitempty"`
+	Provider              string                            `json:"provider"`
+	Image                 string                            `json:"image"`
+	ShareProcessNamespace bool                              `json:"share_process_namespace"`
+	LaunchMaterialMode    string                            `json:"launch_material_mode"`
+	InitImage             string                            `json:"init_image,omitempty"`
+	ServiceAccount        string                            `json:"service_account,omitempty"`
+	Resources             runtimeResourceSpec               `json:"resources"`
+	WorkspaceMode         string                            `json:"workspace_mode"`
+	WorkspacePVC          string                            `json:"workspace_pvc,omitempty"`
+	WorkspaceRoot         string                            `json:"workspace_root,omitempty"`
+	WorkspaceReadyMarkers []string                          `json:"workspace_ready_markers,omitempty"`
+	CredentialSecrets     []runtimeSecretSpec               `json:"credential_secrets,omitempty"`
+	CredentialEnv         []runtimeSecretEnvSpec            `json:"credential_env,omitempty"`
+	ProviderHome          string                            `json:"provider_home"`
+	LinuxUsername         string                            `json:"linux_username,omitempty"`
+	NodeSelector          map[string]string                 `json:"node_selector,omitempty"`
+	Tolerations           []corev1.Toleration               `json:"tolerations,omitempty"`
+	Affinity              *corev1.Affinity                  `json:"affinity,omitempty"`
+	TopologySpread        []corev1.TopologySpreadConstraint `json:"topology_spread_constraints,omitempty"`
+	PriorityClassName     string                            `json:"priority_class_name,omitempty"`
+	ManagedDoltEnv        map[string]string                 `json:"managed_dolt_env,omitempty"`
+	AgentEnv              map[string]string                 `json:"agent_env,omitempty"`
 }
 
 type runtimeResourceSpec struct {
@@ -204,6 +205,7 @@ func (p *Provider) runtimeIdentitySpec(name string, cfg runtime.Config) (runtime
 		NodeSelector:          cloneStringMap(p.nodeSelector),
 		Tolerations:           cloneTolerations(p.tolerations),
 		Affinity:              cloneAffinity(p.affinity),
+		TopologySpread:        cloneTopologySpreadConstraints(p.topologySpread),
 		PriorityClassName:     p.priorityClassName,
 		ManagedDoltEnv:        managedDoltEnv,
 		AgentEnv:              cloneStringMap(p.agentEnv),

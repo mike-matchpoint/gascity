@@ -61,9 +61,10 @@ type Provider struct {
 	nodeSelector        map[string]string   // GC_K8S_NODE_SELECTOR (JSON)
 	tolerations         []corev1.Toleration // GC_K8S_TOLERATIONS (JSON)
 	affinity            *corev1.Affinity    // GC_K8S_AFFINITY (JSON)
-	priorityClassName   string              // GC_K8S_PRIORITY_CLASS_NAME
-	postStartSettle     time.Duration       // settle time before post-start liveness check
-	stderr              io.Writer           // warning output (default os.Stderr)
+	topologySpread      []corev1.TopologySpreadConstraint
+	priorityClassName   string        // GC_K8S_PRIORITY_CLASS_NAME
+	postStartSettle     time.Duration // settle time before post-start liveness check
+	stderr              io.Writer     // warning output (default os.Stderr)
 	podCacheTTL         time.Duration
 	stopDeletionTimeout time.Duration
 	podCacheMu          sync.Mutex
@@ -75,6 +76,7 @@ type schedulingFields struct {
 	nodeSelector      map[string]string
 	tolerations       []corev1.Toleration
 	affinity          *corev1.Affinity
+	topologySpread    []corev1.TopologySpreadConstraint
 	priorityClassName string
 }
 
@@ -98,6 +100,9 @@ type workspaceFields struct {
 //   - GC_K8S_WORKSPACE_ROOT — mount path for GC_K8S_WORKSPACE_PVC (default: /workspace)
 //   - GC_K8S_CPU_REQUEST, GC_K8S_MEM_REQUEST — resource requests
 //   - GC_K8S_CPU_LIMIT, GC_K8S_MEM_LIMIT — resource limits
+//   - GC_K8S_NODE_SELECTOR, GC_K8S_TOLERATIONS, GC_K8S_AFFINITY,
+//     GC_K8S_TOPOLOGY_SPREAD_CONSTRAINTS — optional scheduling controls as JSON
+//   - GC_K8S_PRIORITY_CLASS_NAME — optional pod priority class
 //   - GC_K8S_CLIENT_QPS, GC_K8S_CLIENT_BURST — Kubernetes API client limits
 //     (defaults: 50 QPS / 100 burst; set either to 0 to use client-go defaults)
 //
@@ -171,6 +176,7 @@ func NewProvider() (*Provider, error) {
 		nodeSelector:       scheduling.nodeSelector,
 		tolerations:        scheduling.tolerations,
 		affinity:           scheduling.affinity,
+		topologySpread:     scheduling.topologySpread,
 		priorityClassName:  scheduling.priorityClassName,
 	}, nil
 }
@@ -240,6 +246,11 @@ func parseSchedulingEnv() (schedulingFields, error) {
 	if v := os.Getenv("GC_K8S_AFFINITY"); v != "" {
 		if err := json.Unmarshal([]byte(v), &scheduling.affinity); err != nil {
 			return schedulingFields{}, fmt.Errorf("parsing GC_K8S_AFFINITY: %w", err)
+		}
+	}
+	if v := os.Getenv("GC_K8S_TOPOLOGY_SPREAD_CONSTRAINTS"); v != "" {
+		if err := json.Unmarshal([]byte(v), &scheduling.topologySpread); err != nil {
+			return schedulingFields{}, fmt.Errorf("parsing GC_K8S_TOPOLOGY_SPREAD_CONSTRAINTS: %w", err)
 		}
 	}
 	scheduling.priorityClassName = os.Getenv("GC_K8S_PRIORITY_CLASS_NAME")

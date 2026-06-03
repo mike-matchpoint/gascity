@@ -376,6 +376,7 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 	if p.affinity != nil {
 		pod.Spec.Affinity = p.affinity.DeepCopy()
 	}
+	pod.Spec.TopologySpreadConstraints = cloneTopologySpreadConstraints(p.topologySpread)
 	pod.Spec.PriorityClassName = p.priorityClassName
 
 	// Add init container when staging is needed (skip when prebaked).
@@ -410,6 +411,17 @@ func cloneTolerations(in []corev1.Toleration) []corev1.Toleration {
 			seconds := *in[i].TolerationSeconds
 			out[i].TolerationSeconds = &seconds
 		}
+	}
+	return out
+}
+
+func cloneTopologySpreadConstraints(in []corev1.TopologySpreadConstraint) []corev1.TopologySpreadConstraint {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]corev1.TopologySpreadConstraint, len(in))
+	for i := range in {
+		out[i] = *in[i].DeepCopy()
 	}
 	return out
 }

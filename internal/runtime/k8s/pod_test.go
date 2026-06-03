@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/shellquote"
@@ -68,6 +69,32 @@ func TestBuildPod_Affinity(t *testing.T) {
 	}
 }
 
+func TestBuildPod_TopologySpreadConstraints(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+	p.topologySpread = []corev1.TopologySpreadConstraint{{
+		MaxSkew:           1,
+		TopologyKey:       "topology.kubernetes.io/zone",
+		WhenUnsatisfiable: corev1.DoNotSchedule,
+		LabelSelector: &metav1.LabelSelector{
+			MatchLabels: map[string]string{"app": "gc-agent"},
+		},
+	}}
+	pod, err := buildPod("test-session", runtime.Config{Command: "/bin/bash"}, p)
+	if err != nil {
+		t.Fatalf("buildPod: %v", err)
+	}
+	if len(pod.Spec.TopologySpreadConstraints) != 1 {
+		t.Fatalf("len(TopologySpreadConstraints) = %d, want 1", len(pod.Spec.TopologySpreadConstraints))
+	}
+	constraints := pod.Spec.TopologySpreadConstraints
+	if constraints[0].TopologyKey != "topology.kubernetes.io/zone" {
+		t.Fatalf("TopologyKey = %q, want zone topology", constraints[0].TopologyKey)
+	}
+	if constraints[0].LabelSelector.MatchLabels["app"] != "gc-agent" {
+		t.Fatalf("LabelSelector app = %q, want gc-agent", constraints[0].LabelSelector.MatchLabels["app"])
+	}
+}
+
 func TestBuildPod_PriorityClassName(t *testing.T) {
 	p := newProviderWithOps(newFakeK8sOps())
 	p.priorityClassName = "gc-agent-high"
@@ -96,6 +123,9 @@ func TestBuildPod_NoSchedulingFields_NoBehaviorChange(t *testing.T) {
 	if pod.Spec.Affinity != nil {
 		t.Errorf("Affinity should be nil when not set")
 	}
+	if len(pod.Spec.TopologySpreadConstraints) != 0 {
+		t.Errorf("TopologySpreadConstraints should be empty when not set")
+	}
 	if pod.Spec.PriorityClassName != "" {
 		t.Errorf("PriorityClassName should be empty when not set")
 	}
@@ -122,6 +152,14 @@ func TestBuildPod_ClonesSchedulingFields(t *testing.T) {
 			},
 		},
 	}
+	p.topologySpread = []corev1.TopologySpreadConstraint{{
+		MaxSkew:           1,
+		TopologyKey:       "topology.kubernetes.io/zone",
+		WhenUnsatisfiable: corev1.DoNotSchedule,
+		LabelSelector: &metav1.LabelSelector{
+			MatchLabels: map[string]string{"app": "gc-agent"},
+		},
+	}}
 
 	pod, err := buildPod("test-session", runtime.Config{Command: "/bin/bash"}, p)
 	if err != nil {
@@ -131,6 +169,7 @@ func TestBuildPod_ClonesSchedulingFields(t *testing.T) {
 	pod.Spec.NodeSelector["workload"] = "changed"
 	pod.Spec.Tolerations[0].Key = "changed"
 	pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0].MatchExpressions[0].Values[0] = "changed"
+	pod.Spec.TopologySpreadConstraints[0].LabelSelector.MatchLabels["app"] = "changed"
 
 	if p.nodeSelector["workload"] != "gc-agents" {
 		t.Fatalf("provider nodeSelector mutated to %q", p.nodeSelector["workload"])
@@ -141,6 +180,9 @@ func TestBuildPod_ClonesSchedulingFields(t *testing.T) {
 	values := p.affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0].MatchExpressions[0].Values
 	if values[0] != "gpu" {
 		t.Fatalf("provider affinity value mutated to %q", values[0])
+	}
+	if p.topologySpread[0].LabelSelector.MatchLabels["app"] != "gc-agent" {
+		t.Fatalf("provider topology spread label selector mutated to %q", p.topologySpread[0].LabelSelector.MatchLabels["app"])
 	}
 }
 

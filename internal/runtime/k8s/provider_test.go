@@ -234,6 +234,7 @@ func TestParseSchedulingEnvHappyPath(t *testing.T) {
 	t.Setenv("GC_K8S_NODE_SELECTOR", `{"workload":"gc-agents"}`)
 	t.Setenv("GC_K8S_TOLERATIONS", `[{"key":"gc-agents","operator":"Exists","effect":"NoSchedule","tolerationSeconds":60}]`)
 	t.Setenv("GC_K8S_AFFINITY", `{"nodeAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":{"nodeSelectorTerms":[{"matchExpressions":[{"key":"node-type","operator":"In","values":["gpu"]}]}]}}}`)
+	t.Setenv("GC_K8S_TOPOLOGY_SPREAD_CONSTRAINTS", `[{"maxSkew":1,"topologyKey":"topology.kubernetes.io/zone","whenUnsatisfiable":"DoNotSchedule","labelSelector":{"matchLabels":{"app":"gc-agent"}}}]`)
 	t.Setenv("GC_K8S_PRIORITY_CLASS_NAME", "gc-agent-high")
 
 	scheduling, err := parseSchedulingEnv()
@@ -254,6 +255,12 @@ func TestParseSchedulingEnvHappyPath(t *testing.T) {
 		scheduling.affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
 		t.Fatalf("affinity did not parse required node affinity: %#v", scheduling.affinity)
 	}
+	if len(scheduling.topologySpread) != 1 {
+		t.Fatalf("len(topologySpread) = %d, want 1", len(scheduling.topologySpread))
+	}
+	if scheduling.topologySpread[0].TopologyKey != "topology.kubernetes.io/zone" {
+		t.Fatalf("topology key = %q, want zone topology", scheduling.topologySpread[0].TopologyKey)
+	}
 	if got := scheduling.priorityClassName; got != "gc-agent-high" {
 		t.Fatalf("priorityClassName = %q, want gc-agent-high", got)
 	}
@@ -267,6 +274,7 @@ func TestParseSchedulingEnvRejectsMalformedJSON(t *testing.T) {
 		{name: "node selector", key: "GC_K8S_NODE_SELECTOR"},
 		{name: "tolerations", key: "GC_K8S_TOLERATIONS"},
 		{name: "affinity", key: "GC_K8S_AFFINITY"},
+		{name: "topology spread", key: "GC_K8S_TOPOLOGY_SPREAD_CONSTRAINTS"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			clearSchedulingEnv(t)
@@ -299,6 +307,9 @@ func TestParseSchedulingEnvEmptyAndNullAffinitySemantics(t *testing.T) {
 		}
 		if scheduling.affinity != nil {
 			t.Fatalf("affinity = %#v, want nil", scheduling.affinity)
+		}
+		if len(scheduling.topologySpread) != 0 {
+			t.Fatalf("len(topologySpread) = %d, want 0", len(scheduling.topologySpread))
 		}
 		if scheduling.priorityClassName != "" {
 			t.Fatalf("priorityClassName = %q, want empty", scheduling.priorityClassName)
@@ -403,6 +414,7 @@ func clearSchedulingEnv(t *testing.T) {
 		"GC_K8S_NODE_SELECTOR",
 		"GC_K8S_TOLERATIONS",
 		"GC_K8S_AFFINITY",
+		"GC_K8S_TOPOLOGY_SPREAD_CONSTRAINTS",
 		"GC_K8S_PRIORITY_CLASS_NAME",
 	} {
 		t.Setenv(key, "")
@@ -1358,6 +1370,19 @@ func TestProviderRuntimeFingerprintChangesForSubstrateFields(t *testing.T) {
 			mutate: func(p *Provider, _ *runtime.Config) {
 				p.nodeSelector = map[string]string{"workload": "gc-agents"}
 				p.priorityClassName = "gc-agent-high"
+			},
+		},
+		{
+			name: "topology spread",
+			mutate: func(p *Provider, _ *runtime.Config) {
+				p.topologySpread = []corev1.TopologySpreadConstraint{{
+					MaxSkew:           1,
+					TopologyKey:       "topology.kubernetes.io/zone",
+					WhenUnsatisfiable: corev1.DoNotSchedule,
+					LabelSelector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{"app": "gc-agent"},
+					},
+				}}
 			},
 		},
 		{
