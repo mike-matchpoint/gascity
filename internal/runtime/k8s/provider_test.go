@@ -58,6 +58,41 @@ func TestParseAgentEnvRejectsInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestParseServiceAccountMap(t *testing.T) {
+	t.Setenv("GC_K8S_SERVICE_ACCOUNT_MAP_JSON", `{"mayor":"city-mayor"," refinery ":" city-agent-refinery "}`)
+
+	serviceAccounts, err := parseServiceAccountMap()
+	if err != nil {
+		t.Fatalf("parseServiceAccountMap: %v", err)
+	}
+	if serviceAccounts["mayor"] != "city-mayor" {
+		t.Fatalf("mayor service account = %q, want city-mayor", serviceAccounts["mayor"])
+	}
+	if serviceAccounts["refinery"] != "city-agent-refinery" {
+		t.Fatalf("refinery service account = %q, want city-agent-refinery", serviceAccounts["refinery"])
+	}
+}
+
+func TestParseServiceAccountMapRejectsInvalidInput(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{name: "invalid json shape", raw: `["not","an","object"]`},
+		{name: "empty role key", raw: `{"":"city-mayor"}`},
+		{name: "empty service account", raw: `{"mayor":" "}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("GC_K8S_SERVICE_ACCOUNT_MAP_JSON", tt.raw)
+			if _, err := parseServiceAccountMap(); err == nil {
+				t.Fatal("parseServiceAccountMap error = nil, want invalid input error")
+			}
+		})
+	}
+}
+
 func TestManagedServiceAliasCompatOverride(t *testing.T) {
 	t.Setenv("GC_DOLT_HOST", "canonical-dolt.example.com")
 	t.Setenv("GC_DOLT_PORT", "4407")
@@ -1233,6 +1268,12 @@ func TestProviderRuntimeFingerprintChangesForSubstrateFields(t *testing.T) {
 			},
 		},
 		{
+			name: "mapped service account",
+			mutate: func(p *Provider, _ *runtime.Config) {
+				p.serviceAccountMap = map[string]string{"mayor": "city-mayor"}
+			},
+		},
+		{
 			name: "resources",
 			mutate: func(p *Provider, _ *runtime.Config) {
 				p.cpuRequest = "750m"
@@ -1953,7 +1994,7 @@ func TestRuntimeIdentityIncludesAgentEnvDefaults(t *testing.T) {
 	p := newProviderWithOps(newFakeK8sOps())
 	p.agentEnv = map[string]string{"GASCITY_CODE_CITY": "code-city"}
 
-	spec, err := p.runtimeIdentitySpec(runtime.Config{Env: map[string]string{"GC_AGENT": "worker"}})
+	spec, err := p.runtimeIdentitySpec("worker", runtime.Config{Env: map[string]string{"GC_AGENT": "worker"}})
 	if err != nil {
 		t.Fatalf("runtimeIdentitySpec: %v", err)
 	}
@@ -3293,7 +3334,11 @@ func annotatePodWithDesiredRuntimeIdentity(t *testing.T, p *Provider, podName st
 
 func mustDesiredProviderRuntimeIdentity(t *testing.T, p *Provider, cfg runtime.Config) runtime.ProviderRuntimeIdentity {
 	t.Helper()
-	identity, err := p.desiredProviderRuntimeIdentity(cfg)
+	name := ""
+	if cfg.Env != nil {
+		name = cfg.Env["GC_AGENT"]
+	}
+	identity, err := p.desiredProviderRuntimeIdentity(name, cfg)
 	if err != nil {
 		t.Fatalf("desiredProviderRuntimeIdentity: %v", err)
 	}
@@ -3341,6 +3386,125 @@ func TestBuildPodServiceAccount(t *testing.T) {
 		}
 		if pod.Spec.ServiceAccountName != "" {
 			t.Errorf("ServiceAccountName = %q, want empty", pod.Spec.ServiceAccountName)
+		}
+	})
+
+	t.Run("explicit session service account wins over map and fallback", func(t *testing.T) {
+		p := newProviderWithOps(newFakeK8sOps())
+		p.serviceAccount = "fallback"
+		p.serviceAccountMap = map[string]string{"mayor": "city-mayor"}
+		cfg := runtime.Config{
+			Command: "/bin/bash",
+			Env: map[string]string{
+				"GC_AGENT":               "mayor",
+				"GC_K8S_SERVICE_ACCOUNT": "explicit",
+			},
+		}
+
+		pod, err := buildPod("mayor", cfg, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pod.Spec.ServiceAccountName != "explicit" {
+			t.Errorf("ServiceAccountName = %q, want explicit", pod.Spec.ServiceAccountName)
+		}
+	})
+
+	t.Run("provider fallback passthrough does not override map", func(t *testing.T) {
+		p := newProviderWithOps(newFakeK8sOps())
+		p.serviceAccount = "fallback"
+		p.serviceAccountMap = map[string]string{"mayor": "city-mayor"}
+		cfg := runtime.Config{
+			Command: "/bin/bash",
+			Env: map[string]string{
+				"GC_AGENT":               "mayor",
+				"GC_K8S_SERVICE_ACCOUNT": "fallback",
+			},
+		}
+
+		pod, err := buildPod("mayor", cfg, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pod.Spec.ServiceAccountName != "city-mayor" {
+			t.Errorf("ServiceAccountName = %q, want city-mayor", pod.Spec.ServiceAccountName)
+		}
+	})
+
+	t.Run("uses map by template role", func(t *testing.T) {
+		p := newProviderWithOps(newFakeK8sOps())
+		p.serviceAccount = "fallback"
+		p.serviceAccountMap = map[string]string{"mayor": "city-mayor"}
+		cfg := runtime.Config{
+			Command: "/bin/bash",
+			Env: map[string]string{
+				"GC_AGENT":    "gastown.mayor",
+				"GC_TEMPLATE": "mayor",
+			},
+		}
+
+		pod, err := buildPod("gastown.mayor", cfg, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pod.Spec.ServiceAccountName != "city-mayor" {
+			t.Errorf("ServiceAccountName = %q, want city-mayor", pod.Spec.ServiceAccountName)
+		}
+	})
+
+	t.Run("uses map by qualified refinery alias", func(t *testing.T) {
+		p := newProviderWithOps(newFakeK8sOps())
+		p.serviceAccount = "fallback"
+		p.serviceAccountMap = map[string]string{"refinery": "city-agent-refinery"}
+		cfg := runtime.Config{
+			Command: "/bin/bash",
+			Env: map[string]string{
+				"GC_AGENT": "gastown.refinery",
+				"GC_ALIAS": "Matchpoint-Vehicle-Graph/gastown.refinery",
+			},
+		}
+
+		pod, err := buildPod("gastown.refinery", cfg, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pod.Spec.ServiceAccountName != "city-agent-refinery" {
+			t.Errorf("ServiceAccountName = %q, want city-agent-refinery", pod.Spec.ServiceAccountName)
+		}
+	})
+
+	t.Run("uses map by pack-bound cartographer alias", func(t *testing.T) {
+		p := newProviderWithOps(newFakeK8sOps())
+		p.serviceAccount = "fallback"
+		p.serviceAccountMap = map[string]string{"cartographer": "city-agent-cartographer"}
+		cfg := runtime.Config{
+			Command: "/bin/bash",
+			Env: map[string]string{
+				"GC_AGENT": "vg-support.cartographer",
+				"GC_ALIAS": "vg-support.cartographer",
+			},
+		}
+
+		pod, err := buildPod("vg-support.cartographer", cfg, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pod.Spec.ServiceAccountName != "city-agent-cartographer" {
+			t.Errorf("ServiceAccountName = %q, want city-agent-cartographer", pod.Spec.ServiceAccountName)
+		}
+	})
+
+	t.Run("falls back when no map key matches", func(t *testing.T) {
+		p := newProviderWithOps(newFakeK8sOps())
+		p.serviceAccount = "fallback"
+		p.serviceAccountMap = map[string]string{"mayor": "city-mayor"}
+
+		pod, err := buildPod("dog-vgc-session-123", cfg, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pod.Spec.ServiceAccountName != "fallback" {
+			t.Errorf("ServiceAccountName = %q, want fallback", pod.Spec.ServiceAccountName)
 		}
 	})
 }

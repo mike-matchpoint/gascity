@@ -311,7 +311,7 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 	if err != nil {
 		return nil, err
 	}
-	runtimeIdentity, err := p.desiredProviderRuntimeIdentity(cfg)
+	runtimeIdentity, err := p.desiredProviderRuntimeIdentity(name, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -335,7 +335,7 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 			},
 		},
 		Spec: corev1.PodSpec{
-			ServiceAccountName:    podServiceAccount(cfg.Env, p),
+			ServiceAccountName:    podServiceAccount(name, cfg.Env, p),
 			RestartPolicy:         corev1.RestartPolicyNever,
 			ShareProcessNamespace: boolPtr(true),
 			Containers: []corev1.Container{{
@@ -589,11 +589,82 @@ func podProviderHome(cfgEnv map[string]string) string {
 	return defaultContainerHome
 }
 
-func podServiceAccount(cfgEnv map[string]string, p *Provider) string {
-	if serviceAccount := strings.TrimSpace(cfgEnv["GC_K8S_SERVICE_ACCOUNT"]); serviceAccount != "" {
+func podServiceAccount(sessionName string, cfgEnv map[string]string, p *Provider) string {
+	explicitServiceAccount := strings.TrimSpace(cfgEnv["GC_K8S_SERVICE_ACCOUNT"])
+	fallbackServiceAccount := strings.TrimSpace(p.serviceAccount)
+	if explicitServiceAccount != "" && (len(p.serviceAccountMap) == 0 || explicitServiceAccount != fallbackServiceAccount) {
+		return explicitServiceAccount
+	}
+	if serviceAccount := mappedPodServiceAccount(sessionName, cfgEnv, p.serviceAccountMap); serviceAccount != "" {
 		return serviceAccount
 	}
+	if explicitServiceAccount != "" {
+		return explicitServiceAccount
+	}
 	return p.serviceAccount
+}
+
+func mappedPodServiceAccount(sessionName string, cfgEnv map[string]string, serviceAccounts map[string]string) string {
+	if len(serviceAccounts) == 0 {
+		return ""
+	}
+	for _, key := range podServiceAccountKeys(sessionName, cfgEnv) {
+		if serviceAccount := strings.TrimSpace(serviceAccounts[key]); serviceAccount != "" {
+			return serviceAccount
+		}
+	}
+	return ""
+}
+
+func podServiceAccountKeys(sessionName string, cfgEnv map[string]string) []string {
+	var keys []string
+	keys = appendPodServiceAccountKeyCandidates(keys, cfgEnv["GC_K8S_SERVICE_ACCOUNT_KEY"])
+	keys = appendPodServiceAccountKeyCandidates(keys, cfgEnv["GC_TEMPLATE"])
+	keys = appendPodServiceAccountKeyCandidates(keys, cfgEnv["GC_ALIAS"])
+	keys = appendPodServiceAccountKeyCandidates(keys, cfgEnv["GC_AGENT"])
+	keys = appendPodServiceAccountKeyCandidates(keys, sessionName)
+	return keys
+}
+
+func appendPodServiceAccountKeyCandidates(keys []string, identity string) []string {
+	identity = strings.TrimSpace(identity)
+	if identity == "" {
+		return keys
+	}
+	keys = appendUniqueString(keys, identity)
+	if roleKey := podServiceAccountRoleKey(identity); roleKey != "" {
+		keys = appendUniqueString(keys, roleKey)
+	}
+	return keys
+}
+
+func podServiceAccountRoleKey(identity string) string {
+	key := strings.TrimSpace(identity)
+	if key == "" {
+		return ""
+	}
+	if idx := strings.LastIndex(key, "/"); idx >= 0 {
+		key = key[idx+1:]
+	}
+	if idx := strings.LastIndex(key, "."); idx >= 0 {
+		key = key[idx+1:]
+	}
+	for _, marker := range []string{"-vgc-session-", "-vgemcd-session-", "-session-"} {
+		if idx := strings.Index(key, marker); idx > 0 {
+			key = key[:idx]
+			break
+		}
+	}
+	return strings.TrimSpace(key)
+}
+
+func appendUniqueString(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func gitSecretNameForEnv(cfgEnv map[string]string) string {

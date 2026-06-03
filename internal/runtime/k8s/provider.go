@@ -52,7 +52,8 @@ type Provider struct {
 	memRequest          string
 	cpuLimit            string
 	memLimit            string
-	serviceAccount      string              // pod service account name (GC_K8S_SERVICE_ACCOUNT)
+	serviceAccount      string              // fallback pod service account name (GC_K8S_SERVICE_ACCOUNT)
+	serviceAccountMap   map[string]string   // agent role to pod service account (GC_K8S_SERVICE_ACCOUNT_MAP_JSON)
 	agentEnv            map[string]string   // default agent pod env (GC_K8S_AGENT_ENV_JSON)
 	prebaked            bool                // skip staging + init container for prebaked images
 	workspacePVC        string              // optional PersistentVolumeClaim for shared pod workspace
@@ -87,7 +88,10 @@ type workspaceFields struct {
 //   - GC_K8S_NAMESPACE — namespace (default: "gc")
 //   - GC_K8S_IMAGE — container image (required for Start)
 //   - GC_K8S_CONTEXT — kubectl context (default: current)
-//   - GC_K8S_SERVICE_ACCOUNT — pod service account name (default: namespace default)
+//   - GC_K8S_SERVICE_ACCOUNT — fallback pod service account name (default: namespace default)
+//   - GC_K8S_SERVICE_ACCOUNT_MAP_JSON — JSON object mapping agent role keys to
+//     pod service account names. Explicit session GC_K8S_SERVICE_ACCOUNT still
+//     wins; this map is used before the provider fallback.
 //   - GC_K8S_AGENT_ENV_JSON — JSON object of non-secret env defaults injected
 //     into every agent pod without overriding session-specific env
 //   - GC_K8S_WORKSPACE_PVC — optional PVC claim mounted into agent pods
@@ -136,6 +140,10 @@ func NewProvider() (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
+	serviceAccountMap, err := parseServiceAccountMap()
+	if err != nil {
+		return nil, err
+	}
 
 	return &Provider{
 		ops: &realK8sOps{
@@ -153,6 +161,7 @@ func NewProvider() (*Provider, error) {
 		cpuLimit:           envOrDefault("GC_K8S_CPU_LIMIT", "2"),
 		memLimit:           envOrDefault("GC_K8S_MEM_LIMIT", "4Gi"),
 		serviceAccount:     os.Getenv("GC_K8S_SERVICE_ACCOUNT"),
+		serviceAccountMap:  serviceAccountMap,
 		agentEnv:           agentEnv,
 		prebaked:           os.Getenv("GC_K8S_PREBAKED") == "true",
 		workspacePVC:       workspace.pvc,
@@ -183,6 +192,33 @@ func parseAgentEnv() (map[string]string, error) {
 		key = strings.TrimSpace(key)
 		if key == "" {
 			return nil, fmt.Errorf("parsing GC_K8S_AGENT_ENV_JSON: env var names must be non-empty")
+		}
+		out[key] = value
+	}
+	return out, nil
+}
+
+func parseServiceAccountMap() (map[string]string, error) {
+	raw := strings.TrimSpace(os.Getenv("GC_K8S_SERVICE_ACCOUNT_MAP_JSON"))
+	if raw == "" {
+		return nil, nil
+	}
+	var parsed map[string]string
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return nil, fmt.Errorf("parsing GC_K8S_SERVICE_ACCOUNT_MAP_JSON: %w", err)
+	}
+	if len(parsed) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(parsed))
+	for key, value := range parsed {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" {
+			return nil, fmt.Errorf("parsing GC_K8S_SERVICE_ACCOUNT_MAP_JSON: role keys must be non-empty")
+		}
+		if value == "" {
+			return nil, fmt.Errorf("parsing GC_K8S_SERVICE_ACCOUNT_MAP_JSON: service account for %q must be non-empty", key)
 		}
 		out[key] = value
 	}
@@ -276,7 +312,7 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 	existing, err := p.sessionPods(ctx, name, false)
 	if err == nil && len(existing) > 0 {
 		pod := &existing[0]
-		desiredIdentity, err := p.desiredProviderRuntimeIdentity(cfg)
+		desiredIdentity, err := p.desiredProviderRuntimeIdentity(name, cfg)
 		if err != nil {
 			return fmt.Errorf("computing runtime identity for session %q: %w", name, err)
 		}

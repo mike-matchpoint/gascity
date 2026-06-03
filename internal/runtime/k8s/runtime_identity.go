@@ -65,8 +65,8 @@ type runtimeSecretEnvSpec struct {
 
 // DesiredProviderRuntimeIdentity returns the deterministic provider-substrate
 // identity for pods this provider would create for cfg.
-func (p *Provider) DesiredProviderRuntimeIdentity(_ context.Context, _ string, cfg runtime.Config) (runtime.ProviderRuntimeIdentity, error) {
-	return p.desiredProviderRuntimeIdentity(cfg)
+func (p *Provider) DesiredProviderRuntimeIdentity(_ context.Context, name string, cfg runtime.Config) (runtime.ProviderRuntimeIdentity, error) {
+	return p.desiredProviderRuntimeIdentity(name, cfg)
 }
 
 // ObserveRuntimeCompatibility classifies the currently visible pod, if any,
@@ -77,7 +77,7 @@ func (p *Provider) ObserveRuntimeCompatibility(ctx context.Context, name string,
 }
 
 func (p *Provider) observeRuntimeCompatibility(ctx context.Context, name string, cfg runtime.Config) (runtime.CompatibilityObservation, *corev1.Pod, error) {
-	desired, err := p.desiredProviderRuntimeIdentity(cfg)
+	desired, err := p.desiredProviderRuntimeIdentity(name, cfg)
 	if err != nil {
 		return runtime.CompatibilityObservation{}, nil, err
 	}
@@ -145,8 +145,8 @@ func (p *Provider) runtimeCompatibilityForPod(ctx context.Context, pod *corev1.P
 	return compat
 }
 
-func (p *Provider) desiredProviderRuntimeIdentity(cfg runtime.Config) (runtime.ProviderRuntimeIdentity, error) {
-	spec, err := p.runtimeIdentitySpec(cfg)
+func (p *Provider) desiredProviderRuntimeIdentity(name string, cfg runtime.Config) (runtime.ProviderRuntimeIdentity, error) {
+	spec, err := p.runtimeIdentitySpec(name, cfg)
 	if err != nil {
 		return runtime.ProviderRuntimeIdentity{}, err
 	}
@@ -162,7 +162,7 @@ func (p *Provider) desiredProviderRuntimeIdentity(cfg runtime.Config) (runtime.P
 	}, nil
 }
 
-func (p *Provider) runtimeIdentitySpec(cfg runtime.Config) (runtimeIdentitySpec, error) {
+func (p *Provider) runtimeIdentitySpec(name string, cfg runtime.Config) (runtimeIdentitySpec, error) {
 	ctrlCity := controllerCityPath(cfg.Env)
 	staging := !p.prebaked && needsStaging(cfg, ctrlCity)
 	workspaceMode := "staged"
@@ -191,7 +191,7 @@ func (p *Provider) runtimeIdentitySpec(cfg runtime.Config) (runtimeIdentitySpec,
 		ShareProcessNamespace: true,
 		LaunchMaterialMode:    "staged-files",
 		InitImage:             initImage,
-		ServiceAccount:        podServiceAccount(cfg.Env, p),
+		ServiceAccount:        podServiceAccount(name, cfg.Env, p),
 		Resources:             providerRuntimeResources(p),
 		WorkspaceMode:         workspaceMode,
 		WorkspacePVC:          strings.TrimSpace(p.workspacePVC),
