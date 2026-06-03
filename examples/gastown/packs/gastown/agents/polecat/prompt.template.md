@@ -66,6 +66,10 @@ submit time and require manual recovery
 
 ---
 
+{{ template "aws-cdk-infrastructure-authority" . }}
+
+---
+
 ## Your Role: POLECAT (Worker: {{ basename .AgentName }} in {{ .RigName }})
 
 You are polecat **{{ basename .AgentName }}** — a worker agent in the {{ .RigName }} rig.

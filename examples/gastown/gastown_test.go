@@ -623,6 +623,58 @@ func TestPolecatPromptInlinesBranchConvention(t *testing.T) {
 	)
 }
 
+func TestGastownRenderedPromptsIncludeAWSCDKDeploymentAuthority(t *testing.T) {
+	cases := []struct {
+		name         string
+		rel          string
+		agentName    string
+		templateName string
+	}{
+		{
+			name:         "polecat",
+			rel:          "packs/gastown/agents/polecat/prompt.template.md",
+			agentName:    "gascity/gastown.furiosa",
+			templateName: "polecat",
+		},
+		{
+			name:         "refinery",
+			rel:          "packs/gastown/agents/refinery/prompt.template.md",
+			agentName:    "gascity/gastown.refinery",
+			templateName: "refinery",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := renderGastownPromptForPack(t,
+				tc.rel,
+				tc.agentName,
+				tc.templateName,
+				"gascity",
+				"gastown",
+				"gastown.",
+			)
+
+			assertContainsInOrder(t, body,
+				"## AWS CDK Infrastructure Authority",
+				"you have explicit permission to use AWS CDK",
+				"`cdk synth`",
+				"`cdk diff`",
+				"`cdk deploy`",
+				"Do not stop to ask whether deployment is allowed merely because it changes AWS resources.",
+			)
+			if tc.name == "refinery" {
+				assertContainsInOrder(t, body,
+					"### Refinery Integration-Branch Redeploy",
+					"After merging an integration branch to `main`, redeploy the affected AWS CDK stack(s)",
+					"from the post-merge `main` checkout",
+					"before closing the bead",
+				)
+			}
+		})
+	}
+}
+
 func TestPolecatFormulaSelfReviewRendersAffectedTestModes(t *testing.T) {
 	fallback := cookPolecatSelfReviewDescription(t, map[string]string{
 		"issue":        "HW-42",
