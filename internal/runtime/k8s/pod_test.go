@@ -107,6 +107,32 @@ func TestBuildPod_PriorityClassName(t *testing.T) {
 	}
 }
 
+func TestBuildPod_ResourcesApplyToInitContainers(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+	p.cpuRequest = "100m"
+	p.memRequest = "1Gi"
+	p.cpuLimit = ""
+	p.memLimit = "4Gi"
+
+	pod, err := buildPod("test-session", runtime.Config{
+		Command:    "/bin/bash",
+		OverlayDir: "/host/city/packs/demo/overlay",
+	}, p)
+	if err != nil {
+		t.Fatalf("buildPod: %v", err)
+	}
+	if len(pod.Spec.InitContainers) < 2 {
+		t.Fatalf("len(InitContainers) = %d, want launch and stage init containers", len(pod.Spec.InitContainers))
+	}
+
+	for _, container := range pod.Spec.Containers {
+		assertQuotaResources(t, container.Name, container.Resources)
+	}
+	for _, container := range pod.Spec.InitContainers {
+		assertQuotaResources(t, container.Name, container.Resources)
+	}
+}
+
 func TestBuildPod_NoSchedulingFields_NoBehaviorChange(t *testing.T) {
 	// Zero-value scheduling fields must not alter default pod behavior.
 	p := newProviderWithOps(newFakeK8sOps())
@@ -128,6 +154,22 @@ func TestBuildPod_NoSchedulingFields_NoBehaviorChange(t *testing.T) {
 	}
 	if pod.Spec.PriorityClassName != "" {
 		t.Errorf("PriorityClassName should be empty when not set")
+	}
+}
+
+func assertQuotaResources(t *testing.T, name string, resources corev1.ResourceRequirements) {
+	t.Helper()
+	if got, ok := resources.Requests[corev1.ResourceCPU]; !ok || got.String() != "100m" {
+		t.Fatalf("%s requests.cpu = %q present=%v, want 100m", name, got.String(), ok)
+	}
+	if got, ok := resources.Requests[corev1.ResourceMemory]; !ok || got.String() != "1Gi" {
+		t.Fatalf("%s requests.memory = %q present=%v, want 1Gi", name, got.String(), ok)
+	}
+	if _, ok := resources.Limits[corev1.ResourceCPU]; ok {
+		t.Fatalf("%s limits.cpu rendered despite omitted CPU limit: %#v", name, resources.Limits)
+	}
+	if got, ok := resources.Limits[corev1.ResourceMemory]; !ok || got.String() != "4Gi" {
+		t.Fatalf("%s limits.memory = %q present=%v, want 4Gi", name, got.String(), ok)
 	}
 }
 

@@ -367,6 +367,7 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 		VolumeMounts: []corev1.VolumeMount{{
 			Name: "launch", MountPath: podLaunchDir,
 		}},
+		Resources:       resources,
 		SecurityContext: agentSecurityContext(linuxUsername),
 	}}
 
@@ -395,6 +396,7 @@ func buildPod(name string, cfg runtime.Config, p *Provider) (*corev1.Pod, error)
 			ImagePullPolicy: corev1.PullIfNotPresent,
 			Command:         []string{"sh", "-c", "while [ ! -f /workspace/.gc-ready ]; do sleep 0.5; done"},
 			VolumeMounts:    initVolMounts,
+			Resources:       resources,
 		})
 	}
 
