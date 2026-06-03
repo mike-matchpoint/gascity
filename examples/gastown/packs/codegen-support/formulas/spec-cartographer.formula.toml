@@ -2742,28 +2742,51 @@ Null if step 6 succeeded or was empty.
 
 Immediately after writing `emitted.json`, and BEFORE mailing the
 mayor or closing this step, prove the emission-time routing contract
-from a fresh bead-store query. This check runs before normal
-automation has time to move `gc.routed_to` from polecat to refinery;
-later `validate-store` checks lifecycle progression instead of
-requiring the mutable route field to remain at its initial value.
+from fresh bead-store queries. Do not fail on the first stale read:
+`bd create --graph` can return before asynchronous routing/export
+visibility has settled, producing the same diagnostic-noise family as
+`vgc-4nb7l4m`. Poll with bounded retries and only fail after every
+attempt still shows missing initial routing. This check still runs
+before normal automation has time to move `gc.routed_to` from polecat
+to refinery; later `validate-store` checks lifecycle progression
+instead of requiring the mutable route field to remain at its initial
+value.
 
 ```bash
-gc --rig "$RIG" bd list --all \\
-  --label="source:work-order:${WORK_ORDER_ID}" \\
-  --label="epoch:${EPOCH}" --json \\
-  > "$RUN_DIR/emission_query.json"
+ROUTING_ATTEMPTS="${CARTOGRAPHER_EMISSION_ROUTING_ATTEMPTS:-12}"
+ROUTING_DELAY="${CARTOGRAPHER_EMISSION_ROUTING_DELAY_SECONDS:-2}"
+ROUTING_SETTLED=0
+mkdir -p "$RUN_DIR/emission_routing_attempts"
 
-CARTOGRAPHER_ROUTING_MODE=emission \\
-CARTOGRAPHER_ROUTING_QUERY="$RUN_DIR/emission_query.json" \\
-CARTOGRAPHER_ROUTING_OUTPUT="$RUN_DIR/emission_routing_validation.json" \\
-  .gc/scripts/cartographer-validate-emitted-routing.sh || {
+for ROUTING_ATTEMPT in $(seq 1 "$ROUTING_ATTEMPTS"); do
+  gc --rig "$RIG" bd list --all \\
+    --label="source:work-order:${WORK_ORDER_ID}" \\
+    --label="epoch:${EPOCH}" --json \\
+    > "$RUN_DIR/emission_query.json"
+
+  if CARTOGRAPHER_ROUTING_MODE=emission \\
+     CARTOGRAPHER_ROUTING_QUERY="$RUN_DIR/emission_query.json" \\
+     CARTOGRAPHER_ROUTING_OUTPUT="$RUN_DIR/emission_routing_validation.json" \\
+       .gc/scripts/cartographer-validate-emitted-routing.sh; then
+    ROUTING_SETTLED=1
+    break
+  fi
+
+  cp "$RUN_DIR/emission_routing_validation.json" \\
+    "$RUN_DIR/emission_routing_attempts/attempt-${ROUTING_ATTEMPT}.json" 2>/dev/null || true
+  if [ "$ROUTING_ATTEMPT" -lt "$ROUTING_ATTEMPTS" ]; then
+    sleep "$ROUTING_DELAY"
+  fi
+done
+
+if [ "$ROUTING_SETTLED" != "1" ]; then
     gc mail send gastown.mayor \\
       -s "[HUMAN REVIEW NEEDED] cartographer emit routing validation failed for $WORK_ORDER_ID" \\
-      -m "bd create --graph landed, but at least one emitted task bead was not immediately routed to $(jq -r '.routing_target' "$RUN_DIR/emitted.json"). See $RUN_DIR/emission_routing_validation.json and $RUN_DIR/emitted.json. Step bead $GC_BEAD_ID blocked for human review."
+      -m "bd create --graph landed, but after ${ROUTING_ATTEMPTS} fresh query attempts at ${ROUTING_DELAY}s intervals, at least one emitted task bead was not routed to $(jq -r '.routing_target' "$RUN_DIR/emitted.json"). See $RUN_DIR/emission_routing_validation.json, $RUN_DIR/emission_routing_attempts/, and $RUN_DIR/emitted.json. Step bead $GC_BEAD_ID blocked for human review."
     .gc/scripts/cartographer-human-review-block.sh "emit routing validation failed"
     gc runtime drain-ack
     exit 0
-  }
+fi
 
 TMP_EMITTED=$(mktemp)
 jq --slurpfile routing "$RUN_DIR/emission_routing_validation.json" \\
