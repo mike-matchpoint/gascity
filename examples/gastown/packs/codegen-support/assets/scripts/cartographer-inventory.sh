@@ -39,7 +39,8 @@
 #                                   (relevance-filtered: only beads from
 #                                    WOs explicitly referenced by this WO,
 #                                    plus cohort members + HOLDING dependents)
-#   beads_inventory.json         — final aggregate (downstream contract)
+#   beads_inventory.json         — final aggregate (downstream contract),
+#                                  including candidate_dependents mirror
 #   unresolved_blocker_refs.json (only if any WO-NNN refs failed to resolve)
 
 set -euo pipefail
@@ -575,6 +576,7 @@ jq -n \
   --slurpfile cross      "$RUN_DIR/cross_wo_blockers.json" \
   --slurpfile inline_blk "$RUN_DIR/inline_wo_blockers.json" \
   --slurpfile downstream "$RUN_DIR/downstream_blocks.json" \
+  --slurpfile candidates "$RUN_DIR/candidate_dependents.json" \
   --slurpfile convoy     "$RUN_DIR/cohort_convoy.json" \
   --slurpfile holding    "$RUN_DIR/prior_holding_stubs.json" \
   --arg convoy_id        "${EXISTING_COHORT_CONVOY_ID:-}" \
@@ -606,6 +608,7 @@ jq -n \
     cross_wo_blockers: $cross[0],
     inline_wo_blockers: $inline_blk[0],
     downstream_blocks: $downstream[0],
+    candidate_dependents: $candidates[0],
     existing_cohort_convoy_id: (if $convoy_id == "" then null else $convoy_id end),
     cohort_convoy_label: (if $cohort_label == "" then null else $cohort_label end),
     convoy_title_override: (if $convoy_title == "" then null else $convoy_title end),

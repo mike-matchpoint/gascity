@@ -136,8 +136,8 @@ while IFS= read -r link; do
   task_key=$(jq -r '.task_key' <<<"$link")
   holding_key=$(jq -r '.holding_key' <<<"$link")
   hold_label=$(jq -r '.hold_label' <<<"$link")
-  jq -e --arg task "$task_key" --arg label "$hold_label" '
-    .nodes[]? | select(.key == $task) | ((.labels // []) | index($label))
+  jq -e --arg task "$task_key" --arg hold_label "$hold_label" '
+    .nodes[]? | select(.key == $task) | ((.labels // []) | index($hold_label))
   ' "$EMIT_PLAN" >/dev/null || record_fail "HOLDING dependent $task_key missing label $hold_label in emit_plan"
   jq -e --arg task "$task_key" --arg holding "$holding_key" '
     .edges[]? | select(.from_key == $task and .to_key == $holding)
@@ -156,10 +156,11 @@ jq -r '
 while IFS= read -r task_key; do
   [ -z "$task_key" ] && continue
   has_hold_edge=$(jq --arg task "$task_key" '
-    [.edges[]?
+    . as $root
+    | [$root.edges[]?
      | select(.from_key == $task)
      | select(.to_key as $to
-       | [.nodes[]?
+       | [$root.nodes[]?
           | select(.key == $to)
           | select((.labels // []) | index("placeholder:cross-wo-blocker"))]
        | length > 0)]

@@ -727,10 +727,12 @@ The `beads_inventory.json` schema is the same one prior formula versions
 produced (open_beads, prior_epoch_beads, cross_wo_blockers,
 existing_cohort_convoy_id, cohort_convoy_label, convoy_title_override,
 unresolved_cohort_dup, stranded_cohort_members, unplanned_family_members,
-unresolved_blocker_refs, large_open_set), plus a new `prior_holding_stubs`
-key and a new `downstream_blocks` key carrying the same arrays as the
-standalone artifacts. Step 6's forward and reverse-edge logic reads
-`candidate_dependents.json` — a relevance-filtered set, NOT a recency-
+unresolved_blocker_refs, large_open_set), plus `prior_holding_stubs`,
+`inline_wo_blockers`, `downstream_blocks`, and `candidate_dependents`
+mirrors carrying the same arrays as the standalone artifacts. Step 6's
+forward and reverse-edge logic reads `candidate_dependents.json` (also
+mirrored at `beads_inventory.json:candidate_dependents`) — a relevance-
+filtered set, NOT a recency-
 sorted top-N pad. A bead is a valid candidate only if its source WO is
 explicitly referenced by THIS work order (Blocked by / inline body link
 or bare-text ref / Blocks / family cohort sibling), OR it is a cohort
@@ -966,6 +968,18 @@ This is a single iteration over the candidates, producing two
 decision rows per candidate (one in `new_to_existing_decisions`
 emitted here, one in `existing_to_new_decisions` emitted in 5.5).
 
+**Mandatory audit-row construction.** Before writing `graph.json`,
+load the exact candidate ids from `$RUN_DIR/candidate_dependents.json`
+or the identical `beads_inventory.json:candidate_dependents` mirror.
+For every candidate id, create exactly one
+`new_to_existing_decisions` row and exactly one
+`existing_to_new_decisions` row. Start each row as `decision: "skip"`
+while inspecting it, then upgrade the row to `decision: "emit"` and
+populate `edges_emitted` if a real edge is found. Do not omit rows for
+inline-WO blockers, downstream-block WOs, cohort convoy members, or
+prior-HOLDING dependents. Do not batch a whole WO into one row; the
+row key is the bead id from `candidate_dependents.json`.
+
 **Process candidates ONE AT A TIME**, in list order. Batch
 reasoning ("none of the WO-X beads are blockers...") is forbidden.
 Collapsing a related group of candidates into one prose paragraph
@@ -1175,9 +1189,10 @@ that rate.
 
 **Same candidate set as step 6.3 (forward direction).** Both
 directions evaluate the SAME population of open beads in
-`beads_inventory.json:candidate_dependents` (or, if that artifact is
-absent because step 4 ran under an older formula version, fall back
-to `open_beads.json`). Step 6.3 already iterated the candidates and
+`beads_inventory.json:candidate_dependents`, mirrored from
+`candidate_dependents.json`. Do not fall back to `open_beads.json`;
+that broader list reintroduces unrelated beads and can hide missing
+inline/downstream audit coverage. Step 6.3 already iterated the candidates and
 recorded a `new_to_existing_decisions` row for each. This step
 iterates the SAME list and records a parallel
 `existing_to_new_decisions` row for each. In practice, the
@@ -1502,7 +1517,10 @@ verifies both arrays cover every candidate before emit runs.
 A candidate missing from either audit is a process failure: it
 means the cartographer batch-reasoned instead of iterating per
 candidate. Per-candidate decision rows are how the formula keeps
-both directions auditable.
+both directions auditable. If `candidate_dependents.json` is empty,
+write both decision arrays as empty arrays. If it is non-empty, every
+row must have a non-empty reason; placeholder reasons such as
+`pending candidate audit` are invalid.
 
 **Failure modes:**
 
@@ -1902,8 +1920,8 @@ m. **Inline-WO blocker per-candidate audit coverage.** For each entry
      HIT=""
      for id in $IDS; do
        if jq --arg id "$id" -e '
-             (.new_to_existing_decisions[]?.candidate_id //
-              .edges.new_to_existing_decisions[]?.candidate_id) == $id
+             any(.new_to_existing_decisions[]?; .candidate_id == $id) or
+             any(.edges.new_to_existing_decisions[]?; .candidate_id == $id)
            ' "$RUN_DIR/graph.json" >/dev/null 2>&1; then
          HIT="$id"; break
        fi
@@ -1951,8 +1969,8 @@ n. **Downstream-blocks per-candidate audit coverage.** For each entry
      HIT=""
      for id in $IDS; do
        if jq --arg id "$id" -e '
-             (.existing_to_new_decisions[]?.candidate_id //
-              .edges.existing_to_new_decisions[]?.candidate_id) == $id
+             any(.existing_to_new_decisions[]?; .candidate_id == $id) or
+             any(.edges.existing_to_new_decisions[]?; .candidate_id == $id)
            ' "$RUN_DIR/graph.json" >/dev/null 2>&1; then
          HIT="$id"; break
        fi
