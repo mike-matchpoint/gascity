@@ -158,7 +158,7 @@ func NewProvider() (*Provider, error) {
 		managedServicePort: managedServicePort,
 		cpuRequest:         envOrDefault("GC_K8S_CPU_REQUEST", "500m"),
 		memRequest:         envOrDefault("GC_K8S_MEM_REQUEST", "1Gi"),
-		cpuLimit:           envOrDefault("GC_K8S_CPU_LIMIT", "2"),
+		cpuLimit:           envResourceOrDefault("GC_K8S_CPU_LIMIT"),
 		memLimit:           envOrDefault("GC_K8S_MEM_LIMIT", "4Gi"),
 		serviceAccount:     os.Getenv("GC_K8S_SERVICE_ACCOUNT"),
 		serviceAccountMap:  serviceAccountMap,
@@ -263,6 +263,19 @@ func parseWorkspaceEnv() (workspaceFields, error) {
 		root = "/"
 	}
 	return workspaceFields{pvc: pvc, root: root}, nil
+}
+
+func envResourceOrDefault(key string) string {
+	v, ok := os.LookupEnv(key)
+	if !ok {
+		return "2"
+	}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "none", "omit", "disabled":
+		return ""
+	default:
+		return v
+	}
 }
 
 // newProviderWithOps creates a provider with a custom k8sOps (for testing).

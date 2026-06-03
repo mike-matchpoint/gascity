@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -90,6 +91,59 @@ func TestParseServiceAccountMapRejectsInvalidInput(t *testing.T) {
 				t.Fatal("parseServiceAccountMap error = nil, want invalid input error")
 			}
 		})
+	}
+}
+
+func TestEnvResourceOrDefaultKeepsUnsetDefaultAndOmitsExplicitDisabledValues(t *testing.T) {
+	unsetKey := "GC_K8S_CPU_LIMIT_TEST_UNSET"
+	if err := os.Unsetenv(unsetKey); err != nil {
+		t.Fatalf("unset %s: %v", unsetKey, err)
+	}
+	t.Cleanup(func() { _ = os.Unsetenv(unsetKey) })
+	if got := envResourceOrDefault(unsetKey); got != "2" {
+		t.Fatalf("unset resource = %q, want default 2", got)
+	}
+
+	for _, raw := range []string{"", "none", "omit", "disabled", " NONE "} {
+		t.Run(fmt.Sprintf("omit_%q", raw), func(t *testing.T) {
+			key := "GC_K8S_CPU_LIMIT_TEST_OMIT"
+			t.Setenv(key, raw)
+			if got := envResourceOrDefault(key); got != "" {
+				t.Fatalf("resource = %q, want empty omission", got)
+			}
+		})
+	}
+
+	t.Setenv("GC_K8S_CPU_LIMIT_TEST_EXPLICIT", "1500m")
+	if got := envResourceOrDefault("GC_K8S_CPU_LIMIT_TEST_EXPLICIT"); got != "1500m" {
+		t.Fatalf("explicit resource = %q, want 1500m", got)
+	}
+}
+
+func TestBuildResourcesKeepsDefaultCpuLimitAndAllowsOmittedCpuLimit(t *testing.T) {
+	p := newProviderWithOps(newFakeK8sOps())
+
+	resources, err := buildResources(p)
+	if err != nil {
+		t.Fatalf("buildResources default: %v", err)
+	}
+	if got := resources.Limits.Cpu().String(); got != "2" {
+		t.Fatalf("default limits.cpu = %q, want 2", got)
+	}
+	if got := resources.Limits.Memory().String(); got != "4Gi" {
+		t.Fatalf("default limits.memory = %q, want 4Gi", got)
+	}
+
+	p.cpuLimit = ""
+	resources, err = buildResources(p)
+	if err != nil {
+		t.Fatalf("buildResources omitted cpu limit: %v", err)
+	}
+	if _, ok := resources.Limits[corev1.ResourceCPU]; ok {
+		t.Fatalf("limits.cpu rendered with omitted cpu limit: %#v", resources.Limits)
+	}
+	if got := resources.Limits.Memory().String(); got != "4Gi" {
+		t.Fatalf("limits.memory = %q, want 4Gi", got)
 	}
 }
 
@@ -1328,6 +1382,32 @@ func TestProviderRuntimeFingerprintChangesForSubstrateFields(t *testing.T) {
 				t.Fatalf("fingerprint did not change for %s: %s", tt.name, got.Fingerprint)
 			}
 		})
+	}
+}
+
+func TestProviderRuntimeIdentityChangesWhenCpuLimitIsOmitted(t *testing.T) {
+	cfg := runtime.Config{
+		Env: map[string]string{"GC_AGENT": "mayor", "GC_CITY": "/workspace"},
+	}
+	withLimit := newProviderWithOps(newFakeK8sOps())
+	withoutLimit := newProviderWithOps(newFakeK8sOps())
+	withoutLimit.cpuLimit = ""
+
+	baseIdentity := mustDesiredProviderRuntimeIdentity(t, withLimit, cfg)
+	omittedIdentity := mustDesiredProviderRuntimeIdentity(t, withoutLimit, cfg)
+	if omittedIdentity.Fingerprint == baseIdentity.Fingerprint {
+		t.Fatalf("fingerprint did not change when CPU limit was omitted: %s", omittedIdentity.Fingerprint)
+	}
+
+	var spec runtimeIdentitySpec
+	if err := json.Unmarshal([]byte(omittedIdentity.Breakdown), &spec); err != nil {
+		t.Fatalf("unmarshal identity breakdown: %v\n%s", err, omittedIdentity.Breakdown)
+	}
+	if _, ok := spec.Resources.Limits["cpu"]; ok {
+		t.Fatalf("identity limits.cpu rendered after omission: %s", omittedIdentity.Breakdown)
+	}
+	if got := spec.Resources.Limits["memory"]; got != "4Gi" {
+		t.Fatalf("identity limits.memory = %q, want 4Gi in breakdown: %s", got, omittedIdentity.Breakdown)
 	}
 }
 
