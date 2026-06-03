@@ -1,0 +1,6 @@
+scope = "city"
+wake_mode = "fresh"
+work_dir = ".gc/agents/execution-city-operations/witness"
+nudge = "Run 'gc prime', inspect execution records, and record evidence findings."
+idle_timeout = "1h"
+max_active_sessions = 1

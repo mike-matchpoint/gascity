@@ -16,6 +16,7 @@ import (
 	"github.com/gastownhall/gascity/examples/bd"
 	"github.com/gastownhall/gascity/examples/dolt"
 	codegensupport "github.com/gastownhall/gascity/examples/gastown/packs/codegen-support"
+	executioncityoperations "github.com/gastownhall/gascity/examples/gastown/packs/execution-city-operations"
 	"github.com/gastownhall/gascity/examples/gastown/packs/gastown"
 	"github.com/gastownhall/gascity/examples/gastown/packs/maintenance"
 	"github.com/gastownhall/gascity/internal/bootstrap/packs/core"
@@ -52,6 +53,7 @@ func All() []Pack {
 		{Name: "maintenance", Subpath: "examples/gastown/packs/maintenance", FS: maintenance.PackFS},
 		{Name: "gastown", Subpath: "examples/gastown/packs/gastown", FS: gastown.PackFS},
 		{Name: "codegen-support", Subpath: "examples/gastown/packs/codegen-support", FS: codegensupport.PackFS},
+		{Name: "execution-city-operations", Subpath: "examples/gastown/packs/execution-city-operations", FS: executioncityoperations.PackFS},
 	}
 }
 

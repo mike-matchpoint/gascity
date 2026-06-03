@@ -26,6 +26,7 @@ func TestAllAndSourceAreDeterministic(t *testing.T) {
 		"maintenance=examples/gastown/packs/maintenance",
 		"gastown=examples/gastown/packs/gastown",
 		"codegen-support=examples/gastown/packs/codegen-support",
+		"execution-city-operations=examples/gastown/packs/execution-city-operations",
 	}
 	if strings.Join(first, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("All = %v, want %v", first, want)

@@ -1,0 +1,5 @@
+scope = "city"
+wake_mode = "fresh"
+work_dir = ".gc/agents/execution-city-operations/boot"
+idle_timeout = "30m"
+max_active_sessions = 1

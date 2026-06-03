@@ -1,0 +1,28 @@
+[pack]
+name = "execution-city-operations"
+schema = 2
+
+# Generic operations primitives for execution and monitoring cities.
+# These roles supervise nondeterministic process health and evidence quality.
+# They do not replace deterministic dispatchers, bridge command runners, or
+# domain state writers.
+
+[[named_session]]
+template = "mayor"
+scope = "city"
+mode = "always"
+
+[[named_session]]
+template = "deacon"
+scope = "city"
+mode = "always"
+
+[[named_session]]
+template = "boot"
+scope = "city"
+mode = "always"
+
+[[named_session]]
+template = "witness"
+scope = "city"
+mode = "always"

@@ -1,0 +1,6 @@
+scope = "city"
+wake_mode = "fresh"
+work_dir = ".gc/agents/execution-city-operations/deacon"
+nudge = "Run 'gc prime', check patrol work, and begin execution-city health triage."
+idle_timeout = "1h"
+max_active_sessions = 1
