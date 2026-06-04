@@ -491,11 +491,11 @@ plans a per-WO convoy as before.
     "specs/07-routing-and-workflows.md",
     "specs/08-example-capability.md"
   ],
-  "blocked_by_annotations": ["WO-FOUNDATION", "WO-UPSTREAM"],
-  "blocks_annotations": ["WO-DOWNSTREAM"],
+  "blocked_by_annotations": ["WO-090", "WO-101"],
+  "blocks_annotations": ["WO-130"],
   "land_together_set": [],
   "family_cohort_label": "family:100-example-capability",
-  "convoy_title_override": "WO-PARENT: Example Capability (Index)",
+  "convoy_title_override": "WO-100: Example Capability (Index)",
   "family_members": [
     "100-example-capability",
     "100a-example-capability-ingest",
@@ -505,7 +505,7 @@ plans a per-WO convoy as before.
   ],
   "secondary_cohort_label": null,
   "cohort_label": "family:100-example-capability",
-  "inline_wo_blockers": ["example-approval-gate"],
+  "inline_wo_blockers": ["120-approval-modeling-gate"],
   "large_specs_root": false
 }
 ```
@@ -513,15 +513,15 @@ plans a per-WO convoy as before.
 The `blocked_by_annotations`, `blocks_annotations`, and
 `land_together_set` fields are critical and feed steps 4 and 6.
 Convert work-order references (WO-XYZ) to the file-basename id
-convention used by labels (e.g., `WO-FOUNDATION` →
-`foundation-runtime-substrate`) by matching against the
+convention used by labels (e.g., `WO-090` →
+`090-foundation-runtime-substrate`) by matching against the
 filenames under `specs/agent-work-orders/`.
 
 **Derive `inline_wo_blockers`.** This field captures other work
 orders the target depends on as runtime gates expressed inline in
 the body prose, but NOT formally listed in `Blocked by:`. Example:
-the target says "do not author the domain-specific tasks until the
-approval gate from WO-APPROVAL has landed." `WO-APPROVAL` is a real
+the target says "do not author profile tasks until WO-120 lands an
+approved modeling/design-decision artifact." `WO-120` is a real
 runtime gate, but the author did not restate it in the formal blocker
 line.
 
@@ -540,8 +540,8 @@ inline_wo_blockers =
 ```
 
 - `directly_referenced_by_target` already resolves both link form
-  (`[WO-APPROVAL](example-approval-gate.md)`) and bare text
-  form (`WO-DOWNSTREAM`) into the file-path basename during step 5's
+  (`[WO-120](120-approval-modeling-gate.md)`) and bare text
+  form (`WO-130`) into the file-path basename during step 5's
   reference walk. No new regex pass is required.
 - Subtract the target itself, the formal blocker set, and the
   family-cohort siblings — those each have their own dedicated
@@ -1195,8 +1195,8 @@ b. If `existing_cohort_convoy_id` is null: plan to create a NEW
    `graph.json` regardless of which family member is triggering
    creation. This is what ensures a sub-WO that races ahead of its
    parent still produces a convoy titled for the parent feature
-   ("WO-PARENT: Example Capability (Index)"), not for the sub-WO that
-   happened to fire first ("WO-PARENT-A: Example Ingest"). For
+   ("WO-100: Example Capability (Index)"), not for the sub-WO that
+   happened to fire first ("WO-100a: Example Ingest"). For
    land-together cohorts (no override), construct the title from
    the cohort intent. Emit (the emit step) uses `convoy.title` verbatim,
    so the override decision lives entirely in this step.
@@ -1409,12 +1409,12 @@ Plan one entry per blocker WO in `holding_stubs_to_create`:
 
 ```json
 {
-  "blocker_wo_id": "example-upstream-contract",
-  "draft_holding_id": "hold-example-upstream",
-  "title": "HOLDING: example-upstream-contract (placeholder for <this-wo> cross-WO dep)",
+  "blocker_wo_id": "101-upstream-contract",
+  "draft_holding_id": "hold-101",
+  "title": "HOLDING: 101-upstream-contract (placeholder for <this-wo> cross-WO dep)",
   "body": "<inline body — see emit step 7 for template>",
   "dependent_draft_ids": ["task-3", "task-7"],
-  "hold_label": "hold:example-upstream-contract"
+  "hold_label": "hold:101-upstream-contract"
 }
 ```
 
@@ -1460,7 +1460,7 @@ d. Plan an entry in `holding_stubs_to_release`:
 {
   "holding_bead_id": "app-hold-abc",
   "title": "<HOLDING title>",
-  "placeholder_for_wo": "example-target-work",
+  "placeholder_for_wo": "100a-example-capability-ingest",
   "classification": "fully_releasable",
   "retarget_edges": [
     {"from_existing_bead_id": "app-target-task-3",
@@ -1513,12 +1513,12 @@ most likely speculative). Repeat until acyclic.
     "new_to_cross_wo": [
       {"from": "task-1",
        "to_existing_bead_id": "app-conv-000",
-       "blocker_wo_id": "foundation-runtime-substrate",
-       "reason": "Blocked by WO-FOUNDATION (work-order annotation)"}
+       "blocker_wo_id": "090-foundation-runtime-substrate",
+       "reason": "Blocked by WO-090 (work-order annotation)"}
     ],
     "existing_to_new": [
       {"from_existing_bead_id": "app-ddd", "to_new": "task-3",
-       "reason": "app-ddd's acceptance contract names packages/example/upstream as a required surface; task-3 creates that module"}
+       "reason": "app-ddd's import-linter contract names packages/example/profile_builder.py as a forbidden importer; task-3 creates that module"}
     ]
   },
   "new_to_existing_decisions": [
@@ -1528,14 +1528,14 @@ most likely speculative). Repeat until acyclic.
     {"candidate_id": "app-bbb", "decision": "emit",
      "edges_emitted": ["task-9"],
      "new_task_is_verifier": true,
-     "reason": "task-9 is a behavioral fixture set grading app-bbb's runtime output; verifier cannot run before subject exists"},
+     "reason": "task-9 is a behavioral gold-case fixture set grading app-bbb's runtime output; verifier cannot run before subject exists"},
     {"candidate_id": "app-ccc", "decision": "skip",
      "reason": "app-ccc extends a parallel module; no new task in this run reads any surface app-ccc produces"}
   ],
   "existing_to_new_decisions": [
     {"candidate_id": "app-ddd", "decision": "emit",
      "edges_emitted": ["task-3"],
-     "reason": "app-ddd's acceptance contract names packages/example/upstream as a required surface; task-3 creates that module"},
+     "reason": "app-ddd's import-linter contract names packages/example/profile_builder.py as a forbidden importer; task-3 creates that module"},
     {"candidate_id": "app-eee", "decision": "skip",
      "is_cohort_verifier": true,
      "reason": "verifier scope is provably narrower: body asserts only the X path; none of this run's tasks produce a surface app-eee observes"},
@@ -1548,22 +1548,22 @@ most likely speculative). Repeat until acyclic.
      "reason": "both touch packages/example/component.py"}
   ],
   "holding_stubs_to_create": [
-    {"blocker_wo_id": "example-upstream-contract",
-     "draft_holding_id": "hold-example-upstream",
-     "title": "HOLDING: example-upstream-contract (placeholder for example-target-work cross-WO dep)",
-     "body": "Placeholder bead so beads from example-target-work can depend on example-upstream-contract before that WO is planned...",
+    {"blocker_wo_id": "101-upstream-contract",
+     "draft_holding_id": "hold-101",
+     "title": "HOLDING: 101-upstream-contract (placeholder for 100a-example-capability-ingest cross-WO dep)",
+     "body": "Placeholder bead so beads from 100a-example-capability-ingest can depend on 101-upstream-contract before that WO is planned...",
      "dependent_draft_ids": ["task-3", "task-7"],
-     "hold_label": "hold:example-upstream-contract"}
+     "hold_label": "hold:101-upstream-contract"}
   ],
   "holding_stubs_to_release": [
     {"holding_bead_id": "app-hold-abc",
-     "title": "HOLDING: example-target-work (placeholder for example-downstream-work cross-WO dep)",
-     "placeholder_for_wo": "example-downstream-work",
+     "title": "HOLDING: 100a-example-capability-ingest (placeholder for 130-downstream-consumer cross-WO dep)",
+     "placeholder_for_wo": "130-downstream-consumer",
      "classification": "fully_releasable",
      "retarget_edges": [
-       {"from_existing_bead_id": "app-downstream-task-2",
+       {"from_existing_bead_id": "app-130-task-2",
         "to_new": "task-5",
-        "reason": "app-downstream-task-2's done_when requires packages/contracts/example-capability; task-5 creates that contract"}
+        "reason": "app-130-task-2's done_when requires packages/contracts/example-capability; task-5 creates that contract"}
      ],
      "unretargetable_dependents": []}
   ],
@@ -1921,8 +1921,8 @@ g2. **Missing/scaffold-only cross-WO blockers require HOLDING stubs.**
    Missing/scaffold-only blocker implementation is not a validate-plan
    failure. The only failure here is cartographer omission of the
    required HOLDING plan, missing hold labels, missing HOLDING edges, or
-   incorrect dependency targets. Failing because a blocker WO has not
-   emitted implementation beads yet, or because it only has
+   incorrect dependency targets. Failing because `WO-130` has not
+   emitted implementation beads yet, or because `WO-101` only has
    scaffold/control beads, is invalid and creates a cross-WO deadlock.
 
 h. **Unresolved blocker refs.** If
@@ -1976,8 +1976,8 @@ m. **Inline-WO blocker per-candidate audit coverage.** For each entry
 
    Inline-WO blockers are runtime gates the target spec references
    in prose but does not list in the formal `Blocked by:` line (e.g.
-   "the target task may not start until WO-APPROVAL lands the approval
-   artifact"). They do NOT auto-edge through
+   "the target task may not start until WO-120 lands the approved
+   modeling/design-decision artifact"). They do NOT auto-edge through
    `new_to_cross_wo` (that path is reserved for formal blockers); the
    per-candidate `new_to_existing` audit is their only safety net.
    This check makes that discipline structurally required rather than
@@ -2018,11 +2018,13 @@ m. **Inline-WO blocker per-candidate audit coverage.** For each entry
 
 n. **Downstream-blocks per-candidate audit coverage.** For each entry
    in `beads_inventory.json:downstream_blocks` where
-   `all_closed == false` AND `no_beads_known == false`, at least one
-   bead from that WO (the entry's `convoy_bead_id` if non-null, or any
-   id in `task_bead_ids`) MUST appear as `candidate_id` in
-   `graph.json:existing_to_new_decisions` (any decision — `emit` or
-   `skip`; presence of an audit row is the requirement).
+   `all_closed == false`, first determine whether the downstream WO has
+   any usable implementation candidate in `candidate_dependents.json`.
+   If it does, at least one bead from that WO (the entry's
+   `convoy_bead_id` if non-null, or any id in `task_bead_ids`) MUST
+   appear as `candidate_id` in `graph.json:existing_to_new_decisions`
+   (any decision — `emit` or `skip`; presence of an audit row is the
+   requirement).
 
    Downstream-blocks are WOs the target spec lists in its formal
    `Blocks:` line. Their open beads are the canonical `existing_to_new`
@@ -2046,12 +2048,14 @@ n. **Downstream-blocks per-candidate audit coverage.** For each entry
    `validation_plan.json:warnings` naming the downstream WO and
    continue. This is the expected cross-WO sequencing pattern, not a
    graph defect. A validation error such as "downstream audit missing
-   for WO-DOWNSTREAM" is valid only when that downstream WO has open
+   for WO-130" is valid only when that downstream WO has open
    implementation beads that are present in `candidate_dependents.json`
    and the cartographer skipped auditing them.
 
    ```bash
    CANDIDATE_IDS=$(jq -r '.[].id' "$RUN_DIR/candidate_dependents.json" | sort -u)
+   DOWNSTREAM_WARNINGS_FILE="$RUN_DIR/downstream_scaffold_warnings.jsonl"
+   : > "$DOWNSTREAM_WARNINGS_FILE"
    MISSING_DOWNSTREAM=""
    while IFS= read -r entry; do
      [ -z "$entry" ] && continue
@@ -2060,7 +2064,12 @@ n. **Downstream-blocks per-candidate audit coverage.** For each entry
      WO=$(jq -r '.downstream_wo_id' <<<"$entry")
      IDS=$(printf '%s\n%s\n' "$CONVOY" "$TASKS" | grep -v '^$' | sort -u || true)
      IMPLEMENTATION_IDS=$(comm -12 <(printf '%s\n' "$IDS") <(printf '%s\n' "$CANDIDATE_IDS") || true)
-     [ -n "$IMPLEMENTATION_IDS" ] || continue
+     if [ -z "$IMPLEMENTATION_IDS" ]; then
+       jq -n --arg wo "$WO" \
+         '{check:"n", severity:"warning", downstream_wo_id:$wo, reason:"downstream WO has no implementation candidate in candidate_dependents; continuing because missing/scaffold-only downstream WOs are handled by HOLDINGs"}' \
+         >> "$DOWNSTREAM_WARNINGS_FILE"
+       continue
+     fi
      HIT=""
      for id in $IMPLEMENTATION_IDS; do
        if jq --arg id "$id" -e '
@@ -2072,8 +2081,7 @@ n. **Downstream-blocks per-candidate audit coverage.** For each entry
      done
      [ -z "$HIT" ] && MISSING_DOWNSTREAM="${MISSING_DOWNSTREAM}${WO} "
    done < <(jq -c '.downstream_blocks[]?
-                     | select(.all_closed == false and .no_beads_known == false)
-                     | select(((.task_bead_ids // []) | length) > 0 or (.convoy_bead_id != null))' \\
+                     | select(.all_closed == false)' \\
               "$RUN_DIR/beads_inventory.json")
    if [ -n "$MISSING_DOWNSTREAM" ]; then
      echo "FAIL: downstream-blocks per-candidate audit missing — WO(s): $MISSING_DOWNSTREAM"
@@ -2105,6 +2113,9 @@ z. **Concrete emit carrier preflight.** After checks a-n pass, build
    convoy `parent_key`/`parent_id`, and HOLDING label/edge coherence.
    If the helper fails, treat it as a `validate-plan` failure and block the step for mayor action. Do not allow `validation_plan.json` to be
    `status=ok` unless this concrete preflight passes.
+
+Include any JSONL warnings from `$RUN_DIR/downstream_scaffold_warnings.jsonl`
+in `validation_plan.json:warnings`.
 
 **3. On success,** write `$RUN_DIR/validation_plan.json`:
 
@@ -2788,7 +2799,7 @@ with classification `fully_releasable`; partial entries stayed open.
   "beads_emitted": [
     {"id": "...", "title": "...", "key": "task-1", "type": "task",
      "parent_key": "convoy-1", "parent_id": null,
-     "hold_labels": ["hold:example-upstream-contract"]}
+     "hold_labels": ["hold:101-upstream-contract"]}
   ],
   "beads_skipped_existing": [{"existing_id": "...", "matched_draft_id": "task-2"}],
   "stranded_cohort_members_count": 1,
@@ -2802,17 +2813,17 @@ with classification `fully_releasable`; partial entries stayed open.
     "holding_release_retarget": 0
   },
   "holding_stubs_created": [
-    {"id": "app-hold-abc", "blocker_wo_id": "example-upstream-contract",
-     "key": "hold-example-upstream", "hold_label": "hold:example-upstream-contract",
+    {"id": "app-hold-abc", "blocker_wo_id": "101-upstream-contract",
+     "key": "hold-101", "hold_label": "hold:101-upstream-contract",
      "dependent_bead_ids": ["app-task-3", "app-task-7"],
      "dependent_bead_count": 2}
   ],
   "holding_stubs_released": [
-    {"id": "app-hold-old", "placeholder_for_wo": "example-target-work",
+    {"id": "app-hold-old", "placeholder_for_wo": "100a-example-capability-ingest",
      "retarget_edges": 3}
   ],
   "holding_stubs_partial": [
-    {"id": "app-hold-stale", "placeholder_for_wo": "example-downstream-work",
+    {"id": "app-hold-stale", "placeholder_for_wo": "130-downstream-consumer",
      "unretargetable_dependents": ["app-downstream-task-4"],
      "reason": "pre-flight dropped retarget edge — dependent's blocker bead closed between graph and emit"}
   ],
