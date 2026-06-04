@@ -34,6 +34,18 @@ the target work order's non-duplicate beads and wires dependencies so
 polecats can complete the resulting DAG in order. Only duplicate beads
 for this same work order should be skipped by reconciliation.
 
+If a dependent work order has no usable implementation beads yet, or if
+its only known beads are formula, molecule, step, gate, session, convoy,
+message, role, spec, agent, convergence, or other scaffold/control beads,
+that is the intended HOLDING-bead case. The cartographer MUST emit this
+work order's graph with one placeholder HOLDING bead per missing blocker
+WO, `hold:<blocker-wo-id>` labels on concrete dependent tasks, and
+dependency edges from those tasks to the HOLDING. Refusing to pass
+validation because another WO has not emitted implementation beads yet
+creates a city deadlock and is not acceptable. Validation may fail only
+when the cartographer omitted the required HOLDING, emitted partial
+dependencies, or targeted an incorrect dependency.
+
 Outbound from new beads (the new bead `depends_on` the existing one):
 (a) other new beads in this run,
 (b) beads from prior work orders this work order is `Blocked by`,
@@ -55,29 +67,39 @@ Inbound to new beads — added on EXISTING open beads:
     new bead creates that the existing bead's `done_when` requires.
     Aesthetic or thematic similarity is NOT sufficient.
 
-**Human-review notifications.** This city has NO separate `overseer`
-mail alias. The mayor IS the operator-facing proxy. Any time a step
-below tells you to "mail the overseer", "notify the operator", or
-otherwise escalate to a human, instead do:
+**Automated mayor-action notifications.** This city is automated. There
+is no separate `overseer` mail alias, no monitored review queue,
+and no acceptable route to legacy escalation. Any time a step below
+finds a genuine validation or runtime failure that prevents safe
+continuation, mail the mayor as the automation owner:
 
 ```
 gc mail send gastown.mayor \
-  -s "[HUMAN REVIEW NEEDED] <short summary>" \
+  -s "[CARTOGRAPHER ACTION REQUIRED] <short summary>" \
   -m "<details>"
 ```
 
-The `[HUMAN REVIEW NEEDED]` subject prefix is the operator's signal —
-the mayor's role is to surface these to the human, not to act on them
-autonomously. Do NOT call `gc mail send overseer` — that alias does
-not resolve in this city and the send will fail silently or fall
-back to a noisy mayor message that is not flagged for review.
+The `[CARTOGRAPHER ACTION REQUIRED]` subject prefix is the mayor's
+automation signal. Do NOT call `gc mail send overseer`, do NOT route to
+legacy escalation, and do NOT ask for review. The mayor may
+repair incorrect source dependencies, schedule missing WOs, or rerun the
+cartographer after a real failure has been fixed.
 
-**Human-review step disposition.** A failed cartographer step must be
-passive to automation. After writing `failure.json` or
-`needs_human.json` and sending the mayor mail, run:
+**Mayor-action step disposition.** A failed cartographer step must be
+passive to cartographer automation but visible to the mayor. After
+writing `failure.json` or `needs_mayor_action.json` and sending the
+mayor mail, update the current step bead directly:
 
 ```bash
-.gc/scripts/cartographer-human-review-block.sh "<short failure reason>"
+gc --rig "{{rig_name}}" bd update "$GC_BEAD_ID" \
+  --status blocked \
+  --assignee "gastown.mayor" \
+  --set-metadata decision_state=mayor_action \
+  --set-metadata "gc.routed_to=gastown.mayor" \
+  --set-metadata "cartographer.failure_reason=<short failure reason>" \
+  --set-metadata "work_order_id=$WORK_ORDER_ID" \
+  --set-metadata "cartographer.epoch=$EPOCH" \
+  --notes "Blocked for mayor action: <short failure reason>"
 gc runtime drain-ack
 exit 0
 ```
@@ -85,14 +107,11 @@ exit 0
 Do not leave a failed step `open` or `in_progress` with the cartographer
 assignee or `gc.routed_to={{rig_name}}/codegen-support.cartographer`; the
 controller treats assigned/routed work as demand and will keep
-re-spawning the cartographer. The helper sets `status=blocked`, clears
-the cartographer assignee, routes the bead to `human-escalation`, and
-records `cartographer.resume_routed_to` so an operator can explicitly
-resume after fixing the plan:
-
-```bash
-RIG={{rig_name}} .gc/scripts/cartographer-human-review-resume.sh <step-bead-id>
-```
+re-spawning the cartographer. The mayor-action state is not a review
+queue; it is the automation handoff for genuine failures such as
+incorrect dependencies, invalid graph structure, missing required
+artifacts, or partial emits. Missing implementation beads in another WO
+are not a failure; emit HOLDING beads and continue.
 """
 formula = "spec-cartographer"
 version = 1
@@ -127,6 +146,21 @@ EPOCH=$(date -u +%Y-%m-%dT%H-%M-%SZ)
 RUN_INDEX_DIR="$CARTOGRAPHER_HOME/.cartographer-runs/${WORK_ORDER_ID}/${EPOCH}"
 mkdir -p "$RUN_INDEX_DIR"
 
+cartographer_block_for_mayor_action() {
+  reason="$1"
+  failure_run_dir="${RUN_DIR:-$RUN_INDEX_DIR}"
+  gc --rig "$RIG" bd update "$GC_BEAD_ID" \
+    --status blocked \
+    --assignee "gastown.mayor" \
+    --set-metadata decision_state=mayor_action \
+    --set-metadata "gc.routed_to=gastown.mayor" \
+    --set-metadata "cartographer.failure_reason=$reason" \
+    --set-metadata "work_order_id=$WORK_ORDER_ID" \
+    --set-metadata "cartographer.epoch=$EPOCH" \
+    --set-metadata "cartographer.failure_run_dir=$failure_run_dir" \
+    --notes "Blocked for mayor action: $reason"
+}
+
 CITY_ROOT="$CARTOGRAPHER_HOME"
 while [ "$CITY_ROOT" != "/" ] && [ ! -f "$CITY_ROOT/city.toml" ]; do
   CITY_ROOT=$(dirname "$CITY_ROOT")
@@ -136,9 +170,9 @@ if [ ! -f "$CITY_ROOT/city.toml" ]; then
         '{step: "init-run", reason: "city.toml not found", repo_root: $repo}' \
         > "$RUN_INDEX_DIR/failure.json"
   gc mail send gastown.mayor \
-    -s "[HUMAN REVIEW NEEDED] cartographer city root resolution failed for $WORK_ORDER_ID" \
-    -m "Could not locate city.toml walking up from $CARTOGRAPHER_HOME. See $RUN_INDEX_DIR/failure.json. Step bead $GC_BEAD_ID blocked for human review."
-  .gc/scripts/cartographer-human-review-block.sh "city root resolution failed"
+    -s "[CARTOGRAPHER ACTION REQUIRED] cartographer city root resolution failed for $WORK_ORDER_ID" \
+    -m "Could not locate city.toml walking up from $CARTOGRAPHER_HOME. See $RUN_INDEX_DIR/failure.json. Step bead $GC_BEAD_ID blocked for mayor action."
+  cartographer_block_for_mayor_action "city root resolution failed"
   gc runtime drain-ack
   exit 0
 fi
@@ -154,9 +188,9 @@ if [ -z "$RIG_PATH" ]; then
         '{step: "init-run", reason: "rig path not resolved", rig: $rig}' \
         > "$RUN_INDEX_DIR/failure.json"
   gc mail send gastown.mayor \
-    -s "[HUMAN REVIEW NEEDED] cartographer rig path resolution failed for $WORK_ORDER_ID" \
-    -m "Could not resolve rig path for $RIG. See $RUN_INDEX_DIR/failure.json. Step bead $GC_BEAD_ID blocked for human review."
-  .gc/scripts/cartographer-human-review-block.sh "rig path resolution failed"
+    -s "[CARTOGRAPHER ACTION REQUIRED] cartographer rig path resolution failed for $WORK_ORDER_ID" \
+    -m "Could not resolve rig path for $RIG. See $RUN_INDEX_DIR/failure.json. Step bead $GC_BEAD_ID blocked for mayor action."
+  cartographer_block_for_mayor_action "rig path resolution failed"
   gc runtime drain-ack
   exit 0
 fi
@@ -167,9 +201,9 @@ if ! git -C "$CARTOGRAPHER_HOME" fetch --prune origin main; then
         '{step: "init-run", reason: "origin main fetch failed", repo_root: $repo}' \
         > "$RUN_INDEX_DIR/failure.json"
   gc mail send gastown.mayor \
-    -s "[HUMAN REVIEW NEEDED] cartographer origin/main fetch failed for $WORK_ORDER_ID" \
-    -m "Could not fetch origin main before creating a per-run worktree. See $RUN_INDEX_DIR/failure.json. Step bead $GC_BEAD_ID blocked for human review."
-  .gc/scripts/cartographer-human-review-block.sh "origin main fetch failed"
+    -s "[CARTOGRAPHER ACTION REQUIRED] cartographer origin/main fetch failed for $WORK_ORDER_ID" \
+    -m "Could not fetch origin main before creating a per-run worktree. See $RUN_INDEX_DIR/failure.json. Step bead $GC_BEAD_ID blocked for mayor action."
+  cartographer_block_for_mayor_action "origin main fetch failed"
   gc runtime drain-ack
   exit 0
 fi
@@ -180,9 +214,9 @@ if [ -e "$RUN_WORKTREE" ] && [ ! -d "$RUN_WORKTREE/.git" ] && [ ! -f "$RUN_WORKT
         '{step: "init-run", reason: "run worktree path exists but is not a git worktree", path: $path}' \
         > "$RUN_INDEX_DIR/failure.json"
   gc mail send gastown.mayor \
-    -s "[HUMAN REVIEW NEEDED] cartographer run worktree path collision for $WORK_ORDER_ID" \
-    -m "Path $RUN_WORKTREE exists but is not a git worktree. See $RUN_INDEX_DIR/failure.json. Step bead $GC_BEAD_ID blocked for human review."
-  .gc/scripts/cartographer-human-review-block.sh "run worktree path collision"
+    -s "[CARTOGRAPHER ACTION REQUIRED] cartographer run worktree path collision for $WORK_ORDER_ID" \
+    -m "Path $RUN_WORKTREE exists but is not a git worktree. See $RUN_INDEX_DIR/failure.json. Step bead $GC_BEAD_ID blocked for mayor action."
+  cartographer_block_for_mayor_action "run worktree path collision"
   gc runtime drain-ack
   exit 0
 fi
@@ -194,9 +228,9 @@ if [ ! -d "$RUN_WORKTREE/.git" ] && [ ! -f "$RUN_WORKTREE/.git" ]; then
           '{step: "init-run", reason: "run worktree creation failed", path: $path}' \
           > "$RUN_INDEX_DIR/failure.json"
     gc mail send gastown.mayor \
-      -s "[HUMAN REVIEW NEEDED] cartographer run worktree creation failed for $WORK_ORDER_ID" \
-      -m "Could not create $RUN_WORKTREE from origin/main. See $RUN_INDEX_DIR/failure.json. Step bead $GC_BEAD_ID blocked for human review."
-    .gc/scripts/cartographer-human-review-block.sh "run worktree creation failed"
+      -s "[CARTOGRAPHER ACTION REQUIRED] cartographer run worktree creation failed for $WORK_ORDER_ID" \
+      -m "Could not create $RUN_WORKTREE from origin/main. See $RUN_INDEX_DIR/failure.json. Step bead $GC_BEAD_ID blocked for mayor action."
+    cartographer_block_for_mayor_action "run worktree creation failed"
     gc runtime drain-ack
     exit 0
   fi
@@ -220,20 +254,9 @@ else
         > "$RUN_DIR/failure.json"
   cp "$RUN_DIR/failure.json" "$RUN_INDEX_DIR/failure.json"
   gc mail send gastown.mayor \
-    -s "[HUMAN REVIEW NEEDED] cartographer helper scripts missing for $WORK_ORDER_ID" \
-    -m "Could not copy helper scripts from $CARTOGRAPHER_HOME/.gc/scripts into $REPO_ROOT/.gc/scripts. See $RUN_DIR/failure.json. Step bead $GC_BEAD_ID blocked for human review."
-  gc --rig "$RIG" bd update "$GC_BEAD_ID" \
-    --status blocked \
-    --assignee "" \
-    --set-metadata decision_state=human_review \
-    --set-metadata "gc.routed_to=human-escalation" \
-    --set-metadata "cartographer.review_state=human_review" \
-    --set-metadata "cartographer.review_reason=helper scripts missing" \
-    --set-metadata "cartographer.resume_routed_to=$RIG/codegen-support.cartographer" \
-    --set-metadata "work_order_id=$WORK_ORDER_ID" \
-    --set-metadata "cartographer.epoch=$EPOCH" \
-    --set-metadata "cartographer.failure_run_dir=$RUN_DIR" \
-    --notes "Blocked for human review: helper scripts missing"
+    -s "[CARTOGRAPHER ACTION REQUIRED] cartographer helper scripts missing for $WORK_ORDER_ID" \
+    -m "Could not copy helper scripts from $CARTOGRAPHER_HOME/.gc/scripts into $REPO_ROOT/.gc/scripts. See $RUN_DIR/failure.json. Step bead $GC_BEAD_ID blocked for mayor action."
+  cartographer_block_for_mayor_action "helper scripts missing"
   gc runtime drain-ack
   exit 0
 fi
@@ -262,9 +285,9 @@ if [ ! -f "$WO_PATH" ]; then
         > "$RUN_DIR/failure.json"
   cp "$RUN_DIR/failure.json" "$RUN_INDEX_DIR/failure.json"
   gc mail send gastown.mayor \
-    -s "[HUMAN REVIEW NEEDED] cartographer work order not found for $WORK_ORDER_ID" \
-    -m "Work order path $WO_PATH does not exist in per-run worktree $REPO_ROOT created from origin/main. See $RUN_DIR/failure.json. Step bead $GC_BEAD_ID blocked for human review."
-  .gc/scripts/cartographer-human-review-block.sh "work order not found"
+    -s "[CARTOGRAPHER ACTION REQUIRED] cartographer work order not found for $WORK_ORDER_ID" \
+    -m "Work order path $WO_PATH does not exist in per-run worktree $REPO_ROOT created from origin/main. See $RUN_DIR/failure.json. Step bead $GC_BEAD_ID blocked for mayor action."
+  cartographer_block_for_mayor_action "work order not found"
   gc runtime drain-ack
   exit 0
 fi
@@ -310,10 +333,10 @@ this fresh session so the singleton Cartographer pool can spawn a new
 session for the next ready step.
 
 If you took a failure-mode branch above and exited early (wrote
-`failure.json` or `needs_human.json` and stopped), do NOT close and do
-NOT leave the step assigned to cartographer. Run the human-review step
-disposition helper from the formula description so automation stops
-dispatching this failed step until an operator explicitly resumes it.
+`failure.json` or `needs_mayor_action.json` and stopped), do NOT close
+and do NOT leave the step assigned to cartographer. Apply the
+mayor-action disposition from the formula description so automation
+stops dispatching this failed step until the mayor actions it.
 
 """
 
@@ -549,8 +572,8 @@ step 6 plans against it; step 7 uses it.
 **Failure modes:**
 
 - If `$WO_PATH` does not exist: write a failure record to
-  `$RUN_DIR/failure.json`, mail the mayor, block the step for human
-  review with the helper, and exit cleanly after `gc runtime drain-ack`.
+  `$RUN_DIR/failure.json`, mail the mayor, apply the mayor-action
+  disposition from the formula description, and exit cleanly after `gc runtime drain-ack`.
   Do not proceed.
 - If the specs tree exceeds ~200 files: emit the manifest with
   `large_specs_root: true`. Step 3 will use this to bound reading.
@@ -570,10 +593,9 @@ this fresh session so the singleton Cartographer pool can spawn a new
 session for the next ready step.
 
 If you took a failure-mode branch above and exited early (wrote
-`failure.json` or `needs_human.json` and stopped), do NOT close and do
-NOT leave the step assigned to cartographer. Run the human-review step
-disposition helper from the formula description so automation stops
-dispatching this failed step until an operator explicitly resumes it.
+`failure.json` or `needs_mayor_action.json` and stopped), do NOT close and do
+NOT leave the step assigned to cartographer. Apply the mayor-action disposition from the formula description so automation stops
+dispatching this failed step until the mayor actions it.
 
 """
 
@@ -652,10 +674,10 @@ that says "see the spec."
 **Failure modes:**
 
 - If any `open_questions` is blocking (decomposition cannot proceed
-  without an answer): write `$RUN_DIR/needs_human.json` listing the
+  without an answer): write `$RUN_DIR/needs_mayor_action.json` listing the
   questions, mail the mayor with subject prefix
-  `[HUMAN REVIEW NEEDED]` (see "Human-review notifications" in the
-  formula description), block the step for human review with the helper,
+  `[CARTOGRAPHER ACTION REQUIRED]` (see "Mayor-action notifications" in the
+  formula description), block the step for mayor action using the disposition in the formula description,
   and exit cleanly after `gc runtime drain-ack`. Do not proceed to step 4.
 **Mark this step complete.**
 
@@ -673,10 +695,9 @@ this fresh session so the singleton Cartographer pool can spawn a new
 session for the next ready step.
 
 If you took a failure-mode branch above and exited early (wrote
-`failure.json` or `needs_human.json` and stopped), do NOT close and do
-NOT leave the step assigned to cartographer. Run the human-review step
-disposition helper from the formula description so automation stops
-dispatching this failed step until an operator explicitly resumes it.
+`failure.json` or `needs_mayor_action.json` and stopped), do NOT close and do
+NOT leave the step assigned to cartographer. Apply the mayor-action disposition from the formula description so automation stops
+dispatching this failed step until the mayor actions it.
 
 """
 
@@ -705,6 +726,20 @@ correctness drift in the past.
 ```bash
 WO_PATH_INPUT="{{work_order_path}}" . .gc/scripts/cartographer-load-state.sh
 cd "$REPO_ROOT"
+
+cartographer_block_for_mayor_action() {
+  reason="$1"
+  gc --rig "$RIG" bd update "$GC_BEAD_ID" \
+    --status blocked \
+    --assignee "gastown.mayor" \
+    --set-metadata decision_state=mayor_action \
+    --set-metadata "gc.routed_to=gastown.mayor" \
+    --set-metadata "cartographer.failure_reason=$reason" \
+    --set-metadata "work_order_id=$WORK_ORDER_ID" \
+    --set-metadata "cartographer.epoch=$EPOCH" \
+    --set-metadata "cartographer.failure_run_dir=$RUN_DIR" \
+    --notes "Blocked for mayor action: $reason"
+}
 
 bash .gc/scripts/cartographer-inventory.sh 2> "$RUN_DIR/inventory_beads.stderr"
 SCRIPT_EXIT=$?
@@ -751,9 +786,9 @@ returns 20–60 beads and the cap never fires. The graph step (5) reads
     echo "FATAL: script exited 0 but beads_inventory.json missing/empty" \
       > "$RUN_DIR/failure.json"
     gc mail send gastown.mayor \
-      -s "[HUMAN REVIEW NEEDED] cartographer inventory_beads output missing for $WORK_ORDER_ID" \
-      -m "inventory_beads exited 0 but beads_inventory.json was missing or empty. See $RUN_DIR/failure.json. Step bead $GC_BEAD_ID blocked for human review."
-    .gc/scripts/cartographer-human-review-block.sh "inventory_beads output missing"
+      -s "[CARTOGRAPHER ACTION REQUIRED] cartographer inventory_beads output missing for $WORK_ORDER_ID" \
+      -m "inventory_beads exited 0 but beads_inventory.json was missing or empty. See $RUN_DIR/failure.json. Step bead $GC_BEAD_ID blocked for mayor action."
+    cartographer_block_for_mayor_action "inventory_beads output missing"
     gc runtime drain-ack
     exit 0
   fi
@@ -768,7 +803,7 @@ returns 20–60 beads and the cap never fires. The graph step (5) reads
   summary or commentary — downstream steps read the artifacts directly.
 
 - **Exit ≠ 0 (failure).** Write a failure record and mail the mayor.
-  Do NOT close the step bead. Block it for human review so it is no
+  Do NOT close the step bead. Block it for mayor action so it is no
   longer dispatched to cartographer:
   ```bash
   jq -n \
@@ -778,9 +813,9 @@ returns 20–60 beads and the cap never fires. The graph step (5) reads
     > "$RUN_DIR/failure.json"
 
   gc mail send gastown.mayor \
-    -s "[HUMAN REVIEW NEEDED] cartographer inventory_beads failed for $WORK_ORDER_ID" \
-    -m "Script exited $SCRIPT_EXIT. See $RUN_DIR/failure.json and $RUN_DIR/inventory_beads.stderr. Step bead $GC_BEAD_ID blocked for human review."
-  .gc/scripts/cartographer-human-review-block.sh "inventory_beads failed"
+    -s "[CARTOGRAPHER ACTION REQUIRED] cartographer inventory_beads failed for $WORK_ORDER_ID" \
+    -m "Script exited $SCRIPT_EXIT. See $RUN_DIR/failure.json and $RUN_DIR/inventory_beads.stderr. Step bead $GC_BEAD_ID blocked for mayor action."
+  cartographer_block_for_mayor_action "inventory_beads failed"
   gc runtime drain-ack
   exit 0
   ```
@@ -895,10 +930,9 @@ this fresh session so the singleton Cartographer pool can spawn a new
 session for the next ready step.
 
 If you took a failure-mode branch above and exited early (wrote
-`failure.json` or `needs_human.json` and stopped), do NOT close and do
-NOT leave the step assigned to cartographer. Run the human-review step
-disposition helper from the formula description so automation stops
-dispatching this failed step until an operator explicitly resumes it.
+`failure.json` or `needs_mayor_action.json` and stopped), do NOT close and do
+NOT leave the step assigned to cartographer. Apply the mayor-action disposition from the formula description so automation stops
+dispatching this failed step until the mayor actions it.
 
 """
 
@@ -1107,7 +1141,7 @@ A convoy is a coherent unit that should ship or fail together. Group
 new tasks into a convoy when ALL of:
 - they share a single user-visible outcome (the work order's intent)
 - closing some subset without the others leaves the system half-shipped
-- a human reviewer would want to see them succeed or fail together
+- a mayor/refinery would want to see them succeed or fail together
 
 **Per-WO convoys** are the default for solo work orders
 (`inventory.json:cohort_label` is null). Most work orders produce
@@ -1155,8 +1189,7 @@ b. If `existing_cohort_convoy_id` is null: plan to create a NEW
 
 c. If `stranded_cohort_members` is non-empty: do NOT attempt to
    adopt their beads. Their existing per-WO convoys stay intact.
-   Step 8's mayor mail flags them for operator review (manual
-   migration is the only safe path; cartographer never calls
+   Step 8s mayor mail flags them for mayor action (migration is the only safe path; cartographer never calls
    `gc convoy add` on existing beads).
 
 **Edges remain edges.** Cross-WO `Blocked by:` annotations still
@@ -1330,9 +1363,22 @@ formula keeps both error modes visible.
 
 **5.6. HOLDING stub planning — create side (unplanned cross-WO
 blockers).** For each entry in `cross_wo_blockers` with
-`no_beads_known: true`, the cartographer plans ONE HOLDING stub. The
-HOLDING is the structural block that prevents this run's dependent
-new beads from dispatching before the blocker WO lands.
+`no_beads_known: true`, or with only scaffold/control beads known for
+the blocker WO, the cartographer plans ONE HOLDING stub. Scaffold and
+control beads include formula, molecule, step, gate, session, convoy,
+message, role, spec, agent, convergence, and similar non-implementation
+beads. Treat "WO-027 cross-WO blocker has only formula scaffold bead"
+as this exact case. The HOLDING is the structural block that prevents
+this run's dependent new beads from dispatching before the blocker WO
+lands.
+
+Do NOT fail validation, suppress emission, or ask for mayor action
+merely because the blocker WO has not emitted implementation beads yet.
+That would deadlock the city: the dependent WO refuses to emit because
+the blocker WO has not emitted, while the blocker WO may itself be
+waiting on the dependent graph to expose the correct priority signal.
+The correct design pattern is always to emit the current graph with
+placeholder HOLDING beads and explicit hold edges.
 
 Identify which subset of this run's NEW tasks actually need the
 blocker — apply the same concreteness bar used in step 4 (forward
@@ -1525,12 +1571,12 @@ row must have a non-empty reason; placeholder reasons such as
 **Failure modes:**
 
 - Cycle cannot be broken without violating intent: write
-  `$RUN_DIR/needs_human.json`, mail the mayor with subject prefix
-  `[HUMAN REVIEW NEEDED]` (see "Human-review notifications" in the
-  formula description), block the step for human review with the helper,
+  `$RUN_DIR/needs_mayor_action.json`, mail the mayor with subject prefix
+  `[CARTOGRAPHER ACTION REQUIRED]` (see "Mayor-action notifications" in the
+  formula description), block the step for mayor action using the disposition in the formula description,
   and exit cleanly after `gc runtime drain-ack`.
 - `soft_conflicts` count > 5: flag it in the graph output. The
-  operator (reached via the mayor) may want serialized execution.
+  mayor may want serialized execution.
 **Mark this step complete.**
 
 ```bash
@@ -1547,10 +1593,9 @@ this fresh session so the singleton Cartographer pool can spawn a new
 session for the next ready step.
 
 If you took a failure-mode branch above and exited early (wrote
-`failure.json` or `needs_human.json` and stopped), do NOT close and do
-NOT leave the step assigned to cartographer. Run the human-review step
-disposition helper from the formula description so automation stops
-dispatching this failed step until an operator explicitly resumes it.
+`failure.json` or `needs_mayor_action.json` and stopped), do NOT close and do
+NOT leave the step assigned to cartographer. Apply the mayor-action disposition from the formula description so automation stops
+dispatching this failed step until the mayor actions it.
 
 """
 
@@ -1660,7 +1705,7 @@ only the new bead's dep list, which is fine — we created it.
 
 - Prior-epoch bead has `source:work-order:<this-id>` label but no
   `epoch:` label (malformed): flag in `obsolete_review` with
-  recommendation `needs_human_review` and proceed.
+  recommendation `needs_mayor_action` and proceed.
 - If `obsolete_review` is unusually long (>20 entries), it is a sign
   the work order changed drastically. Add a top-level
   `large_review: true` flag and continue — the mayor mail in the emit step
@@ -1681,10 +1726,9 @@ this fresh session so the singleton Cartographer pool can spawn a new
 session for the next ready step.
 
 If you took a failure-mode branch above and exited early (wrote
-`failure.json` or `needs_human.json` and stopped), do NOT close and do
-NOT leave the step assigned to cartographer. Run the human-review step
-disposition helper from the formula description so automation stops
-dispatching this failed step until an operator explicitly resumes it.
+`failure.json` or `needs_mayor_action.json` and stopped), do NOT close and do
+NOT leave the step assigned to cartographer. Apply the mayor-action disposition from the formula description so automation stops
+dispatching this failed step until the mayor actions it.
 
 """
 
@@ -1844,10 +1888,31 @@ g. **Cross-WO blocker coverage.** For each entry in
    target work order is duplicate coverage by already-existing current
    WO beads, as classified by reconcile.
 
+g2. **Missing/scaffold-only cross-WO blockers require HOLDING stubs.**
+   For each entry in `beads_inventory.json:cross_wo_blockers` where
+   `all_closed == false` and the blocker has no usable implementation
+   target (`no_beads_known == true`, `task_bead_ids` is empty after
+   excluding scaffold/control beads, or the only known blocker beads are
+   formula/molecule/step/gate/session/convoy/message/role/spec/agent/
+   convergence scaffolding), `graph.json:holding_stubs_to_create` MUST
+   contain exactly one entry for that `blocker_wo_id`.
+
+   Each concrete dependent task for that blocker must carry
+   `hold:<blocker_wo_id>` and a dependency edge to the HOLDING, as
+   enforced by check `d2`. If no concrete dependent exists in this run,
+   the HOLDING entry still exists with empty `dependent_draft_ids` and a
+   reason explaining the downstream-linkage placeholder.
+
+   Missing/scaffold-only blocker implementation is not a validate-plan
+   failure. The only failure here is cartographer omission of the
+   required HOLDING plan, missing hold labels, missing HOLDING edges, or
+   incorrect dependency targets. Failing because "WO-030 has not
+   implemented yet" or "WO-027 has only formula scaffold beads" is
+   invalid and creates a cross-WO deadlock.
+
 h. **Unresolved blocker refs.** If
    `$RUN_DIR/unresolved_blocker_refs.json` exists, copy its contents
-   into `validation_plan.json:warnings`. Do NOT fail — the operator
-   may need to plan the missing work order first; that's a warning,
+   into `validation_plan.json:warnings`. Do NOT fail — the mayor may need to plan the missing work order first; that's a warning,
    not a blocker.
 
 l. **Per-candidate decision audit (both directions).** Every entry in
@@ -1958,6 +2023,18 @@ n. **Downstream-blocks per-candidate audit coverage.** For each entry
    cartographer skipped reasoning about a bead it was guaranteed to
    see.
 
+   If a downstream WO has no usable implementation beads yet, or only
+   scaffold/control beads, do NOT fail this check for a missing
+   per-candidate audit row. There is no implementation candidate to
+   audit. Instead, copy a warning into `validation_plan.json:warnings`
+   naming the downstream WO and state that the mayor may schedule or
+   re-run that downstream cartographer later. This is the expected
+   cross-WO sequencing pattern, not a graph defect. A validation error
+   such as "downstream audit missing for WO-030" is valid only when
+   WO-030 has open implementation beads that were present in
+   `candidate_dependents.json` and the cartographer skipped auditing
+   them.
+
    ```bash
    MISSING_DOWNSTREAM=""
    while IFS= read -r entry; do
@@ -1977,7 +2054,8 @@ n. **Downstream-blocks per-candidate audit coverage.** For each entry
      done
      [ -z "$HIT" ] && MISSING_DOWNSTREAM="${MISSING_DOWNSTREAM}${WO} "
    done < <(jq -c '.downstream_blocks[]?
-                     | select(.all_closed == false and .no_beads_known == false)' \\
+                     | select(.all_closed == false and .no_beads_known == false)
+                     | select(((.task_bead_ids // []) | length) > 0 or (.convoy_bead_id != null))' \\
               "$RUN_DIR/beads_inventory.json")
    if [ -n "$MISSING_DOWNSTREAM" ]; then
      echo "FAIL: downstream-blocks per-candidate audit missing — WO(s): $MISSING_DOWNSTREAM"
@@ -2007,8 +2085,7 @@ z. **Concrete emit carrier preflight.** After checks a-n pass, build
    convoy `owned` label, convoy `metadata.owned=true`, convoy/task
    `metadata.target=integration/${WORK_ORDER_ID}`, task `gc.routed_to`,
    convoy `parent_key`/`parent_id`, and HOLDING label/edge coherence.
-   If the helper fails, treat it as a `validate-plan` failure and block
-   the step for human review. Do not allow `validation_plan.json` to be
+   If the helper fails, treat it as a `validate-plan` failure and block the step for mayor action. Do not allow `validation_plan.json` to be
    `status=ok` unless this concrete preflight passes.
 
 **3. On success,** write `$RUN_DIR/validation_plan.json`:
@@ -2032,19 +2109,18 @@ gc runtime drain-ack
 **4. On failure,** write `$RUN_DIR/validation_plan.json` with
 `status: "failed"`, the failed check id(s), and the offending draft
 ids. ALSO write `$RUN_DIR/failure.json` and mail the mayor with
-subject prefix `[HUMAN REVIEW NEEDED]` (see "Human-review
+subject prefix `[CARTOGRAPHER ACTION REQUIRED]` (see "Mayor-action
 notifications" in the formula description). Do NOT close the step
-bead. Run `.gc/scripts/cartographer-human-review-block.sh
-"validate-plan failed"` so the failed step is blocked, unassigned from
-cartographer, routed to `human-escalation`, and resumable only by an
-explicit operator action.
+bead. Apply the mayor-action disposition from the formula description
+so the failed step is blocked, assigned and routed to `gastown.mayor`,
+and actioned only by the mayor.
 
 CRITICAL: do NOT close the step bead and let emit run on a known-bad
 plan. Emit's `bd create --graph` transaction will roll back on the
 same error, which is wasteful — and worse, the rolled-back error
 mode is harder to diagnose than the specific check-id failure here.
-Keep the step in the blocked human-review state created by the helper
-and surface the failure to the operator.
+Keep the step in the blocked mayor-action state and surface the failure
+to the mayor.
 """
 
 [[steps]]
@@ -2071,8 +2147,8 @@ priority calls on stale beads belong to the mayor.
 
 Failure shapes are clean: either the whole transaction landed or it
 rolled back. On any failure, leave partial state, write
-`$RUN_DIR/failure.json`, mail the mayor, block the step for human
-review with the helper, run `gc runtime drain-ack`, and exit cleanly.
+`$RUN_DIR/failure.json`, mail the mayor, apply the mayor-action
+disposition from the formula description, run `gc runtime drain-ack`, and exit cleanly.
 
 **1. Load state + resolve sling target + rig path:**
 
@@ -2084,6 +2160,20 @@ cat "$RUN_DIR/graph.json"
 cat "$RUN_DIR/reconcile.json"
 cat "$RUN_DIR/beads_inventory.json"
 
+cartographer_block_for_mayor_action() {
+  reason="$1"
+  gc --rig "$RIG" bd update "$GC_BEAD_ID" \
+    --status blocked \
+    --assignee "gastown.mayor" \
+    --set-metadata decision_state=mayor_action \
+    --set-metadata "gc.routed_to=gastown.mayor" \
+    --set-metadata "cartographer.failure_reason=$reason" \
+    --set-metadata "work_order_id=$WORK_ORDER_ID" \
+    --set-metadata "cartographer.epoch=$EPOCH" \
+    --set-metadata "cartographer.failure_run_dir=$RUN_DIR" \
+    --notes "Blocked for mayor action: $reason"
+}
+
 cartographer_emit_fail() {
   reason="$1"
   jq -n --arg reason "$reason" \
@@ -2091,9 +2181,9 @@ cartographer_emit_fail() {
         '{step: $step, phase: "preflight", reason: $reason}' \
         > "$RUN_DIR/failure.json"
   gc mail send gastown.mayor \
-    -s "[HUMAN REVIEW NEEDED] cartographer emit preflight failed for $WORK_ORDER_ID" \
-    -m "Emit preflight failed: $reason. See $RUN_DIR/failure.json and $RUN_DIR/emit_plan.json. Step bead $GC_BEAD_ID blocked for human review."
-  .gc/scripts/cartographer-human-review-block.sh "emit preflight failed: $reason"
+    -s "[CARTOGRAPHER ACTION REQUIRED] cartographer emit preflight failed for $WORK_ORDER_ID" \
+    -m "Emit preflight failed: $reason. See $RUN_DIR/failure.json and $RUN_DIR/emit_plan.json. Step bead $GC_BEAD_ID blocked for mayor action."
+  cartographer_block_for_mayor_action "emit preflight failed: $reason"
   gc runtime drain-ack
   exit 0
 }
@@ -2392,7 +2482,7 @@ Then run the shared hard pre-flight helper against
 ```
 
 The helper is authoritative. The checks below document the same contract
-for operator review and debugging:
+for mayor traceability and debugging:
 
 ```bash
 SOURCE_LABEL="source:work-order:${WORK_ORDER_ID}"
@@ -2564,9 +2654,9 @@ for TARGET in $INTEGRATION_TARGETS; do
           '{step: "emit", phase: "integration_branch_create", target: $target, work_order_id: $wo}' \\
           > "$RUN_DIR/failure.json"
     gc mail send gastown.mayor \\
-      -s "[HUMAN REVIEW NEEDED] cartographer integration-branch push failed for $WORK_ORDER_ID" \\
-      -m "Could not create $TARGET on origin from origin/main. See $RUN_DIR/failure.json. Step bead $GC_BEAD_ID blocked for human review — fix the push issue (auth, network, permissions), then resume from this step. Re-running is idempotent."
-    .gc/scripts/cartographer-human-review-block.sh "integration branch push failed"
+      -s "[CARTOGRAPHER ACTION REQUIRED] cartographer integration-branch push failed for $WORK_ORDER_ID" \\
+      -m "Could not create $TARGET on origin from origin/main. See $RUN_DIR/failure.json. Step bead $GC_BEAD_ID blocked for mayor action — fix the push issue (auth, network, permissions), then resume from this step. Re-running is idempotent."
+    cartographer_block_for_mayor_action "integration branch push failed"
     gc runtime drain-ack
     exit 0
   fi
@@ -2586,16 +2676,16 @@ gc --rig "$RIG" bd create --graph "$RUN_DIR/emit_plan.json" --json \\
 CREATE_EXIT=$?
 if [ "$CREATE_EXIT" != 0 ]; then
   # The transaction rolled back. NOTHING was created. Write a
-  # failure record and block this step for human review.
+  # failure record and block this step for mayor action.
   jq -n --arg exit "$CREATE_EXIT" \\
         --rawfile stderr "$RUN_DIR/emit_create.stderr" \\
         '{step: "emit", phase: "create_graph", script_exit: $exit, stderr: $stderr}' \\
         > "$RUN_DIR/failure.json"
 
   gc mail send gastown.mayor \\
-    -s "[HUMAN REVIEW NEEDED] cartographer emit (bd create --graph) failed for $WORK_ORDER_ID" \\
-    -m "Plan transaction rolled back, no beads created. See $RUN_DIR/failure.json + $RUN_DIR/emit_plan.json. Step bead $GC_BEAD_ID blocked for human review."
-  .gc/scripts/cartographer-human-review-block.sh "emit create-graph failed"
+    -s "[CARTOGRAPHER ACTION REQUIRED] cartographer emit (bd create --graph) failed for $WORK_ORDER_ID" \\
+    -m "Plan transaction rolled back, no beads created. See $RUN_DIR/failure.json + $RUN_DIR/emit_plan.json. Step bead $GC_BEAD_ID blocked for mayor action."
+  cartographer_block_for_mayor_action "emit create-graph failed"
   gc runtime drain-ack
   exit 0
 fi
@@ -2717,7 +2807,7 @@ with classification `fully_releasable`; partial entries stayed open.
 ```
 
 `routing_target` is the resolved `$SLING_TARGET`; bake it in for
-operator traceability. `key_to_id_map` is the full mapping returned by
+mayor traceability. `key_to_id_map` is the full mapping returned by
 `bd create --graph`. Every entry of `beads_emitted` has its
 `gc.routed_to` metadata pointing here (set atomically at create time
 inside the `bd create --graph` transaction), and also carries the
@@ -2737,7 +2827,7 @@ created but loses a dep).
 
 `batch_close_failure` is the contents of `$RUN_DIR/emit_batch_failure.json`
 if step 6 failed (HOLDINGs didn't close — soft failure, requires
-operator to close them manually via `bd close <id> --reason "..."`).
+mayor to close them via `bd close <id> --reason "..."`).
 Null if step 6 succeeded or was empty.
 
 Immediately after writing `emitted.json`, and BEFORE mailing the
@@ -2781,9 +2871,9 @@ done
 
 if [ "$ROUTING_SETTLED" != "1" ]; then
     gc mail send gastown.mayor \\
-      -s "[HUMAN REVIEW NEEDED] cartographer emit routing validation failed for $WORK_ORDER_ID" \\
-      -m "bd create --graph landed, but after ${ROUTING_ATTEMPTS} fresh query attempts at ${ROUTING_DELAY}s intervals, at least one emitted task bead was not routed to $(jq -r '.routing_target' "$RUN_DIR/emitted.json"). See $RUN_DIR/emission_routing_validation.json, $RUN_DIR/emission_routing_attempts/, and $RUN_DIR/emitted.json. Step bead $GC_BEAD_ID blocked for human review."
-    .gc/scripts/cartographer-human-review-block.sh "emit routing validation failed"
+      -s "[CARTOGRAPHER ACTION REQUIRED] cartographer emit routing validation failed for $WORK_ORDER_ID" \\
+      -m "bd create --graph landed, but after ${ROUTING_ATTEMPTS} fresh query attempts at ${ROUTING_DELAY}s intervals, at least one emitted task bead was not routed to $(jq -r '.routing_target' "$RUN_DIR/emitted.json"). See $RUN_DIR/emission_routing_validation.json, $RUN_DIR/emission_routing_attempts/, and $RUN_DIR/emitted.json. Step bead $GC_BEAD_ID blocked for mayor action."
+    cartographer_block_for_mayor_action "emit routing validation failed"
     gc runtime drain-ack
     exit 0
 fi
@@ -2882,7 +2972,7 @@ For unplanned cross-WO blockers (work orders this run depends on
 that have no beads in the rig yet), the cartographer created a
 HOLDING stub per blocker WO. Affected new beads carry a
 `hold:<blocker-wo>` label — dogs read this label across the rig to
-prioritize which work orders to plan next. No operator action is
+prioritize which work orders to plan next. No mayor action is
 required; this is informational.
 
 $(jq -r '.holding_stubs_created[]? | "  - \\(.id): blocker=\\(.blocker_wo_id), dependents=\\(.dependent_bead_count)"' "$RUN_DIR/emitted.json")
@@ -2955,17 +3045,15 @@ mail is the explicit, durable record of this run.
 
 - **`bd create --graph` (step 4) failure** — the whole transaction
   rolled back; NO beads created. Step 4 already writes
-  `$RUN_DIR/failure.json`, mails the mayor with `[HUMAN REVIEW
-  NEEDED]`, blocks the step for human review, and exits after
-  `gc runtime drain-ack`. Operator inspects `emit_plan.json` +
-  `emit_create.stderr`, fixes the plan, and explicitly resumes the
-  step with `.gc/scripts/cartographer-human-review-resume.sh`.
+  `$RUN_DIR/failure.json`, mails the mayor with `[CARTOGRAPHER ACTION REQUIRED]`, blocks the step for mayor action, and exits after
+  `gc runtime drain-ack`. The mayor inspects `emit_plan.json` +
+  `emit_create.stderr`, fixes the plan, and actions the blocked step after repair.
 - **`bd batch` (step 6) failure** — the create transaction
   succeeded; the HOLDING-close transaction rolled back. New beads
   are real with all edges wired and routing. HOLDINGs that should
   have closed are still open; dependents are over-blocked but not
   under-blocked (safe). Recorded in `emitted.json:batch_close_failure`
-  and surfaced in mayor mail; operator can manually close the
+  and surfaced in mayor mail; mayor can close the
   HOLDINGs. Step bead still closes — emit's primary contract
   (atomic creation + routing) succeeded.
 - **Pre-flight drops (step 2)** — edges to existing beads whose
@@ -2989,10 +3077,9 @@ this fresh session so the singleton Cartographer pool can spawn a new
 session for the next ready step.
 
 If you took a failure-mode branch above and exited early (wrote
-`failure.json` or `needs_human.json` and stopped), do NOT close and do
-NOT leave the step assigned to cartographer. Run the human-review step
-disposition helper from the formula description so automation stops
-dispatching this failed step until an operator explicitly resumes it.
+`failure.json` or `needs_mayor_action.json` and stopped), do NOT close and do
+NOT leave the step assigned to cartographer. Apply the mayor-action disposition from the formula description so automation stops
+dispatching this failed step until the mayor actions it.
 
 """
 
@@ -3008,7 +3095,7 @@ and won't be re-checked here — if you suspect they regressed, see
 `$RUN_DIR/validation_plan.json` and `graph.json`.
 
 On any failure, leave the emitted beads in place, mail the mayor
-with subject prefix `[HUMAN REVIEW NEEDED]` (see "Human-review
+with subject prefix `[CARTOGRAPHER ACTION REQUIRED]` (see "Mayor-action
 notifications" in the formula description), and write
 `$RUN_DIR/validation_store.json` with `status=failed`.
 
@@ -3302,14 +3389,23 @@ gc runtime drain-ack
 
 **5. On failure,** write `$RUN_DIR/validation_store.json` with
 `status: "failed"`, the failed check id(s), and the offending bead
-ids. Mail the mayor with subject prefix `[HUMAN REVIEW NEEDED]`
-(see "Human-review notifications" in the formula description) and
+ids. Mail the mayor with subject prefix `[CARTOGRAPHER ACTION REQUIRED]`
+(see "Mayor-action notifications" in the formula description) and
 the failure detail. Do NOT roll back or close anything — block this
-validation step for human review and leave the partial graph for
-human inspection.
+validation step for mayor action and leave the partial graph for
+mayor inspection.
 
 ```bash
-.gc/scripts/cartographer-human-review-block.sh "validate-store failed"
+gc --rig "$RIG" bd update "$GC_BEAD_ID" \
+  --status blocked \
+  --assignee "gastown.mayor" \
+  --set-metadata decision_state=mayor_action \
+  --set-metadata "gc.routed_to=gastown.mayor" \
+  --set-metadata "cartographer.failure_reason=validate-store failed" \
+  --set-metadata "work_order_id=$WORK_ORDER_ID" \
+  --set-metadata "cartographer.epoch=$EPOCH" \
+  --set-metadata "cartographer.failure_run_dir=$RUN_DIR" \
+  --notes "Blocked for mayor action: validate-store failed"
 gc runtime drain-ack
 exit 0
 ```
@@ -3323,9 +3419,8 @@ this fresh session so the singleton Cartographer pool can spawn a new
 session for the next ready step.
 
 If you took a failure-mode branch above and exited early (wrote
-`failure.json` or `needs_human.json` and stopped), do NOT close and do
-NOT leave the step assigned to cartographer. Run the human-review step
-disposition helper from the formula description so automation stops
-dispatching this failed step until an operator explicitly resumes it.
+`failure.json` or `needs_mayor_action.json` and stopped), do NOT close and do
+NOT leave the step assigned to cartographer. Apply the mayor-action disposition from the formula description so automation stops
+dispatching this failed step until the mayor actions it.
 
 """
