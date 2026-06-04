@@ -382,7 +382,7 @@ the rig's `specs/README.md` calls them out as load-bearing:
   (e.g. `specs/13-implementation-roadmap.md`)
 - **adr** — architecture decision records (`specs/adr/*.md`)
 - **supplementary** — other design docs, interface specs, schemas,
-  schema-modeling explorations
+  schema or interface explorations
 - **other** — READMEs, changelogs, archived specs
 
 **3. Also surface rig-root context files** that are not under specs/
@@ -414,8 +414,8 @@ references only — do not follow transitively yet.
 source, distinct from the `Land-together rule:` mechanism handled by
 `land_together_set` below. An index family is a parent work order
 that splits one feature into lettered sub-WOs (e.g.
-`008-ai-enrichment.md` ↔ `008a-...md`, `008b-...md`, `008c-...md`,
-`008d-...md`). All members of a family ship through ONE convoy whose
+`100-example-capability.md` ↔ `100a-...md`, `100b-...md`,
+`100c-...md`, `100d-...md`). All members of a family ship through ONE convoy whose
 title reflects the parent feature.
 
 The target WO participates in a family cohort if EITHER:
@@ -438,11 +438,11 @@ When the target participates in a family cohort, record three new
 fields in `inventory.json`:
 
 - `family_cohort_label` = `"family:<parent-basename-without-.md>"`
-  (e.g. `family:008-ai-enrichment`). The label uses the `family:`
+  (e.g. `family:100-example-capability`). The label uses the `family:`
   prefix; `land-together:` is reserved for the older mechanism.
 - `convoy_title_override` = the parent file's first H1 line with
-  the leading `# ` stripped (e.g. `Work Order: AI Enrichment
-  (Index)` or `AI Enrichment`). Step 8 uses this title when the
+  the leading `# ` stripped (e.g. `Work Order: Example Capability
+  (Index)` or `Example Capability`). Step 8 uses this title when the
   current run is the one that physically creates the family
   convoy — so the convoy reflects the parent feature, not
   whichever sub-WO raced ahead.
@@ -475,7 +475,7 @@ plans a per-WO convoy as before.
 ```json
 {
   "specs_root": "specs",
-  "target_work_order": "specs/agent-work-orders/008a-document-ingestion.md",
+  "target_work_order": "specs/agent-work-orders/100a-example-capability-ingest.md",
   "files": [
     {"path": "specs/01-core-invariants.md",
      "type": "invariant", "foundation": true},
@@ -489,23 +489,23 @@ plans a per-WO convoy as before.
   "directly_referenced_by_target": [
     "specs/03-aws-resources-and-naming.md",
     "specs/07-routing-and-workflows.md",
-    "specs/08-ai-enrichment.md"
+    "specs/08-example-capability.md"
   ],
-  "blocked_by_annotations": ["WO-000", "WO-015"],
-  "blocks_annotations": ["WO-008b"],
+  "blocked_by_annotations": ["WO-FOUNDATION", "WO-UPSTREAM"],
+  "blocks_annotations": ["WO-DOWNSTREAM"],
   "land_together_set": [],
-  "family_cohort_label": "family:008-ai-enrichment",
-  "convoy_title_override": "WO-008: AI Enrichment (Index)",
+  "family_cohort_label": "family:100-example-capability",
+  "convoy_title_override": "WO-PARENT: Example Capability (Index)",
   "family_members": [
-    "008-ai-enrichment",
-    "008a-document-ingestion",
-    "008b-ai-fact-extraction",
-    "008c-validation-pipeline-and-prompts",
-    "008d-operator-review-surface"
+    "100-example-capability",
+    "100a-example-capability-ingest",
+    "100b-example-capability-transform",
+    "100c-example-capability-validate",
+    "100d-example-capability-operate"
   ],
   "secondary_cohort_label": null,
-  "cohort_label": "family:008-ai-enrichment",
-  "inline_wo_blockers": ["017-schema-modeling-exploration"],
+  "cohort_label": "family:100-example-capability",
+  "inline_wo_blockers": ["example-approval-gate"],
   "large_specs_root": false
 }
 ```
@@ -513,17 +513,17 @@ plans a per-WO convoy as before.
 The `blocked_by_annotations`, `blocks_annotations`, and
 `land_together_set` fields are critical and feed steps 4 and 6.
 Convert work-order references (WO-XYZ) to the file-basename id
-convention used by labels (e.g., `WO-000` →
-`000-cdk-foundation-and-persistence`) by matching against the
+convention used by labels (e.g., `WO-FOUNDATION` →
+`foundation-runtime-substrate`) by matching against the
 filenames under `specs/agent-work-orders/`.
 
 **Derive `inline_wo_blockers`.** This field captures other work
 orders the target depends on as runtime gates expressed inline in
-the body prose, but NOT formally listed in `Blocked by:`. The
-canonical example is WO-014's pre-flight ("every net-new excavator
-category must have an SME-approved modeling decision from WO-017
-before profile authoring") — WO-017 is a real gate, but the author
-did not restate it in the formal blocker line.
+the body prose, but NOT formally listed in `Blocked by:`. Example:
+the target says "do not author the domain-specific tasks until the
+approval gate from WO-APPROVAL has landed." `WO-APPROVAL` is a real
+runtime gate, but the author did not restate it in the formal blocker
+line.
 
 Derivation is purely a projection of fields you have already
 computed — no new spec-body parsing pass:
@@ -540,8 +540,8 @@ inline_wo_blockers =
 ```
 
 - `directly_referenced_by_target` already resolves both link form
-  (`[WO-017](017-schema-modeling-exploration.md)`) and bare text
-  form (`WO-008c`) into the file-path basename during step 5's
+  (`[WO-APPROVAL](example-approval-gate.md)`) and bare text
+  form (`WO-DOWNSTREAM`) into the file-path basename during step 5's
   reference walk. No new regex pass is required.
 - Subtract the target itself, the formal blocker set, and the
   family-cohort siblings — those each have their own dedicated
@@ -1181,7 +1181,7 @@ a. If `beads_inventory.json:existing_cohort_convoy_id` is non-null:
 b. If `existing_cohort_convoy_id` is null: plan to create a NEW
    convoy in step 7 carrying both
    `source:work-order:<this-id>` (record of creator) and the bare
-   `<cohort_label>` value (e.g. `family:008-ai-enrichment`) as
+   `<cohort_label>` value (e.g. `family:100-example-capability`) as
    labels. Apply the cohort label verbatim — do NOT add a `cohort:`
    prefix or any other wrapper. The step 4 join lookup queries this
    label as a bare value (`--label="$COHORT_LABEL"`); any wrapping
@@ -1195,8 +1195,8 @@ b. If `existing_cohort_convoy_id` is null: plan to create a NEW
    `graph.json` regardless of which family member is triggering
    creation. This is what ensures a sub-WO that races ahead of its
    parent still produces a convoy titled for the parent feature
-   ("WO-008: AI Enrichment (Index)"), not for the sub-WO that
-   happened to fire first ("WO-008a: Document Ingestion"). For
+   ("WO-PARENT: Example Capability (Index)"), not for the sub-WO that
+   happened to fire first ("WO-PARENT-A: Example Ingest"). For
    land-together cohorts (no override), construct the title from
    the cohort intent. Emit (the emit step) uses `convoy.title` verbatim,
    so the override decision lives entirely in this step.
@@ -1381,8 +1381,9 @@ blockers).** For each entry in `cross_wo_blockers` with
 the blocker WO, the cartographer plans ONE HOLDING stub. Scaffold and
 control beads include formula, molecule, step, gate, session, convoy,
 message, role, spec, agent, convergence, and similar non-implementation
-beads. Treat "WO-027 cross-WO blocker has only formula scaffold bead"
-as this exact case. The HOLDING is the structural block that prevents
+beads. Treat any blocker WO whose only known beads are scaffold/control
+beads as this exact case; the specific business process and WO id do
+not matter. The HOLDING is the structural block that prevents
 this run's dependent new beads from dispatching before the blocker WO
 lands.
 
@@ -1408,12 +1409,12 @@ Plan one entry per blocker WO in `holding_stubs_to_create`:
 
 ```json
 {
-  "blocker_wo_id": "015-manual-override-system",
-  "draft_holding_id": "hold-015",
-  "title": "HOLDING: 015-manual-override-system (placeholder for <this-wo> cross-WO dep)",
+  "blocker_wo_id": "example-upstream-contract",
+  "draft_holding_id": "hold-example-upstream",
+  "title": "HOLDING: example-upstream-contract (placeholder for <this-wo> cross-WO dep)",
   "body": "<inline body — see emit step 7 for template>",
   "dependent_draft_ids": ["task-3", "task-7"],
-  "hold_label": "hold:015-manual-override-system"
+  "hold_label": "hold:example-upstream-contract"
 }
 ```
 
@@ -1459,12 +1460,12 @@ d. Plan an entry in `holding_stubs_to_release`:
 {
   "holding_bead_id": "app-hold-abc",
   "title": "<HOLDING title>",
-  "placeholder_for_wo": "008-ai-enrichment",
+  "placeholder_for_wo": "example-target-work",
   "classification": "fully_releasable",
   "retarget_edges": [
-    {"from_existing_bead_id": "app-008-task-3",
+    {"from_existing_bead_id": "app-target-task-3",
      "to_new": "task-7",
-     "reason": "app-008-task-3's done_when requires packages/contracts/manual-overrides; task-7 creates that contract"}
+     "reason": "app-target-task-3's done_when requires packages/contracts/example-gate; task-7 creates that contract"}
   ],
   "unretargetable_dependents": []
 }
@@ -1512,12 +1513,12 @@ most likely speculative). Repeat until acyclic.
     "new_to_cross_wo": [
       {"from": "task-1",
        "to_existing_bead_id": "app-conv-000",
-       "blocker_wo_id": "000-cdk-foundation-and-persistence",
-       "reason": "Blocked by WO-000 (work-order annotation)"}
+       "blocker_wo_id": "foundation-runtime-substrate",
+       "reason": "Blocked by WO-FOUNDATION (work-order annotation)"}
     ],
     "existing_to_new": [
       {"from_existing_bead_id": "app-ddd", "to_new": "task-3",
-       "reason": "app-ddd's import-linter contract names apps.fargate.bar as a forbidden importer; task-3 creates that module"}
+       "reason": "app-ddd's acceptance contract names packages/example/upstream as a required surface; task-3 creates that module"}
     ]
   },
   "new_to_existing_decisions": [
@@ -1527,14 +1528,14 @@ most likely speculative). Repeat until acyclic.
     {"candidate_id": "app-bbb", "decision": "emit",
      "edges_emitted": ["task-9"],
      "new_task_is_verifier": true,
-     "reason": "task-9 is a behavioral gold-case fixture set grading app-bbb's Lambda output; verifier cannot run before subject exists"},
+     "reason": "task-9 is a behavioral fixture set grading app-bbb's runtime output; verifier cannot run before subject exists"},
     {"candidate_id": "app-ccc", "decision": "skip",
-     "reason": "app-ccc extends a parallel CDK stack; no new task in this run reads any surface app-ccc produces"}
+     "reason": "app-ccc extends a parallel module; no new task in this run reads any surface app-ccc produces"}
   ],
   "existing_to_new_decisions": [
     {"candidate_id": "app-ddd", "decision": "emit",
      "edges_emitted": ["task-3"],
-     "reason": "app-ddd's import-linter contract names apps.fargate.bar as a forbidden importer; task-3 creates that module"},
+     "reason": "app-ddd's acceptance contract names packages/example/upstream as a required surface; task-3 creates that module"},
     {"candidate_id": "app-eee", "decision": "skip",
      "is_cohort_verifier": true,
      "reason": "verifier scope is provably narrower: body asserts only the X path; none of this run's tasks produce a surface app-eee observes"},
@@ -1544,25 +1545,25 @@ most likely speculative). Repeat until acyclic.
   ],
   "soft_conflicts": [
     {"task_draft_id": "task-4", "existing_bead_id": "app-def",
-     "reason": "both touch apps/graph-builder/profiles/tractor.py"}
+     "reason": "both touch packages/example/component.py"}
   ],
   "holding_stubs_to_create": [
-    {"blocker_wo_id": "015-manual-override-system",
-     "draft_holding_id": "hold-015",
-     "title": "HOLDING: 015-manual-override-system (placeholder for 008-ai-enrichment cross-WO dep)",
-     "body": "Placeholder bead so beads from 008-ai-enrichment can depend on 015-manual-override-system before that WO is planned...",
+    {"blocker_wo_id": "example-upstream-contract",
+     "draft_holding_id": "hold-example-upstream",
+     "title": "HOLDING: example-upstream-contract (placeholder for example-target-work cross-WO dep)",
+     "body": "Placeholder bead so beads from example-target-work can depend on example-upstream-contract before that WO is planned...",
      "dependent_draft_ids": ["task-3", "task-7"],
-     "hold_label": "hold:015-manual-override-system"}
+     "hold_label": "hold:example-upstream-contract"}
   ],
   "holding_stubs_to_release": [
     {"holding_bead_id": "app-hold-abc",
-     "title": "HOLDING: 008-ai-enrichment (placeholder for 016-fleet-rollup cross-WO dep)",
-     "placeholder_for_wo": "016-fleet-rollup",
+     "title": "HOLDING: example-target-work (placeholder for example-downstream-work cross-WO dep)",
+     "placeholder_for_wo": "example-downstream-work",
      "classification": "fully_releasable",
      "retarget_edges": [
-       {"from_existing_bead_id": "app-016-task-2",
+       {"from_existing_bead_id": "app-downstream-task-2",
         "to_new": "task-5",
-        "reason": "app-016-task-2's done_when requires packages/contracts/ai-enrichment; task-5 creates that contract"}
+        "reason": "app-downstream-task-2's done_when requires packages/contracts/example-capability; task-5 creates that contract"}
      ],
      "unretargetable_dependents": []}
   ],
@@ -1920,9 +1921,9 @@ g2. **Missing/scaffold-only cross-WO blockers require HOLDING stubs.**
    Missing/scaffold-only blocker implementation is not a validate-plan
    failure. The only failure here is cartographer omission of the
    required HOLDING plan, missing hold labels, missing HOLDING edges, or
-   incorrect dependency targets. Failing because "WO-030 has not
-   implemented yet" or "WO-027 has only formula scaffold beads" is
-   invalid and creates a cross-WO deadlock.
+   incorrect dependency targets. Failing because a blocker WO has not
+   emitted implementation beads yet, or because it only has
+   scaffold/control beads, is invalid and creates a cross-WO deadlock.
 
 h. **Unresolved blocker refs.** If
    `$RUN_DIR/unresolved_blocker_refs.json` exists, copy its contents
@@ -1975,8 +1976,8 @@ m. **Inline-WO blocker per-candidate audit coverage.** For each entry
 
    Inline-WO blockers are runtime gates the target spec references
    in prose but does not list in the formal `Blocked by:` line (e.g.
-   "every category must have an SME-approved decision from WO-017
-   before authoring"). They do NOT auto-edge through
+   "the target task may not start until WO-APPROVAL lands the approval
+   artifact"). They do NOT auto-edge through
    `new_to_cross_wo` (that path is reserved for formal blockers); the
    per-candidate `new_to_existing` audit is their only safety net.
    This check makes that discipline structurally required rather than
@@ -2045,9 +2046,9 @@ n. **Downstream-blocks per-candidate audit coverage.** For each entry
    `validation_plan.json:warnings` naming the downstream WO and
    continue. This is the expected cross-WO sequencing pattern, not a
    graph defect. A validation error such as "downstream audit missing
-   for WO-030" is valid only when WO-030 has open implementation beads
-   that are present in `candidate_dependents.json` and the cartographer
-   skipped auditing them.
+   for WO-DOWNSTREAM" is valid only when that downstream WO has open
+   implementation beads that are present in `candidate_dependents.json`
+   and the cartographer skipped auditing them.
 
    ```bash
    CANDIDATE_IDS=$(jq -r '.[].id' "$RUN_DIR/candidate_dependents.json" | sort -u)
@@ -2787,7 +2788,7 @@ with classification `fully_releasable`; partial entries stayed open.
   "beads_emitted": [
     {"id": "...", "title": "...", "key": "task-1", "type": "task",
      "parent_key": "convoy-1", "parent_id": null,
-     "hold_labels": ["hold:015-manual-override-system"]}
+     "hold_labels": ["hold:example-upstream-contract"]}
   ],
   "beads_skipped_existing": [{"existing_id": "...", "matched_draft_id": "task-2"}],
   "stranded_cohort_members_count": 1,
@@ -2801,18 +2802,18 @@ with classification `fully_releasable`; partial entries stayed open.
     "holding_release_retarget": 0
   },
   "holding_stubs_created": [
-    {"id": "app-hold-abc", "blocker_wo_id": "015-manual-override-system",
-     "key": "hold-015", "hold_label": "hold:015-manual-override-system",
+    {"id": "app-hold-abc", "blocker_wo_id": "example-upstream-contract",
+     "key": "hold-example-upstream", "hold_label": "hold:example-upstream-contract",
      "dependent_bead_ids": ["app-task-3", "app-task-7"],
      "dependent_bead_count": 2}
   ],
   "holding_stubs_released": [
-    {"id": "app-hold-old", "placeholder_for_wo": "008-ai-enrichment",
+    {"id": "app-hold-old", "placeholder_for_wo": "example-target-work",
      "retarget_edges": 3}
   ],
   "holding_stubs_partial": [
-    {"id": "app-hold-stale", "placeholder_for_wo": "012-something",
-     "unretargetable_dependents": ["app-012-task-4"],
+    {"id": "app-hold-stale", "placeholder_for_wo": "example-downstream-work",
+     "unretargetable_dependents": ["app-downstream-task-4"],
      "reason": "pre-flight dropped retarget edge — dependent's blocker bead closed between graph and emit"}
   ],
   "pre_flight_drops": [
