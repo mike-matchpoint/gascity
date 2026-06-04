@@ -67,11 +67,22 @@ Inbound to new beads — added on EXISTING open beads:
     new bead creates that the existing bead's `done_when` requires.
     Aesthetic or thematic similarity is NOT sufficient.
 
-**Automated mayor-action notifications.** This city is automated. There
-is no separate `overseer` mail alias, no monitored review queue,
-and no acceptable route to legacy escalation. Any time a step below
-finds a genuine validation or runtime failure that prevents safe
-continuation, mail the mayor as the automation owner:
+**Completion-first rule.** The cartographer's job is to complete this
+formula and emit the best robust, extensible task graph it can derive
+from the work order and codebase. Do not stop for preference questions,
+missing downstream WOs, scaffold-only related WOs, unclear ownership
+that can be resolved from repo patterns, or design choices where the
+codebase already indicates a safe default. Use the architecture,
+dependency, and self-containment rules in this formula to make the best
+call and continue. Blocking the formula is reserved for true
+showstoppers: unreadable required inputs, impossible-to-resolve
+contradictory dependencies, invalid graph structure, or a partial emit
+that would corrupt the bead store.
+
+**Rare failure notifications.** This city is automated. There is no
+separate `overseer` mail alias, no monitored review queue, and no
+acceptable route to legacy escalation. Only when a true showstopper
+prevents safe continuation, mail the mayor as the automation owner:
 
 ```
 gc mail send gastown.mayor \
@@ -85,10 +96,13 @@ legacy escalation, and do NOT ask for review. The mayor may
 repair incorrect source dependencies, schedule missing WOs, or rerun the
 cartographer after a real failure has been fixed.
 
-**Mayor-action step disposition.** A failed cartographer step must be
-passive to cartographer automation but visible to the mayor. After
-writing `failure.json` or `needs_mayor_action.json` and sending the
-mayor mail, update the current step bead directly:
+**Rare failure step disposition.** A failed cartographer step must be
+passive to cartographer automation but visible to the mayor. This is
+not a normal branch of the formula; in nearly all cases the cartographer
+should choose the best valid graph, create HOLDINGs for not-yet-emitted
+dependencies, and complete. After writing `failure.json` or
+`needs_mayor_action.json` for a true showstopper and sending the mayor
+mail, update the current step bead directly:
 
 ```bash
 gc --rig "{{rig_name}}" bd update "$GC_BEAD_ID" \
@@ -676,7 +690,7 @@ that says "see the spec."
 - If any `open_questions` is blocking (decomposition cannot proceed
   without an answer): write `$RUN_DIR/needs_mayor_action.json` listing the
   questions, mail the mayor with subject prefix
-  `[CARTOGRAPHER ACTION REQUIRED]` (see "Mayor-action notifications" in the
+  `[CARTOGRAPHER ACTION REQUIRED]` (see "Rare failure notifications" in the
   formula description), block the step for mayor action using the disposition in the formula description,
   and exit cleanly after `gc runtime drain-ack`. Do not proceed to step 4.
 **Mark this step complete.**
@@ -1572,7 +1586,7 @@ row must have a non-empty reason; placeholder reasons such as
 
 - Cycle cannot be broken without violating intent: write
   `$RUN_DIR/needs_mayor_action.json`, mail the mayor with subject prefix
-  `[CARTOGRAPHER ACTION REQUIRED]` (see "Mayor-action notifications" in the
+  `[CARTOGRAPHER ACTION REQUIRED]` (see "Rare failure notifications" in the
   formula description), block the step for mayor action using the disposition in the formula description,
   and exit cleanly after `gc runtime drain-ack`.
 - `soft_conflicts` count > 5: flag it in the graph output. The
@@ -2026,25 +2040,28 @@ n. **Downstream-blocks per-candidate audit coverage.** For each entry
    If a downstream WO has no usable implementation beads yet, or only
    scaffold/control beads, do NOT fail this check for a missing
    per-candidate audit row. There is no implementation candidate to
-   audit. Instead, copy a warning into `validation_plan.json:warnings`
-   naming the downstream WO and state that the mayor may schedule or
-   re-run that downstream cartographer later. This is the expected
-   cross-WO sequencing pattern, not a graph defect. A validation error
-   such as "downstream audit missing for WO-030" is valid only when
-   WO-030 has open implementation beads that were present in
-   `candidate_dependents.json` and the cartographer skipped auditing
-   them.
+   audit, and blocking here prevents this WO from emitting the graph the
+   downstream WO needs to see. Instead, copy a warning into
+   `validation_plan.json:warnings` naming the downstream WO and
+   continue. This is the expected cross-WO sequencing pattern, not a
+   graph defect. A validation error such as "downstream audit missing
+   for WO-030" is valid only when WO-030 has open implementation beads
+   that are present in `candidate_dependents.json` and the cartographer
+   skipped auditing them.
 
    ```bash
+   CANDIDATE_IDS=$(jq -r '.[].id' "$RUN_DIR/candidate_dependents.json" | sort -u)
    MISSING_DOWNSTREAM=""
    while IFS= read -r entry; do
      [ -z "$entry" ] && continue
      CONVOY=$(jq -r '.convoy_bead_id // empty' <<<"$entry")
      TASKS=$(jq -r '.task_bead_ids[]? // empty' <<<"$entry")
      WO=$(jq -r '.downstream_wo_id' <<<"$entry")
-     IDS=$(printf '%s\n%s\n' "$CONVOY" "$TASKS" | grep -v '^$' || true)
+     IDS=$(printf '%s\n%s\n' "$CONVOY" "$TASKS" | grep -v '^$' | sort -u || true)
+     IMPLEMENTATION_IDS=$(comm -12 <(printf '%s\n' "$IDS") <(printf '%s\n' "$CANDIDATE_IDS") || true)
+     [ -n "$IMPLEMENTATION_IDS" ] || continue
      HIT=""
-     for id in $IDS; do
+     for id in $IMPLEMENTATION_IDS; do
        if jq --arg id "$id" -e '
              any(.existing_to_new_decisions[]?; .candidate_id == $id) or
              any(.edges.existing_to_new_decisions[]?; .candidate_id == $id)
@@ -3390,7 +3407,7 @@ gc runtime drain-ack
 **5. On failure,** write `$RUN_DIR/validation_store.json` with
 `status: "failed"`, the failed check id(s), and the offending bead
 ids. Mail the mayor with subject prefix `[CARTOGRAPHER ACTION REQUIRED]`
-(see "Mayor-action notifications" in the formula description) and
+(see "Rare failure notifications" in the formula description) and
 the failure detail. Do NOT roll back or close anything — block this
 validation step for mayor action and leave the partial graph for
 mayor inspection.
