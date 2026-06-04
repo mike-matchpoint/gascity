@@ -2948,6 +2948,80 @@ func TestAllPackTomlsParse(t *testing.T) {
 	}
 }
 
+func TestGastownCodegenSupportOrdersAreCityScoped(t *testing.T) {
+	dir := exampleDir()
+	packDir := filepath.Join(dir, "packs", "gastown")
+	wantOrders := []struct {
+		name   string
+		exec   string
+		script string
+	}{
+		{
+			name: "convoy-autoclose",
+			exec: "gc convoy check",
+		},
+		{
+			name:   "mayor-heartbeat",
+			exec:   "$PACK_DIR/assets/scripts/mayor-heartbeat.sh",
+			script: "mayor-heartbeat.sh",
+		},
+		{
+			name:   "stuck-session-sweep",
+			exec:   "STUCK_SESSION_DRY_RUN=false STUCK_SESSION_AGE_SECONDS=600 $PACK_DIR/assets/scripts/stuck-session-sweep.sh",
+			script: "stuck-session-sweep.sh",
+		},
+	}
+
+	for _, want := range wantOrders {
+		t.Run(want.name, func(t *testing.T) {
+			path := filepath.Join(packDir, "orders", want.name+".toml")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("reading %s: %v", path, err)
+			}
+			if strings.Contains(string(data), "[order.env]") {
+				t.Fatalf("%s still uses unsupported [order.env]; inline env in exec instead", want.name)
+			}
+			var parsed struct {
+				Order struct {
+					Trigger string `toml:"trigger"`
+					Scope   string `toml:"scope"`
+					Exec    string `toml:"exec"`
+				} `toml:"order"`
+			}
+			if _, err := toml.Decode(string(data), &parsed); err != nil {
+				t.Fatalf("parsing %s: %v", path, err)
+			}
+			if parsed.Order.Trigger != "cooldown" {
+				t.Fatalf("%s trigger = %q, want cooldown", want.name, parsed.Order.Trigger)
+			}
+			if parsed.Order.Scope != "city" {
+				t.Fatalf("%s scope = %q, want city", want.name, parsed.Order.Scope)
+			}
+			if parsed.Order.Exec != want.exec {
+				t.Fatalf("%s exec = %q, want %q", want.name, parsed.Order.Exec, want.exec)
+			}
+			if want.script == "" {
+				return
+			}
+
+			scriptPath := filepath.Join(packDir, "assets", "scripts", want.script)
+			info, err := os.Stat(scriptPath)
+			if err != nil {
+				t.Fatalf("%s script missing: %v", want.name, err)
+			}
+			if info.Mode()&0o111 == 0 {
+				t.Fatalf("%s script is not executable: %s", want.name, scriptPath)
+			}
+			if _, err := exec.LookPath("bash"); err == nil {
+				if out, err := exec.Command("bash", "-n", scriptPath).CombinedOutput(); err != nil {
+					t.Fatalf("%s bash -n failed: %v\n%s", want.name, err, out)
+				}
+			}
+		})
+	}
+}
+
 func TestAllPromptTemplatesExist(t *testing.T) {
 	var count int
 	for _, a := range discoverPackAgents(t, filepath.Join("packs", "gastown")) {
