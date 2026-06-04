@@ -1203,7 +1203,7 @@ b. If `existing_cohort_convoy_id` is null: plan to create a NEW
 
 c. If `stranded_cohort_members` is non-empty: do NOT attempt to
    adopt their beads. Their existing per-WO convoys stay intact.
-   Step 8s mayor mail flags them for mayor action (migration is the only safe path; cartographer never calls
+   Step 8's mayor mail flags them for mayor action (migration is the only safe path; cartographer never calls
    `gc convoy add` on existing beads).
 
 **Edges remain edges.** Cross-WO `Blocked by:` annotations still
@@ -1451,7 +1451,7 @@ c. **Classify the HOLDING:**
    - **partial** — at least one dependent has `decision: skip` in
      5.5 (no clean named-artifact match). The HOLDING stays open
      and goes in the mayor mail under PARTIAL HOLDING RELEASE for
-     manual resolution.
+     mayor action.
 
 d. Plan an entry in `holding_stubs_to_release`:
 
@@ -1615,7 +1615,7 @@ dispatching this failed step until the mayor actions it.
 
 [[steps]]
 id = "reconcile"
-title = "Classify new tasks vs prior epochs; build review list for mayor"
+title = "Classify new tasks vs prior epochs; build obsolete candidate list"
 needs = ["graph"]
 description = """
 If this work order has been planned before, prior-epoch beads exist
@@ -1641,7 +1641,7 @@ cat "$RUN_DIR/beads_inventory.json"
 ```
 
 **2. If `prior_epoch_beads` is empty:** every new task is emit-fresh.
-Write a trivial reconcile.json (all `emit_new`, empty review list)
+Write a trivial reconcile.json (all `emit_new`, empty obsolete candidate list)
 and proceed.
 
 **3. For each new task in `graph.json`, classify against prior-epoch
@@ -2142,7 +2142,7 @@ to the mayor.
 
 [[steps]]
 id = "emit"
-title = "Create beads and edges; mail mayor with summary and review list"
+title = "Create beads and edges; mail mayor with summary"
 needs = ["validate-plan"]
 description = """
 This is the ONLY step that mutates the bead store, and it mutates
@@ -2760,7 +2760,7 @@ fi
 prior-epoch open beads is the mayor's call (see
 `reconcile.json:obsolete_review`). The cartographer's job for
 non-HOLDING existing beads ends with creating new beads, wiring
-edges, and flagging review candidates. Closing prior-epoch work
+edges, and flagging obsolete candidates. Closing prior-epoch work
 beads belongs to refinery (post-merge); priority calls belong to
 the mayor. The HOLDING-close exception in step 6 applies only to
 beads carrying `placeholder:cross-wo-blocker` that the cartographer
@@ -2903,7 +2903,7 @@ jq --slurpfile routing "$RUN_DIR/emission_routing_validation.json" \\
 ```
 
 **9. Mail the mayor.** This is the wake signal — new ready beads
-have landed in the rig store and the obsolete review list (if any)
+have landed in the rig store and the obsolete candidate list (if any)
 needs the mayor's priority call.
 
 ```bash
@@ -2931,7 +2931,7 @@ if [ "$PFD" -gt 0 ]; then
   echo "Each drop is an edge the graph step planned but couldn't apply"
   echo "because the existing bead it referenced is no longer open. The"
   echo "cartographer omitted those edges from the bd create --graph plan"
-  echo "rather than abort. Operator may want to: (a) verify the dep claim"
+  echo "rather than abort. Mayor action may need to: (a) verify the dep claim"
   echo "is still accurate now, (b) if yes apply via gc bd dep add <from>"
   echo "<to>, (c) if the target closing means the dep is satisfied, no"
   echo "action needed."
@@ -2946,8 +2946,8 @@ if [ "$BCF" != "null" ] && [ -n "$BCF" ]; then
   echo "beads + retarget edges landed. The bd batch transaction in step 6"
   echo "rolled back. The HOLDINGs that should have closed are still open,"
   echo "but their dependents now have BOTH old (-> HOLDING) and new"
-  echo "(-> real bead) deps — over-blocked, not under-blocked. Operator"
-  echo "may close the HOLDINGs manually via:"
+  echo "(-> real bead) deps — over-blocked, not under-blocked."
+  echo "Mayor action can close the HOLDINGs via:"
   echo "    gc --rig $RIG bd close <id> --reason '${WORK_ORDER_ID} landed (cartographer epoch ${EPOCH})'"
 fi)
 
@@ -2966,7 +2966,7 @@ STRANDED COHORT MEMBERS ($(jq -r '.stranded_cohort_members | length' "$RUN_DIR/b
 
 If non-zero: other WOs in this work order's land-together set have
 existing beads in per-WO convoys that pre-date the cohort convoy.
-The cartographer did NOT move them — manual migration is the only
+The cartographer did NOT move them — mayor-directed migration is the only
 safe path. Each entry below shows a WO that may want its beads
 migrated into the cohort convoy:
 
@@ -3011,7 +3011,7 @@ PARTIAL HOLDING RELEASE ($(jq -r '.holding_stubs_partial | length' "$RUN_DIR/emi
 These prior HOLDINGs target ${WORK_ORDER_ID} but at least one of
 their dependents could not be cleanly retargeted to a specific new
 bead in this run (no named-artifact match). The HOLDING was LEFT
-OPEN. Operator action recommended:
+OPEN. Mayor action recommended:
 
 1. Inspect each unretargetable dependent's `done_when` and decide
    whether one of this run's new beads is the real prerequisite
@@ -3037,7 +3037,7 @@ could not be matched to any file under specs/agent-work-orders/. The
 cartographer treated them as soft warnings and emitted no cross-WO
 edges for them. Investigate each ref — either fix the work order's
 annotation, or, if the referenced WO genuinely exists under a different
-filename, manually create a HOLDING stub for it (add a node to a new
+filename, create a HOLDING stub for it in a follow-up cartographer plan (add a node to a new
 `bd create --graph` plan with the placeholder labels documented in
 step 3b).
 
@@ -3306,7 +3306,7 @@ k. **Mayor notification sent.** Confirm that the mayor mail from
    Result must be ≥ 1. This deliberately queries message beads, not
    `gc mail inbox`, because `inbox` lists only unread mail. If 0 →
    fail (the mayor never learned about the new beads or the obsolete
-   review list). Run the query from `$CITY_ROOT`; the cartographer's
+   obsolete candidate list). Run the query from `$CITY_ROOT`; the cartographer's
    per-run worktree is inside the city but belongs to the rig source
    tree, and `bd list` must use the city context for city mail beads.
 
