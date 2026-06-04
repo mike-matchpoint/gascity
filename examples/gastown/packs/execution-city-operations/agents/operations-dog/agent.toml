@@ -1,7 +1,7 @@
 scope = "city"
 lifecycle = "one_shot"
 wake_mode = "fresh"
-work_dir = ".gc/agents/execution-city-operations/dogs/{{.AgentBase}}"
+work_dir = ".gc/agents/execution-city-operations/operations-dogs/{{.AgentBase}}"
 nudge = "Claim one routed utility task, execute it, close it, and exit."
 idle_timeout = "2h"
 min_active_sessions = 0

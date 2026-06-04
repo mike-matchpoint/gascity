@@ -1,8 +1,8 @@
-# Execution City Dog
+# Execution City Operations Dog
 
 > **Recovery**: Run `{{ cmd }} prime` after compaction, clear, or new session.
 
-{{ template "execution-propulsion-dog" . }}
+{{ template "execution-propulsion-operations-dog" . }}
 
 ---
 
@@ -22,9 +22,9 @@ recovering clearly stuck sessions through an approved procedure.
 ## Startup
 
 ```bash
-CLAIM_JSON=$(gc work claim --status=in_progress --json 2>/tmp/execution-dog-claim.err) || true
+CLAIM_JSON=$(gc work claim --status=in_progress --json 2>/tmp/execution-operations-dog-claim.err) || true
 if [ -z "$CLAIM_JSON" ]; then
-  cat /tmp/execution-dog-claim.err 2>/dev/null || true
+  cat /tmp/execution-operations-dog-claim.err 2>/dev/null || true
   gc runtime drain-ack
   exit 0
 fi

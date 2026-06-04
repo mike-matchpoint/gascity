@@ -398,6 +398,50 @@ func assertNoPackText(t *testing.T, root, needle string) {
 	}
 }
 
+func TestExecutionCityOperationsBuiltinPackComposesWithMaintenance(t *testing.T) {
+	cityDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cityDir, "pack.toml"), []byte(`[pack]
+name = "execution-monitoring-city"
+schema = 2
+
+[imports.execution-city-operations]
+source = ".gc/system/packs/execution-city-operations"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(pack.toml): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`[workspace]
+name = "execution-monitoring-city"
+provider = "codex"
+
+[beads]
+provider = "bd"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(city.toml): %v", err)
+	}
+
+	cfg, _, err := loadCityConfigWithBuiltinPacks(cityDir)
+	if err != nil {
+		t.Fatalf("loadCityConfigWithBuiltinPacks: %v", err)
+	}
+
+	got := map[string]bool{}
+	for i := range cfg.Agents {
+		got[cfg.Agents[i].QualifiedName()] = true
+	}
+	for _, want := range []string{
+		"dog",
+		"execution-city-operations.operations-dog",
+		"execution-city-operations.mayor",
+	} {
+		if !got[want] {
+			t.Fatalf("missing composed agent %q; got agents=%v", want, got)
+		}
+	}
+	if got["execution-city-operations.dog"] {
+		t.Fatalf("execution-city-operations must not define a second bare dog agent; got agents=%v", got)
+	}
+}
+
 func TestBuiltinDatabaseEnumeratorsSkipManagedProbeDatabase(t *testing.T) {
 	dir := t.TempDir()
 	if err := MaterializeBuiltinPacks(dir); err != nil {

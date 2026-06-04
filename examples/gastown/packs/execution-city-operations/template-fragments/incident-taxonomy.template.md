@@ -21,7 +21,7 @@ Disposition choices:
 - close as healthy/no-op with evidence
 - route to evidence bundling or witness review
 - route to a domain-specific execution agent
-- create bounded utility work for a dog
+- create bounded utility work for `operations-dog`
 - file a codegen bug
 - file a codegen work order/change request
 - escalate to the mayor or operator
