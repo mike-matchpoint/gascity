@@ -1,9 +1,18 @@
 {{ define "execution-codegen-handoff-contract" }}
 ## Codegen Event-Bus Filing Contract
 
+**Contract version: 1.0.** This pack is the single source of truth. The
+machine-readable schemas live beside this pack at
+`schemas/events/common-envelope.v1.schema.json`,
+`schemas/events/repo-bug-reported.v1.schema.json`, and
+`schemas/events/repo-change-requested.v1.schema.json`. Reference payloads are in
+`schemas/events/examples/`. The field lists below MUST match those schemas; if
+they ever diverge, the schema wins.
+
 Code-generation cities receive typed event-bus requests. The agent decides the
-request shape; deterministic tooling performs the actual publish when a command
-or order is provided.
+request shape; the deterministic emitter
+`assets/scripts/publish-cross-city-event.sh` validates against the schemas above
+and performs the actual publish.
 
 Use these generic event intents:
 
@@ -14,19 +23,32 @@ Use these generic event intents:
   deterministic workflow change, prompt/eval infrastructure change, runbook,
   schema support code, deployment change, or documentation update.
 
-Every filing must be executable without conversation context:
+### Envelope (required for every event)
 
-- target repo, environment, branch or deploy surface when known
-- bug or work-order class
-- one-sentence problem statement
-- observed behavior and expected behavior
-- evidence URIs and reproduction or replay path
-- affected files, packages, services, commands, schemas, or runtime surfaces when known
-- acceptance criteria grounded in the real runtime path
-- setup, test, deploy, smoke, rollback, and cleanup commands when known
-- temporary flags, shims, generated artifacts, stale snapshots, or compatibility paths to remove
-- blocked execution, incident, run, or publication that the work unblocks
-- idempotency key or duplicate-detection note when filing through the event bus
+`event_type`, `event_version` (`v1`), `process_slug`, `city_pair_slug`,
+`source_city`, `source_city_role`, `target_city`,
+`target_city_role` (`code-generation-city`), `correlation_id`,
+`idempotency_key`, `occurred_at` (RFC3339), `payload`. The emitter fills the
+envelope; you supply the typed `payload` and the routing facts.
+
+### `RepoBugReported.v1` payload
+
+Required: `repo`, `severity` (`low|medium|high|critical`), `observed_behavior`,
+`expected_behavior`, `reproduction_steps` (non-empty). Optional: `target_branch`
+(default `main`), `failing_command`, `evidence_uris`.
+
+### `RepoChangeRequested.v1` payload
+
+Required: `repo`, `request`, `reason`, `required_specs_paths` (non-empty).
+Optional: `target_branch` (default `main`), `evidence_uris`.
+
+Every filing must be executable without conversation context: a one-sentence
+problem statement, observed vs expected behavior, evidence URIs and a
+reproduction or replay path, acceptance criteria grounded in the real runtime
+path, and the blocked execution/incident/run/publication the work unblocks.
+Name affected files, services, commands, schemas, and the setup/test/deploy/
+smoke/rollback/cleanup commands when known. The emitter computes a deterministic
+`idempotency_key`; do not file duplicate requests.
 
 If evidence is incomplete, do not publish a vague request. Route back to
 evidence bundling, witness review, or incident classification.

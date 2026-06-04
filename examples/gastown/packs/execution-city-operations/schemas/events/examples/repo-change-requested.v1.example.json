@@ -1,0 +1,26 @@
+{
+  "event_type": "RepoChangeRequested.v1",
+  "event_version": "v1",
+  "process_slug": "vehicle-graph",
+  "city_pair_slug": "vehicle-graph-exec-codegen",
+  "source_city": "vehicle-graph-execution-monitoring-city-dev",
+  "source_city_role": "execution-monitoring-city",
+  "target_city": "vehicle-graph-code-generation-city-dev",
+  "target_city_role": "code-generation-city",
+  "correlation_id": "22222222-2222-4222-8222-222222222222",
+  "idempotency_key": "vehicle-graph:vehicle-graph-exec-codegen:RepoChangeRequested.v1:ai-extraction-start-capability",
+  "occurred_at": "2026-06-04T12:05:00Z",
+  "payload": {
+    "repo": "Matchpoint-Vehicle-Graph",
+    "target_branch": "main",
+    "request": "Implement the ai_extraction.start workflow entrypoint and grant the bridge StartExecution permission",
+    "reason": "extraction-reviewer classified runtime_capability_gap: AIExtractionWorkflow is a stub Pass state, blocking schema exploration end-to-end (WO-029)",
+    "required_specs_paths": [
+      "specs/17-gascity-execution-layer-integration.md",
+      "specs/agent-work-orders/028-gascity-prompt-eval-and-ai-extraction-integration.md"
+    ],
+    "evidence_uris": [
+      "s3://gascity-artifacts-dev/executions/run-extraction-probe/manifest.json"
+    ]
+  }
+}

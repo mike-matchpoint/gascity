@@ -51,15 +51,68 @@ Before filing, verify:
 
 ## Event Bus Discipline
 
-If the bead gives an approved publish command, run that exact deterministic
-command. If it does not, write the typed payload and route it to the city's
-deterministic event publisher. Do not invent event bus endpoints, credentials,
-or ad hoc publish commands.
+The ONLY approved publish path is the deterministic emitter
+`assets/scripts/publish-cross-city-event.sh` in this pack. Never hand-roll
+`aws events put-events`, invent endpoints/credentials, or ad hoc publish
+commands.
+
+A routed handoff bead carries the typed request in its metadata under the keys
+`event_type`, `target_city`, and `payload` (the event-specific payload object,
+not the envelope). Extract them from the claimed bead, write the payload to a
+file, then locate and run the emitter. It builds the canonical envelope,
+validates against the versioned schema, computes a deterministic
+`idempotency_key`, and performs the put-events.
+
+```bash
+# Extract the typed request from the claimed bead.
+BEAD_JSON=$(gc bd show "$GC_BEAD_ID" --json)
+EVENT_TYPE=$(printf '%s' "$BEAD_JSON" | jq -r '(.[0].metadata // .metadata).event_type // empty')
+TARGET_CITY=$(printf '%s' "$BEAD_JSON" | jq -r '(.[0].metadata // .metadata).target_city // empty')
+PAYLOAD_FILE="${TMPDIR:-/tmp}/codegen-filing-payload.$$.json"
+printf '%s' "$BEAD_JSON" | jq -r '(.[0].metadata // .metadata).payload // empty' > "$PAYLOAD_FILE"
+if [ -z "$EVENT_TYPE" ] || [ -z "$TARGET_CITY" ] || ! jq -e . "$PAYLOAD_FILE" >/dev/null 2>&1; then
+  echo "FATAL: handoff bead missing event_type/target_city/payload metadata" >&2
+  rm -f "$PAYLOAD_FILE"; gc runtime drain-ack; exit 1
+fi
+
+# Resolve the installed ops pack (agents run from a city agent dir, not a worktree).
+CITY_ROOT="${CITY_ROOT:-$(pwd)}"
+while [ "$CITY_ROOT" != "/" ] && [ ! -f "$CITY_ROOT/city.toml" ]; do
+  CITY_ROOT=$(dirname "$CITY_ROOT")
+done
+PUBLISH=""
+for CANDIDATE in \
+  "${EXECUTION_CITY_OPS_PACK_DIR:-}" \
+  "$CITY_ROOT/.gc/system/packs/execution-city-operations" \
+  "$CITY_ROOT/packs/execution-city-operations"; do
+  [ -n "$CANDIDATE" ] || continue
+  if [ -x "$CANDIDATE/assets/scripts/publish-cross-city-event.sh" ]; then
+    PUBLISH="$CANDIDATE/assets/scripts/publish-cross-city-event.sh"; break
+  fi
+done
+if [ -z "$PUBLISH" ]; then
+  echo "FATAL: cannot locate publish-cross-city-event.sh in execution-city-operations pack" >&2
+  gc runtime drain-ack; exit 1
+fi
+
+# Dry-run first to confirm the envelope validates, then publish for real.
+"$PUBLISH" --event-type "$EVENT_TYPE" --payload-file "$PAYLOAD_FILE" \
+  --target-city "$TARGET_CITY" --dry-run
+"$PUBLISH" --event-type "$EVENT_TYPE" --payload-file "$PAYLOAD_FILE" \
+  --target-city "$TARGET_CITY"
+rm -f "$PAYLOAD_FILE"
+```
+
+`--event-type` is `RepoBugReported.v1` or `RepoChangeRequested.v1`;
+`--target-city` is the resolved code-generation city. Pass `--dedupe-key` only
+when the default payload hash is the wrong dedupe scope. The infra env
+(`GASCITY_EVENT_BUS`, `AWS_REGION`, `GASCITY_SOURCE_CITY`) is injected by the
+hosting harness.
 
 ## Completion
 
-Record the event type, idempotency key, payload location or event ID, and the
-blocked execution item it unblocks. Then:
+Record the printed `event_id`, `idempotency_key`, and `correlation_id`, the
+event type, and the blocked execution item it unblocks. Then:
 
 ```bash
 gc runtime drain-ack

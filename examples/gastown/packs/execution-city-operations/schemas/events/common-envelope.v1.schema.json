@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gastown.dev/schemas/execution-city-operations/events/common-envelope.v1.schema.json",
+  "title": "Common GasCity Cross-City Event Envelope v1",
+  "description": "Canonical envelope for cross-city event-bus handoffs emitted by execution-and-monitoring cities. Source of truth for all monitoring cities; downstream copies (e.g. AWS ingress validators) must track this file. Contract version 1.0.",
+  "type": "object",
+  "required": [
+    "event_type",
+    "event_version",
+    "process_slug",
+    "city_pair_slug",
+    "source_city",
+    "source_city_role",
+    "target_city",
+    "target_city_role",
+    "correlation_id",
+    "idempotency_key",
+    "occurred_at",
+    "payload"
+  ],
+  "properties": {
+    "event_type": { "type": "string", "minLength": 1 },
+    "event_version": { "type": "string", "const": "v1" },
+    "process_slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "city_pair_slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "source_city": { "type": "string", "minLength": 1 },
+    "source_city_role": { "type": "string", "minLength": 1 },
+    "target_city": { "type": "string", "minLength": 1 },
+    "target_city_role": { "type": "string", "minLength": 1 },
+    "correlation_id": { "type": "string", "minLength": 1 },
+    "idempotency_key": { "type": "string", "minLength": 1 },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "payload": { "type": "object" }
+  },
+  "additionalProperties": false
+}

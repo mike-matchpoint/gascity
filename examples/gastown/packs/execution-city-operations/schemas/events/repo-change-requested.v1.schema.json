@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gastown.dev/schemas/execution-city-operations/events/repo-change-requested.v1.schema.json",
+  "title": "RepoChangeRequested v1",
+  "description": "Cross-city handoff: a monitoring city requests a capability/change from a code-generation city. Canonical in the execution-city-operations pack. Contract version 1.0.",
+  "type": "object",
+  "required": [
+    "event_type",
+    "event_version",
+    "process_slug",
+    "city_pair_slug",
+    "source_city",
+    "source_city_role",
+    "target_city",
+    "target_city_role",
+    "correlation_id",
+    "idempotency_key",
+    "occurred_at",
+    "payload"
+  ],
+  "properties": {
+    "event_type": { "const": "RepoChangeRequested.v1" },
+    "event_version": { "const": "v1" },
+    "process_slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "city_pair_slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "source_city": { "type": "string", "minLength": 1 },
+    "source_city_role": { "type": "string", "minLength": 1 },
+    "target_city": { "type": "string", "minLength": 1 },
+    "target_city_role": { "const": "code-generation-city" },
+    "correlation_id": { "type": "string", "minLength": 1 },
+    "idempotency_key": { "type": "string", "minLength": 1 },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "payload": {
+      "type": "object",
+      "required": ["repo", "request", "reason", "required_specs_paths"],
+      "properties": {
+        "repo": { "type": "string", "minLength": 1 },
+        "target_branch": { "type": "string", "default": "main" },
+        "request": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 1 },
+        "required_specs_paths": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1
+        },
+        "evidence_uris": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

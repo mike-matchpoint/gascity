@@ -1,0 +1,29 @@
+{
+  "event_type": "RepoBugReported.v1",
+  "event_version": "v1",
+  "process_slug": "vehicle-graph",
+  "city_pair_slug": "vehicle-graph-exec-codegen",
+  "source_city": "vehicle-graph-execution-monitoring-city-dev",
+  "source_city_role": "execution-monitoring-city",
+  "target_city": "vehicle-graph-code-generation-city-dev",
+  "target_city_role": "code-generation-city",
+  "correlation_id": "11111111-1111-4111-8111-111111111111",
+  "idempotency_key": "vehicle-graph:vehicle-graph-exec-codegen:RepoBugReported.v1:run-42:graph-build-validation-regression",
+  "occurred_at": "2026-06-04T12:00:00Z",
+  "payload": {
+    "repo": "Matchpoint-Vehicle-Graph",
+    "target_branch": "main",
+    "severity": "high",
+    "observed_behavior": "graph-build validation fails for vehicle 42 with a null tier on the registry join",
+    "expected_behavior": "validation passes; tier is resolved from the identity registry",
+    "reproduction_steps": [
+      "trigger execution run for vehicle 42 via orchestrator.start_single_vehicle",
+      "observe ExecutionValidationFailed.v1 with null-tier error in the run manifest"
+    ],
+    "failing_command": "gc bridge run graph-build --vehicle 42",
+    "evidence_uris": [
+      "s3://gascity-artifacts-dev/executions/run-42/manifest.json",
+      "s3://gascity-artifacts-dev/executions/run-42/validation.json"
+    ]
+  }
+}
