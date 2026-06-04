@@ -1,0 +1,30 @@
+# Close gc sessions stuck in `creating` state with no live tmux pane.
+#
+# Safety model (full rationale in assets/scripts/stuck-session-sweep.sh):
+#   1. state == "creating" — never touches "alive" or "asleep" sessions.
+#   2. age >= STUCK_SESSION_AGE_SECONDS (default 600s / 10min) — leaves
+#      a wide margin around normal spawn times so between-step session
+#      transitions are never affected.
+#   3. no tmux pane with the session's SessionName exists — a session
+#      with an attached pane is doing real work and skipped.
+#
+# REAL-CLOSE MODE. The script defaults to DRY-RUN, but the order command below
+# sets STUCK_SESSION_DRY_RUN=false so the order actually issues `gc session
+# close` against each candidate. Every sweep that closes one or more sessions
+# emits a mayor mail; review the mail trail to confirm the filter is correct
+# for this city. To revert to DRY-RUN (logs only,
+# /tmp/stuck-session-sweep/sweep-<iso>.jsonl), remove the inline env override.
+#
+# Note: per WO-013 cartographer test findings, `gc session close` is
+# silently a no-op against `creating`-state sessions (upstream gascity#1493);
+# assets/scripts/stuck-session-sweep.sh re-queries after each close and reports
+# such cases as FAILED in the mayor mail rather than CLOSED.
+#
+# Cadence: every 5 minutes. Cheap when idle (one gc session list + jq).
+[order]
+description = "Close ghost 'creating' sessions with no tmux pane"
+trigger = "cooldown"
+scope = "city"
+interval = "5m"
+exec = "STUCK_SESSION_DRY_RUN=false STUCK_SESSION_AGE_SECONDS=600 $PACK_DIR/assets/scripts/stuck-session-sweep.sh"
+timeout = "60s"

@@ -1,0 +1,34 @@
+# Mayor heartbeat — every 30 minutes, take a cheap mechanical pulse of the
+# city, then UNCONDITIONALLY nudge the mayor to run a FULL all-agent wedge scan
+# and resolve whatever it finds. The nudge carries a standing checklist that
+# walks every agent (controller, cartographer, debugger, refinery, polecat
+# dispatch, sessions, orphaned in_progress work).
+#
+# WHY UNCONDITIONAL: the old version woke the mayor only on unread mail or
+# Dolt-down and stayed silent on clean ticks. That missed SILENT wedges that
+# raise neither signal — e.g. an abandoned cartographer planning molecule that
+# gates spec-cartographer-watch and quietly starves all downstream WO planning.
+# Per operator decision (2026-05-29) this now wakes the mayor EVERY tick:
+# robustness over context frugality.
+#
+# What it pulses (cheap, non-fatal; see assets/scripts/mayor-heartbeat.sh):
+# mayor unread mail + Dolt reachability. These only enrich the nudge + log; the
+# authoritative per-agent wedge detection is the mayor's sweep. The script
+# sends NO escalation mail (dolt-health / beads-health already do) and mutates
+# no city state — its job is to WAKE the mayor for the sweep; the mayor does
+# the investigating and resolving (mayor-autonomy directive).
+#
+# PACK SCOPE: this order ships in the gastown pack with scope="city" so it
+# fires exactly once even when gastown is imported at both city and rig scopes.
+# Do not remove the city scope unless you intend per-rig mayor nudges.
+#
+# LIMITATION: a controller-fired order cannot detect controller death (the
+# controller is what fires it). Controller liveness is the machine-level
+# supervisor's responsibility, not this heartbeat's.
+[order]
+description = "Mayor wedge-sweep heartbeat — every 30m UNCONDITIONALLY wake the mayor for a full all-agent wedge scan + resolve"
+trigger = "cooldown"
+scope = "city"
+interval = "30m"
+exec = "$PACK_DIR/assets/scripts/mayor-heartbeat.sh"
+timeout = "2m"

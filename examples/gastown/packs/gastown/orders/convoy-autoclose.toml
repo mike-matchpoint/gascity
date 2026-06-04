@@ -1,0 +1,33 @@
+# Close unowned convoys whose member beads are all closed.
+#
+# Cartographer-emitted (and any other simple-grouping) convoys are created
+# without --owned and without --target. Per `gc convoy create --help`,
+# --owned is the explicit opt-out for "manual lifecycle, no auto-close."
+# So unowned convoys are by-design eligible for the built-in
+# `gc convoy autoclose` command — gascity already knows how to find them
+# and close them safely.
+#
+# Without this order, cross-WO dependency edges that target a convoy bead
+# (e.g., task-3 → vg-q9ip when WO-013 is Blocked-by WO-012) never resolve:
+# even after every member of vg-q9ip closes, the convoy bead itself stays
+# open and any dependent task remains permanently blocked. This bites every
+# cartographer run that emits cross-WO convoy edges (Issue 5 of WO-017
+# findings — using convoy edges over fanout was the correct design choice,
+# but assumed convoys close eventually).
+#
+# `gc convoy autoclose` is a deterministic SQL-against-bead-store operation.
+# No LLM, no fanout, idempotent. Owned convoys (long-lived initiatives with
+# integration branches, managed by refinery patrol) are skipped automatically
+# by the gascity primitive — so this order coexists cleanly with the
+# integration-branch convoy pattern landing for new cartographer work.
+#
+# Cadence: 5m. Latency budget: an unblocked downstream task may wait up to
+# 5m + reconciler tick after the last member closes before becoming claimable.
+# Cheap when idle — single SQL pass over the convoy table.
+[order]
+description = "Close unowned convoys whose member beads are all closed"
+trigger = "cooldown"
+scope = "city"
+interval = "5m"
+exec = "gc convoy check"
+timeout = "30s"
