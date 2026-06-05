@@ -98,7 +98,9 @@ func TestEnsureGitignoreEntries_Idempotent(t *testing.T) {
 
 func TestEnsureGitignoreEntries_NoOpWhenAllPresent(t *testing.T) {
 	f := fsys.NewFake()
-	original := ".gc/\n.beads/*\n!.beads/config.yaml\n!.beads/metadata.json\n!.beads/identity.toml\nhooks/\n.runtime/\n"
+	// Derive the fixture from the canonical entry list so the no-op
+	// assertion stays valid as entries (e.g. vendor skill sinks) change.
+	original := strings.Join(cityGitignoreEntries, "\n") + "\n"
 	f.Files[filepath.Join("/city", ".gitignore")] = []byte(original)
 
 	if err := ensureGitignoreEntries(f, "/city", cityGitignoreEntries); err != nil {

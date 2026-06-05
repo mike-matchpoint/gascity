@@ -5,10 +5,28 @@ import (
 	"strings"
 
 	"github.com/gastownhall/gascity/internal/fsys"
+	"github.com/gastownhall/gascity/internal/materialize"
 )
 
 // cityGitignoreEntries are the paths that gc init writes into .gitignore.
-var cityGitignoreEntries = []string{".gc/", ".beads/*", "!.beads/config.yaml", "!.beads/metadata.json", "!.beads/identity.toml", "hooks/", ".runtime/"}
+var cityGitignoreEntries = append([]string{".gc/", ".beads/*", "!.beads/config.yaml", "!.beads/metadata.json", "!.beads/identity.toml", "hooks/", ".runtime/"}, materializedSkillSinkIgnores()...)
+
+// materializedSkillSinkIgnores returns a gitignore entry for each vendor
+// skill sink the materializer manages (e.g. ".claude/skills/"). These
+// sinks hold host-specific generated symlinks into a city's packs, so
+// committing them pins absolute paths from the host that ran gc and breaks
+// the links anywhere else (containers, other hosts). Ignoring the sinks
+// keeps the generated links out of version control for every city.
+func materializedSkillSinkIgnores() []string {
+	vendors := materialize.SupportedVendors()
+	out := make([]string, 0, len(vendors))
+	for _, v := range vendors {
+		if sink, ok := materialize.VendorSink(v); ok {
+			out = append(out, sink+"/")
+		}
+	}
+	return out
+}
 
 // rigGitignoreEntries are the paths that gc rig add writes into
 // the rig-scoped .gitignore.

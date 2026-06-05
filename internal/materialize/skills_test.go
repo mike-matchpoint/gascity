@@ -597,6 +597,82 @@ func TestMaterializeAgentDecisionMatrix(t *testing.T) {
 	}
 }
 
+func TestMaterializeAgentHealsDanglingDesiredSymlink(t *testing.T) {
+	t.Parallel()
+	src := t.TempDir()
+	mkSkill(t, src, "gc-agents")
+
+	sink := filepath.Join(t.TempDir(), "skills")
+	if err := os.MkdirAll(sink, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// A stale symlink whose absolute target points outside the owned root
+	// and does not resolve on disk — the host-specific-path-synced-onto-
+	// different-storage case. Its name matches a desired entry, so it must
+	// be healed to the correct source rather than skipped as external.
+	foreign := filepath.Join(t.TempDir(), "some", "other", "host", "path", "gc-agents")
+	mustSymlink(t, foreign, filepath.Join(sink, "gc-agents"))
+
+	desired := []SkillEntry{
+		{Name: "gc-agents", Source: filepath.Join(src, "gc-agents"), Origin: "city"},
+	}
+
+	res, err := Run(Request{
+		SinkDir:    sink,
+		Desired:    desired,
+		OwnedRoots: []string{src},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	checkSymlink(t, filepath.Join(sink, "gc-agents"), filepath.Join(src, "gc-agents"))
+
+	if !reflect.DeepEqual(res.Materialized, []string{"gc-agents"}) {
+		t.Errorf("materialized = %v, want [gc-agents]", res.Materialized)
+	}
+	if len(res.Skipped) != 0 {
+		t.Errorf("skipped = %v, want none", skippedToNames(res.Skipped))
+	}
+}
+
+func TestMaterializeAgentLeavesDanglingForeignNonDesired(t *testing.T) {
+	t.Parallel()
+	src := t.TempDir()
+
+	sink := filepath.Join(t.TempDir(), "skills")
+	if err := os.MkdirAll(sink, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Dangling foreign-target symlink whose name is NOT desired: leave it
+	// alone. We cannot tell whether the user placed it, so self-heal must
+	// not touch it.
+	foreign := filepath.Join(t.TempDir(), "elsewhere", "user-skill")
+	mustSymlink(t, foreign, filepath.Join(sink, "user-skill"))
+
+	res, err := Run(Request{
+		SinkDir:    sink,
+		Desired:    nil,
+		OwnedRoots: []string{src},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tgt, err := os.Readlink(filepath.Join(sink, "user-skill"))
+	if err != nil {
+		t.Fatalf("foreign symlink read: %v", err)
+	}
+	if tgt != foreign {
+		t.Errorf("foreign symlink overwritten: target=%q want %q", tgt, foreign)
+	}
+	if len(res.Materialized) != 0 {
+		t.Errorf("materialized = %v, want none", res.Materialized)
+	}
+}
+
 func TestMaterializeAgentLegacyStubMigratedThenSymlinked(t *testing.T) {
 	t.Parallel()
 	src := t.TempDir()

@@ -443,6 +443,28 @@ func Run(req Request) (Result, error) {
 		if !filepath.IsAbs(target) {
 			continue
 		}
+		// Self-heal: a dangling symlink whose name matches a desired
+		// entry is a stale gc-managed link whose absolute target no
+		// longer resolves in this environment (e.g. a host-specific
+		// target synced onto different storage). Replace it with the
+		// correct desired target instead of misclassifying it below as
+		// a user-placed external link and skipping it forever.
+		if _, statErr := os.Stat(path); statErr != nil && os.IsNotExist(statErr) {
+			if desired, want := desiredByName[name]; want {
+				desiredAbs, terr := filepath.Abs(desired.Source)
+				if terr != nil {
+					result.Warnings = append(result.Warnings, fmt.Sprintf("resolving desired target %q: %v", desired.Source, terr))
+					continue
+				}
+				if rerr := atomicSymlink(desiredAbs, path); rerr != nil {
+					result.Warnings = append(result.Warnings, fmt.Sprintf("healing dangling symlink %q: %v", path, rerr))
+					continue
+				}
+				result.Materialized = append(result.Materialized, name)
+				delete(desiredByName, name)
+				continue
+			}
+		}
 		canonTarget, terr := canonicalizePath(target)
 		if terr != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("canonicalize target %q: %v", target, terr))
