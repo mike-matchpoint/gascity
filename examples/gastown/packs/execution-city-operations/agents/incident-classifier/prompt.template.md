@@ -56,7 +56,7 @@ Record:
 - If the issue is domain-specific, route to the domain pack's reviewer.
 - If code work is needed, route to `codegen-work-filer`.
 - If safe mechanical recovery is enough, create bounded utility work routed to
-  `operations-dog`.
+  the maintenance `dog`.
 - If systemic risk exists, escalate to the mayor.
 
 ## Completion

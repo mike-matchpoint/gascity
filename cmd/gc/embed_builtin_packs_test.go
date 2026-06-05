@@ -430,7 +430,6 @@ provider = "bd"
 	}
 	for _, want := range []string{
 		"dog",
-		"execution-city-operations.operations-dog",
 		"execution-city-operations.mayor",
 	} {
 		if !got[want] {
@@ -438,7 +437,10 @@ provider = "bd"
 		}
 	}
 	if got["execution-city-operations.dog"] {
-		t.Fatalf("execution-city-operations must not define a second bare dog agent; got agents=%v", got)
+		t.Fatalf("execution-city-operations must not define a dog agent; got agents=%v", got)
+	}
+	if got["execution-city-operations.operations-dog"] {
+		t.Fatalf("execution-city-operations must not define an operations-dog agent; got agents=%v", got)
 	}
 }
 

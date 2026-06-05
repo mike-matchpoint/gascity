@@ -53,7 +53,7 @@ treat it as priority work.
 
 - Concrete runtime failure with evidence: route to incident classification.
 - Missing or ambiguous evidence: route to witness or evidence review.
-- Repeated patrol failure: route to deacon, boot, or `operations-dog` as appropriate.
+- Repeated patrol failure: route to deacon, boot, or the maintenance `dog` as appropriate.
 - Code or capability gap: require a handoff writer to emit a typed request.
 - Broad system risk: pause affected work and record the stop condition.
 

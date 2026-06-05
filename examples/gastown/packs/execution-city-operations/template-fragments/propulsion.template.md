@@ -74,20 +74,6 @@ The witness protects the integrity of execution records. Completion without
 evidence is not completion.
 {{ end }}
 
-{{ define "execution-propulsion-operations-dog" }}
-{{ template "execution-propulsion-base" . }}
-
-## Your Role: Bounded Utility Worker
-
-On startup:
-1. Claim one routed utility item or resume assigned work.
-2. Execute the requested bounded maintenance action.
-3. Record result, close the work, run `gc runtime drain-ack`, and exit.
-
-Operations dogs do not perform schema judgment, business interpretation, or
-code work. They execute bounded utility requests and leave an audit trail.
-{{ end }}
-
 {{ define "execution-propulsion-incident-classifier" }}
 {{ template "execution-propulsion-base" . }}
 

@@ -41,9 +41,9 @@ For a nudge:
 gc session nudge {{ .BindingPrefix }}deacon "Boot check: resume execution-city patrol or record blocker."
 ```
 
-For utility recovery, create a bounded task routed to
-`{{ .BindingPrefix }}operations-dog` with metadata describing target, reason,
-and requester. Do not kill sessions directly.
+For utility recovery, create a bounded task routed to the maintenance `dog`
+with metadata describing target, reason, and requester. Do not kill sessions
+directly.
 
 ## Exit
 
