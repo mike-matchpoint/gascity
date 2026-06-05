@@ -15,14 +15,16 @@
 #   1. Files already represented by any `source:work-order:<basename>`
 #      label or `metadata.work_order_id=<basename>` bead in the rig are
 #      skipped (any status, any epoch — re-firing the cartographer just
-#      because earlier output got closed is wrong).
-#   2. If the cartographer has actionable ready work or an in-progress
-#      step in the rig (NOT just for THIS WO), defer all WOs in that rig
-#      to the next tick. Cartographer creates one run worktree per
-#      molecule, but it remains a singleton planner: two active planning
-#      sessions can still race on bead-store reconciliation and duplicate
-#      output. Non-actionable stale scaffolds are not runnable planner
-#      work and must not starve unrelated WOs.
+#      because earlier output got closed is wrong). The broad planned-WO
+#      index is an optimization only; each would-be sling is guarded by
+#      exact per-WO label and metadata lookups immediately before dispatch.
+#   2. If the cartographer has actionable ready work, an in-progress step,
+#      or an open spec-cartographer molecule in the rig (NOT just for THIS
+#      WO), defer all WOs in that rig to the next tick. Cartographer creates
+#      one run worktree per molecule, but it remains a singleton planner:
+#      two active planning sessions can still race on bead-store
+#      reconciliation and duplicate output. Stale open scaffolds are handled
+#      by the mayor heartbeat rather than by launching another planner.
 #
 # Cheap when idle: a few `bd list` calls per rig and exit. Frequent
 # firing is safe because check 2 short-circuits the inner loop when
@@ -33,6 +35,34 @@
 # unplanned work orders exist, the most recently changed source file wins so
 # live intake does not starve behind historical backlog.
 set -euo pipefail
+
+work_order_already_planned() {
+  local rig_name="$1"
+  local wo_id="$2"
+  local count=""
+
+  if ! count=$(gc --rig "$rig_name" bd list --all --json --limit=1 \
+    --label "source:work-order:${wo_id}" \
+    | jq -r 'length'); then
+    echo "[spec-cartographer-watch] could not verify source label for $rig_name :: $wo_id — deferring"
+    return 2
+  fi
+  if [ "$count" != "0" ]; then
+    return 0
+  fi
+
+  if ! count=$(gc --rig "$rig_name" bd list --all --json --limit=1 \
+    --metadata-field "work_order_id=${wo_id}" \
+    | jq -r 'length'); then
+    echo "[spec-cartographer-watch] could not verify work_order_id metadata for $rig_name :: $wo_id — deferring"
+    return 2
+  fi
+  if [ "$count" != "0" ]; then
+    return 0
+  fi
+
+  return 1
+}
 
 RIGS_JSON=$(gc rig list --json)
 
@@ -48,9 +78,7 @@ echo "$RIGS_JSON" \
   # Idempotency check 2 (cartographer busy in this rig) is evaluated
   # ONCE per rig before the WO loop. Use the same dependency-aware
   # ready-work surface as the cartographer agent selector, plus explicit
-  # in-progress cartographer steps. Do not count an open parent molecule
-  # or dependency-blocked downstream steps as busy; those are scaffold, not
-  # runnable planner work.
+  # in-progress cartographer steps and open planner molecules.
   CARTOGRAPHER_AGENT="$RIG_NAME/codegen-support.cartographer"
   READY_JSON=$(gc work count --agent "$CARTOGRAPHER_AGENT" --json 2>/dev/null || true)
   READY_COUNT=$(printf '%s\n' "$READY_JSON" | jq -r 'if .ok == true then (.count // 0) else empty end' 2>/dev/null || true)
@@ -62,11 +90,17 @@ echo "$RIGS_JSON" \
     gc --rig "$RIG_NAME" bd list --status=in_progress \
       --type=step \
       --metadata-field formula=spec-cartographer \
-      --metadata-field gc.routed_to="$CARTOGRAPHER_AGENT" \
       --json --limit=0 \
     | jq 'length'
   )
-  if [ "$READY_COUNT" != "0" ] || [ "$IN_PROGRESS" != "0" ]; then
+  OPEN_MOLECULES=$(
+    gc --rig "$RIG_NAME" bd list --status=open \
+      --type=molecule \
+      --metadata-field formula=spec-cartographer \
+      --json --limit=0 \
+    | jq 'length'
+  )
+  if [ "$READY_COUNT" != "0" ] || [ "$IN_PROGRESS" != "0" ] || [ "$OPEN_MOLECULES" != "0" ]; then
     echo "[spec-cartographer-watch] cartographer busy in $RIG_NAME — deferring (will retry next tick)"
     continue
   fi
@@ -105,10 +139,16 @@ echo "$RIGS_JSON" \
 
     # Idempotency check 1: any prior bead with this WO label or metadata
     # means the cartographer already planned it (open molecule, closed task
-    # bead, tombstone, etc.). Build that index once per rig; repeated
-    # per-work-order bd scans make this order exceed its timeout on large
-    # histories.
-    if printf '%s\n' "$PLANNED_WO_IDS" | grep -Fxq "$WO_ID"; then continue; fi
+    # bead, tombstone, etc.). Use the broad index as a fast path, then do an
+    # exact per-WO guard before sling so a partial/lossy broad list cannot
+    # create a duplicate.
+    if grep -Fxq -- "$WO_ID" <<<"$PLANNED_WO_IDS"; then continue; fi
+    if work_order_already_planned "$RIG_NAME" "$WO_ID"; then
+      continue
+    else
+      PLAN_CHECK_STATUS=$?
+      if [ "$PLAN_CHECK_STATUS" != "1" ]; then break; fi
+    fi
 
     REL_PATH="specs/agent-work-orders/$(basename "$WO_FILE")"
     echo "[spec-cartographer-watch] slinging cartographer for $RIG_NAME :: $WO_ID"
