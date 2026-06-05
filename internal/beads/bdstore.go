@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -225,7 +226,15 @@ type BdStore struct {
 	purgeRunner   PurgeRunnerFunc // injectable for testing; nil uses exec default
 	idPrefix      string          // bead ID prefix owned by this store, without trailing "-"
 	indexedReader IndexedLister   // optional read-only active list accelerator
+
+	runtimeEventMu       sync.Mutex           // guards lazy init of runtimeEventRecorder
+	runtimeEventRecorder *events.FileRecorder // long-lived recorder for .gc/events.jsonl
 }
+
+// runtimeWriteEventsMaxSize bounds the active .gc/events.jsonl written from the
+// runtime-write path before rotation. Mirrors config.DefaultEventsRotationMaxSizeBytes
+// (256 MiB); kept local to avoid a beads->config dependency.
+const runtimeWriteEventsMaxSize int64 = 256 * 1024 * 1024
 
 const bdTransientWriteAttempts = 3
 
@@ -1904,16 +1913,34 @@ func runtimeWriteOutcomeForTrace(err error) WriteOutcome {
 	return WriteOutcomeFailed
 }
 
+// runtimeEventRecorder lazily constructs a single long-lived FileRecorder for
+// the runtime-write event log and reuses it across calls. Reconstructing a
+// recorder per event forced an open + tail-seq-read + directory sweep (several
+// EFS round-trips) on every runtime write; a cached recorder pays that once.
+// Returns nil best-effort if construction fails, and retries on the next call.
+func (s *BdStore) runtimeEventRecorderOrInit() *events.FileRecorder {
+	s.runtimeEventMu.Lock()
+	defer s.runtimeEventMu.Unlock()
+	if s.runtimeEventRecorder != nil {
+		return s.runtimeEventRecorder
+	}
+	path := filepath.Join(s.dir, ".gc", "events.jsonl")
+	rec, err := events.NewFileRecorder(path, io.Discard, events.WithMaxSize(runtimeWriteEventsMaxSize))
+	if err != nil {
+		return nil
+	}
+	s.runtimeEventRecorder = rec
+	return rec
+}
+
 func (s *BdStore) recordRuntimeWriteEvent(eventType string, policy WritePolicy, operation string, args []string, duration time.Duration, err error) {
 	if s == nil || strings.TrimSpace(s.dir) == "" {
 		return
 	}
-	path := filepath.Join(s.dir, ".gc", "events.jsonl")
-	rec, openErr := events.NewFileRecorder(path, io.Discard)
-	if openErr != nil {
+	rec := s.runtimeEventRecorderOrInit()
+	if rec == nil {
 		return
 	}
-	defer rec.Close() //nolint:errcheck // best-effort observability
 	subcommand := ""
 	if len(args) > 0 {
 		subcommand = args[0]
