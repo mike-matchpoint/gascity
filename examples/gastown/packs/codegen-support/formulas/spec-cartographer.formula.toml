@@ -28,6 +28,27 @@ Outputs: a set of new, unhooked beads in the rig's bead store, labeled
 `source:work-order:<work-order-id>` and `epoch:<iso-date>`, optionally
 grouped into convoys, with `depends_on` edges in BOTH directions:
 
+**Structural convoy parentage is part of the emitted work, not a
+post-hoc validation concern.** Any task planned as a convoy member MUST
+be emitted as a true child of the convoy bead. Labels such as
+`source:work-order:<work-order-id>`, cohort labels, `tracks`
+dependency edges, or any soft association are not convoy membership.
+The refinery's owned-convoy auto-land path enumerates children with
+`gc bd list --all --parent <convoy-id>`; a convoy whose associated tasks
+are not parent-linked is a zero-child data-linkage defect and MUST NOT
+be emitted. The cartographer must carry this requirement through
+planning, emit-plan construction, and pre-mutation checks:
+
+- `graph.json:convoys[*].members` or `member_draft_ids` is the
+  authoritative logical member list.
+- `emit_plan.json:nodes[]` for every listed task MUST contain exactly
+  one structural parent reference: `parent_key` for a convoy created in
+  the same graph, or `parent_id` for an existing cohort convoy.
+- If the cartographer cannot compile every logical convoy member into a
+  parent-bearing emit-plan node, it must fail before `bd create --graph`
+  and use the mayor-action disposition. It must not emit a label-only,
+  tracks-only, or dependency-edge-only substitute.
+
 Open cross-WO blockers are expected runtime dependencies, not a reason
 to suppress emission of this work order. The cartographer still emits
 the target work order's non-duplicate beads and wires dependencies so
@@ -1170,6 +1191,17 @@ planned over time. This is the correct response to ad-hoc
 work-order additions joining an existing epic, AND to the parent
 index + lettered sub-WO pattern.
 
+**Convoy membership is a required graph component.** When this step
+decides to group any new task into a convoy, `graph.json` must carry a
+single convoy entry whose `members` or `member_draft_ids` array names
+every new task that belongs under that convoy. That member list is a
+promise that emit will create structural parent-child linkage. Do not
+represent convoy membership only with `source:work-order`,
+`land-together:*`, `family:*`, `tracks`, `depends_on`, or prose in a
+task body. Those are useful routing and audit signals, but none of them
+make `gc bd list --all --parent <convoy>` return the task, and the
+owned-convoy refinery handoff depends on that parent query.
+
 Cohort-convoy rules:
 
 a. If `beads_inventory.json:existing_cohort_convoy_id` is non-null:
@@ -1212,10 +1244,14 @@ membership). Convoy says "ship together"; edges say "B needs A".
 Both are needed.
 
 **The cartographer NEVER calls `gc convoy add` on an existing
-bead.** New beads point at the convoy via `--convoy=<id>` at
-creation time, which mutates only the new bead's convoy field.
-This is the only allowed pattern for extending a convoy across
-runs.
+bead.** New beads point at the convoy structurally at creation time:
+the later `bd create --graph` carrier must put `parent_key` on task
+nodes for newly-created convoys and `parent_id` on task nodes for
+existing cohort convoys. That is the graph equivalent of setting
+`gc bd update --parent` on the new task, but it happens inside the
+creation transaction. `gc convoy add`, `tracks` edges, labels, and
+plain dependency edges are forbidden substitutes because they do not
+set the task's `parent` field.
 
 **5.5. Compute existing-to-new edges (reverse direction).** This is
 category (d) from the formula description: cases where a NEW bead
@@ -1863,18 +1899,25 @@ e. **Convoy coherence.** For each convoy in `graph.json:convoys`,
    immediately before branch creation and `bd create --graph`. See
    `runbooks/convoy-close-lifecycle-gap.md`.
 
-   **Convoy-membership linkage boundary.** `validate-plan` checks only
-   that every logical convoy member names an existing task draft. It
-   must not require `parent_key` or `parent_id` in `tasks.json` or
-   `graph.json`; those fields are emit-plan fields. The emit step must
-   translate each logical membership into exactly one of:
+   **Convoy-parentage compile requirement.** This is the pre-mutation
+   enforcement point for the graph contract from step 6. The logical
+   convoy member list in `graph.json` is required plan data, not
+   decoration. `validate-plan` must prove that every logical convoy
+   member names an emitted task draft and that the emit carrier it
+   builds translates each membership into exactly one of:
    - `parent_key=<convoy.draft_convoy_id>` for Case B new convoys;
    - `parent_id=<use_existing_convoy_id>` for Case A joined convoys.
 
-   The shared emit-plan preflight helper checks `$RUN_DIR/emit_plan.json`
-   for that structural parentage before any mutation. The post-emit
-   `validate-store` step then proves the bead store materialized the
-   parent linkage.
+   Do not accept a convoy plan whose tasks merely share
+   `source:work-order`, `land-together:*`, `family:*`, `tracks`, or
+   `depends_on` edges. Those signals may remain in the graph, but they
+   do not satisfy membership. `parent_key` and `parent_id` are
+   emit-plan fields, so they are not required in `tasks.json`; however,
+   missing parent references in the constructed `$RUN_DIR/emit_plan.json`
+   are a hard failure before any branch creation or `bd create --graph`.
+   The shared emit-plan preflight helper checks that structural
+   parentage. The post-emit `validate-store` step then proves the bead
+   store materialized the parent linkage.
 
 f. **No orphans.** Every `issue_type=task` entry in
    `graph.json:emit_specs` must satisfy at least one of:
@@ -2417,10 +2460,20 @@ Build the labels:
   autonomous priority signal that dogs read across the rig.
 
 Build the parent reference:
-- If the task is a member of a Case B convoy: `"parent_key": "<convoy.draft_convoy_id>"`
+- If the task is a member of a Case B convoy:
+  `"parent_key": "<convoy.draft_convoy_id>"`
 - If the task is a member of a Case A convoy (joined cohort):
   `"parent_id": "<convoy.use_existing_convoy_id>"`
 - If standalone: omit both parent fields
+
+This parent reference is mandatory for every task named in
+`graph.json:convoys[*].members` or `member_draft_ids`. Do not infer
+membership from labels, `tracks`, or dependency edges. If a task appears
+in a convoy member list and the emit-plan node for that task would omit
+both `parent_key` and `parent_id`, stop and call
+`cartographer_emit_fail "convoy member missing structural parent"`.
+Emitting the task label-only would recreate the zero-child owned-convoy
+failure mode that strands refinery auto-land.
 
 Bake routing AND merge target into metadata:
 - `"gc.routed_to": "$SLING_TARGET"` — required on every task node.
@@ -2480,8 +2533,10 @@ For each `holding_stubs_to_release` entry, for each
   `{"from_id": "<edge.from_existing_bead_id>", "to_key": "<edge.to_new>"}`
 
 Edge `type` defaults to `blocks`; omit unless overriding. Convoy
-membership is NOT an edge — it's `parent_key`/`parent_id` on the
-node spec.
+membership is NOT an edge and is NOT a `tracks` association. It is the
+`parent_key` or `parent_id` field on the task node spec. A task can
+have dependency edges and still be a non-child unless the parent field
+is present.
 
 **CRITICAL — direction.** `from` depends on `to`. The graph.json
 convention `{"from": "task-2", "to": "task-1"}` means "task-2 depends
