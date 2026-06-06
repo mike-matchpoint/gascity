@@ -425,6 +425,8 @@ func projectBaseState(status, storedState, sleepReason string) BaseState {
 			return BaseStateDrained
 		}
 		return BaseStateAsleep
+	case "idle-timeout":
+		return BaseStateAsleep
 	case string(StateSuspended):
 		return BaseStateSuspended
 	case string(StateFailedCreate):

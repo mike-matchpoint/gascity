@@ -2995,7 +2995,7 @@ func reusablePoolSessionBead(bp *agentBuildParams, cfgAgent *config.Agent, templ
 	if isFailedCreateSessionBead(bead) {
 		return false
 	}
-	if bead.Metadata["state"] == "asleep" {
+	if sessionMetadataState(bead) == "asleep" {
 		return false
 	}
 	if isManualSessionBeadForAgent(bead, cfgAgent) {

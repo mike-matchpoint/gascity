@@ -56,6 +56,15 @@ func TestProjectLifecycleNormalizesCompatibilityStates(t *testing.T) {
 			wantState: StateAsleep,
 		},
 		{
+			name: "legacy open idle-timeout state behaves as asleep",
+			metadata: map[string]string{
+				"state":        "idle-timeout",
+				"session_name": "s-worker",
+			},
+			wantBase:  BaseStateAsleep,
+			wantState: StateAsleep,
+		},
+		{
 			name: "closed bead status wins over stale active metadata",
 			metadata: map[string]string{
 				"state":        "active",

@@ -2383,7 +2383,7 @@ func TestFindAgentByTemplate(t *testing.T) {
 func TestIsKnownState_KnownStates(t *testing.T) {
 	known := []string{
 		"active", "asleep", "awake", "stopped", "suspended",
-		"orphaned", "closed", "quarantined", "creating", string(sessionpkg.StateFailedCreate), "",
+		"orphaned", "closed", "quarantined", "creating", "idle-timeout", string(sessionpkg.StateFailedCreate), "",
 	}
 	for _, state := range known {
 		session := makeBead("b1", map[string]string{"state": state})

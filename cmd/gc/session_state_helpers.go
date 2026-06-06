@@ -18,6 +18,13 @@ func isDrainedSessionBead(session beads.Bead) bool {
 	return isDrainedSessionMetadata(session.Metadata)
 }
 
+func isOpenLegacyIdleTimeoutSessionBead(session beads.Bead) bool {
+	if strings.TrimSpace(session.Status) == "closed" {
+		return false
+	}
+	return strings.TrimSpace(session.Metadata["state"]) == "idle-timeout"
+}
+
 // isPoolSessionSlotFreeable reports whether a session's bead is in a terminal
 // state where the pool slot it occupies can be freed — either explicitly
 // drained, or asleep from a normal idle transition. Sessions parked via
@@ -36,6 +43,9 @@ func isDrainedSessionBead(session beads.Bead) bool {
 // their slot.
 func isPoolSessionSlotFreeable(session beads.Bead) bool {
 	if isDrainedSessionBead(session) {
+		return true
+	}
+	if isOpenLegacyIdleTimeoutSessionBead(session) {
 		return true
 	}
 	if strings.TrimSpace(session.Metadata["state"]) != "asleep" {

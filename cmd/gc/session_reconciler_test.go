@@ -5170,6 +5170,74 @@ func TestReconcileSessionBeads_FailedCreateNotDesiredClosed(t *testing.T) {
 	}
 }
 
+func TestNormalizeLegacyIdleTimeoutSessionState(t *testing.T) {
+	env := newReconcilerTestEnv()
+	session := env.createSessionBead("worker", "worker")
+	env.setSessionMetadata(&session, map[string]string{
+		"state":                     "idle-timeout",
+		"state_reason":              "idle-timeout",
+		"pending_create_claim":      "true",
+		"pending_create_started_at": env.clk.Now().UTC().Format(time.RFC3339),
+		"last_woke_at":              env.clk.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
+		"sleep_intent":              "idle-stop-pending",
+	})
+
+	if !normalizeLegacyIdleTimeoutSessionState(context.Background(), &session, env.store, env.clk.Now().UTC(), &env.stderr) {
+		t.Fatal("expected legacy idle-timeout state to normalize")
+	}
+
+	got, err := env.store.Get(session.ID)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", session.ID, err)
+	}
+	if got.Metadata["state"] != "asleep" {
+		t.Fatalf("state = %q, want asleep", got.Metadata["state"])
+	}
+	if got.Metadata["sleep_reason"] != "idle-timeout" {
+		t.Fatalf("sleep_reason = %q, want idle-timeout", got.Metadata["sleep_reason"])
+	}
+	for _, key := range []string{"state_reason", "pending_create_claim", "pending_create_started_at", "last_woke_at", "sleep_intent"} {
+		if got.Metadata[key] != "" {
+			t.Fatalf("%s = %q, want cleared", key, got.Metadata[key])
+		}
+	}
+	if session.Metadata["state"] != "asleep" {
+		t.Fatalf("in-memory state = %q, want asleep", session.Metadata["state"])
+	}
+}
+
+func TestReconcileSessionBeads_LegacyIdleTimeoutPoolSessionConverges(t *testing.T) {
+	env := newReconcilerTestEnv()
+	env.cfg = &config.City{Agents: []config.Agent{{Name: "worker", MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(5)}}}
+	env.addDesired("worker-new", "worker", false)
+	session := env.createSessionBead("worker-old", "worker")
+	env.setSessionMetadata(&session, map[string]string{
+		"state":                "idle-timeout",
+		"pool_managed":         "true",
+		"pool_slot":            "1",
+		"pending_create_claim": "true",
+	})
+
+	env.reconcile([]beads.Bead{session})
+
+	if strings.Contains(env.stderr.String(), "unknown state") {
+		t.Fatalf("legacy idle-timeout session must not be skipped as unknown; stderr:\n%s", env.stderr.String())
+	}
+	got, err := env.store.Get(session.ID)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", session.ID, err)
+	}
+	if got.Status != "closed" {
+		t.Fatalf("status = %q, want closed", got.Status)
+	}
+	if got.Metadata["state"] != "idle-timeout" {
+		t.Fatalf("closed state = %q, want idle-timeout forensic state", got.Metadata["state"])
+	}
+	if want := sessionpkg.CanonicalCloseReason("idle-timeout"); got.Metadata["close_reason"] != want {
+		t.Fatalf("close_reason = %q, want %q", got.Metadata["close_reason"], want)
+	}
+}
+
 func TestReconcileSessionBeads_PreservesConfiguredNamedSessionOutsideDesiredState(t *testing.T) {
 	env := newReconcilerTestEnv()
 	env.cfg = &config.City{

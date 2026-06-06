@@ -197,6 +197,11 @@ func sessionMetadataState(session beads.Bead) string {
 		return "creating"
 	case "drained":
 		return "asleep"
+	case "idle-timeout":
+		if strings.TrimSpace(session.Status) != "closed" {
+			return "asleep"
+		}
+		return state
 	default:
 		return state
 	}
@@ -1217,7 +1222,7 @@ var knownSessionStates = map[string]bool{
 // the current reconciler. Unknown states (from a newer version) are skipped
 // to prevent panics during rollback.
 func isKnownState(session beads.Bead) bool {
-	return knownSessionStates[session.Metadata["state"]]
+	return knownSessionStates[sessionMetadataState(session)]
 }
 
 // reverseBeads returns a reversed copy of the bead slice.

@@ -45,6 +45,28 @@ type wakeTarget struct {
 	alive   bool
 }
 
+func normalizeLegacyIdleTimeoutSessionState(ctx context.Context, session *beads.Bead, store beads.Store, now time.Time, stderr io.Writer) bool {
+	if session == nil || store == nil || !isOpenLegacyIdleTimeoutSessionBead(*session) {
+		return false
+	}
+	patch := sessionpkg.SleepPatch(now, "idle-timeout")
+	patch["state_reason"] = ""
+	if err := runtimeSetSessionMetadataBatch(ctx, store, session.ID, patch, "session.legacy-idle-timeout-normalize"); err != nil {
+		if stderr == nil {
+			stderr = io.Discard
+		}
+		fmt.Fprintf(stderr, "session reconciler: normalizing legacy idle-timeout state for %s: %v\n", session.Metadata["session_name"], err) //nolint:errcheck
+		return false
+	}
+	if session.Metadata == nil {
+		session.Metadata = make(map[string]string, len(patch))
+	}
+	for key, value := range patch {
+		session.Metadata[key] = value
+	}
+	return true
+}
+
 func maybeQueueNamedSessionPatrolWispNudge(
 	cityPath string,
 	store beads.Store,
@@ -1344,6 +1366,9 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			continue
 		}
 
+		legacyIdleTimeout := isOpenLegacyIdleTimeoutSessionBead(*session)
+		normalizedLegacyIdleTimeout := normalizeLegacyIdleTimeoutSessionState(ctx, session, store, clk.Now().UTC(), stderr)
+
 		// Skip beads with unrecognized states. This enables forward-compatible
 		// rollback: if a newer version writes "draining" or "archived", the
 		// older reconciler ignores those beads rather than crashing.
@@ -1605,6 +1630,9 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					reason := "orphaned"
 					if configuredNames[name] {
 						reason = "suspended"
+					}
+					if isPoolManagedSessionBead(*session) && (legacyIdleTimeout || normalizedLegacyIdleTimeout) {
+						reason = "idle-timeout"
 					}
 					template := normalizedSessionTemplate(*session, cfg)
 					if template == "" {

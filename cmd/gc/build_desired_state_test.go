@@ -9924,6 +9924,42 @@ func TestSelectOrCreatePoolSessionBead_SkipsAsleepBeads(t *testing.T) {
 	}
 }
 
+func TestSelectOrCreatePoolSessionBead_SkipsLegacyIdleTimeoutBeads(t *testing.T) {
+	store := beads.NewMemStore()
+	cfgAgent := config.Agent{Name: "polecat", MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(5)}
+
+	legacy, err := store.Create(beads.Bead{
+		Title:  "polecat",
+		Type:   sessionBeadType,
+		Labels: []string{sessionBeadLabel, "template:polecat"},
+		Metadata: map[string]string{
+			"template":     "polecat",
+			"session_name": "polecat-real-world-app-idle-timeout",
+			"state":        "idle-timeout",
+			"pool_managed": "true",
+			"pool_slot":    "1",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := newSessionBeadSnapshot([]beads.Bead{legacy})
+	bp := &agentBuildParams{
+		beadStore:    store,
+		sessionBeads: snapshot,
+		agents:       []config.Agent{cfgAgent},
+	}
+
+	result, _, err := selectOrCreatePoolSessionBead(bp, &cfgAgent, "polecat", nil, map[string]bool{}, map[int]bool{})
+	if err != nil {
+		t.Fatalf("selectOrCreatePoolSessionBead: %v", err)
+	}
+	if result.ID == legacy.ID {
+		t.Fatal("legacy idle-timeout pool session should not be reused — a fresh session should be created instead")
+	}
+}
+
 func TestSelectOrCreatePoolSessionBead_ReusesActiveBeforeCreatingNew(t *testing.T) {
 	// An active (awake) pool session IS reused — no fresh bead created.
 	store := beads.NewMemStore()
