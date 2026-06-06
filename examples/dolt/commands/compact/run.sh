@@ -491,26 +491,35 @@ random_maintenance_token() {
   printf '%s-%s-%s\n' "$$" "$(date +%s)" "$(awk 'BEGIN{srand(); printf "%d", rand() * 1000000000}')"
 }
 
-# dolt_query — wrapper that runs a SQL statement against the configured
-# server. In hosted maintenance mode it sets the token before selecting the
-# database so Dolt does not cache a read-only database wrapper for this client.
-dolt_query() {
+dolt_query_format() {
   db="$1"
   query="$2"
+  format="$3"
   export DOLT_CLI_PASSWORD="${GC_DOLT_PASSWORD:-}"
   if [ -n "$dolt_maintenance_token" ]; then
     run_bounded "$call_timeout" \
       dolt --no-tls --host "$host" --port "$GC_DOLT_PORT" \
       --user "$GC_DOLT_USER" \
-      sql -r tabular -q "$(maintenance_token_prefix)USE \`$db\`;
+      sql -r "$format" -q "$(maintenance_token_prefix)USE \`$db\`;
 $query"
   else
     run_bounded "$call_timeout" \
       dolt --no-tls --host "$host" --port "$GC_DOLT_PORT" \
       --user "$GC_DOLT_USER" \
       --use-db "$db" \
-      sql -r tabular -q "$query"
+      sql -r "$format" -q "$query"
   fi
+}
+
+# dolt_query — wrapper that runs a SQL statement against the configured
+# server. In hosted maintenance mode it sets the token before selecting the
+# database so Dolt does not cache a read-only database wrapper for this client.
+dolt_query() {
+  dolt_query_format "$1" "$2" tabular
+}
+
+dolt_query_csv() {
+  dolt_query_format "$1" "$2" csv
 }
 
 dolt_query_global() {
@@ -564,13 +573,13 @@ query_single_cell() {
   query="$3"
   out_tmp=$(mktemp)
   err_tmp=$(mktemp)
-  if ! dolt_query "$db" "$query" > "$out_tmp" 2>"$err_tmp"; then
+  if ! dolt_query_csv "$db" "$query" > "$out_tmp" 2>"$err_tmp"; then
     printf 'compact: db=%s %s\n' "$db" "$failure_message" >&2
     emit_error_file "$db" "$err_tmp"
     rm -f "$out_tmp" "$err_tmp"
     return 1
   fi
-  awk 'NR==4 {gsub(/[| ]/, ""); print; exit}' "$out_tmp"
+  awk 'NR==2 {sub(/\r$/, ""); print; exit}' "$out_tmp"
   rm -f "$out_tmp" "$err_tmp"
 }
 
