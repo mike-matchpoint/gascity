@@ -363,8 +363,13 @@ state_file="${GC_FAKE_DOLT_STATE_FILE:-}"
 hash_state_file="${GC_FAKE_DOLT_HASH_STATE_FILE:-}"
 query=""
 db=""
+format="tabular"
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    -r)
+      format="$2"
+      shift 2
+      ;;
     --use-db)
       db="$2"
       shift 2
@@ -376,10 +381,15 @@ while [ "$#" -gt 0 ]; do
     *)
       shift
       ;;
-  esac
+    esac
 done
-printf 'db=%%s query=%%s\n' "$db" "$query" >> "$log"
+printf 'format=%%s db=%%s query=%%s\n' "$format" "$db" "$query" >> "$log"
 print_cell() {
+  if [ "$format" = "csv" ]; then
+    printf 'value\n'
+    printf '%%s\n' "$1"
+    return 0
+  fi
   printf '+-------+\n'
   printf '| value |\n'
   printf '+-------+\n'
@@ -908,8 +918,13 @@ log=%s
 mode="${GC_HOSTED_COMPACT_FAKE_MODE:-success}"
 query=""
 db=""
+format="tabular"
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    -r)
+      format="$2"
+      shift 2
+      ;;
     --use-db)
       db="$2"
       shift 2
@@ -931,7 +946,7 @@ if [ -z "$db" ]; then
     db="${db_part%%?}"
   fi
 fi
-printf 'db=%%s query=%%s\n' "$db" "$query" >> "$log"
+printf 'format=%%s db=%%s query=%%s\n' "$format" "$db" "$query" >> "$log"
 state_file="$log.$db.state"
 current_head() {
   if [ -f "$state_file" ]; then
@@ -944,6 +959,11 @@ set_head() {
   printf '%%s\n' "$1" > "$state_file"
 }
 print_cell() {
+  if [ "$format" = "csv" ]; then
+    printf 'value\n'
+    printf '%%s\n' "$1"
+    return 0
+  fi
   printf '+-------+\n'
   printf '| value |\n'
   printf '+-------+\n'
@@ -1114,6 +1134,8 @@ func TestCompactScriptHostedDoltRunsMaintenanceFlatten(t *testing.T) {
 	for _, want := range []string{
 		"SHOW DATABASES",
 		"CALL DOLT_MAINTENANCE_STATUS()",
+		"format=csv db=hq",
+		"SELECT COUNT(*) FROM (SELECT 1 FROM dolt_log",
 		"SELECT DISTINCT l.issue_id AS id FROM labels",
 		"SELECT DISTINCT l.issue_id AS id FROM wisp_labels",
 		"CALL DOLT_MAINTENANCE_ENTER",
