@@ -211,7 +211,7 @@ func runExternalCompactScript(t *testing.T, extraEnv ...string) (string, error) 
 		"GC_CITY_PATH="+cityPath,
 		"GC_PACK_DIR="+root,
 		"GC_DOLT_DATA_DIR="+filepath.Join(cityPath, ".beads", "dolt"),
-		"GC_DOLT_HOST=dolt.example-city.svc.cluster.local",
+		"GC_DOLT_HOST=127.0.0.1",
 		"GC_DOLT_PORT=3307",
 		"GC_DOLT_USER=root",
 		"GC_DOLT_PASSWORD=",
@@ -220,6 +220,54 @@ func runExternalCompactScript(t *testing.T, extraEnv ...string) (string, error) 
 	cmd.Env = append(cmd.Env, extraEnv...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+func runHostedCompactScript(t *testing.T, mode string, extraEnv ...string) (string, string, error) {
+	t.Helper()
+	root := repoRoot(t)
+	cityPath := t.TempDir()
+	fakeBin := t.TempDir()
+	doltLog := writeHostedCompactFakeDolt(t, fakeBin)
+	cmd := exec.Command("sh", filepath.Join(root, "commands", "compact", "run.sh"))
+	cmd.Env = append(filteredEnv(
+		"PATH",
+		"GC_CITY_PATH",
+		"GC_PACK_DIR",
+		"GC_DOLT_DATA_DIR",
+		"GC_DOLT_HOST",
+		"GC_DOLT_PORT",
+		"GC_DOLT_USER",
+		"GC_DOLT_PASSWORD",
+		"GC_DOLT_MANAGED_LOCAL",
+		"GC_DOLT_COMPACT_REQUIRE_APPLICABLE",
+		"GC_DOLT_COMPACT_THRESHOLD_COMMITS",
+		"GC_DOLT_COMPACT_CALL_TIMEOUT_SECS",
+		"GC_DOLT_COMPACT_DRAIN_TIMEOUT_MS",
+		"GC_DOLT_COMPACT_MAX_DURATION_MS",
+		"GC_DOLT_COMPACT_RETENTION_OLDER_THAN",
+		"GC_DOLT_COMPACT_RETENTION_MAX_DELETE",
+		"GC_HOSTED_COMPACT_FAKE_MODE",
+	),
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"GC_CITY_PATH="+cityPath,
+		"GC_PACK_DIR="+root,
+		"GC_DOLT_DATA_DIR="+filepath.Join(cityPath, ".beads", "dolt"),
+		"GC_DOLT_HOST=dolt.example-city.svc.cluster.local",
+		"GC_DOLT_PORT=3307",
+		"GC_DOLT_USER=root",
+		"GC_DOLT_PASSWORD=",
+		"GC_DOLT_MANAGED_LOCAL=0",
+		"GC_DOLT_COMPACT_THRESHOLD_COMMITS=500",
+		"GC_DOLT_COMPACT_CALL_TIMEOUT_SECS=5",
+		"GC_DOLT_COMPACT_DRAIN_TIMEOUT_MS=5000",
+		"GC_DOLT_COMPACT_MAX_DURATION_MS=60000",
+		"GC_DOLT_COMPACT_RETENTION_OLDER_THAN=48h",
+		"GC_DOLT_COMPACT_RETENTION_MAX_DELETE=200000",
+		"GC_HOSTED_COMPACT_FAKE_MODE="+mode,
+	)
+	cmd.Env = append(cmd.Env, extraEnv...)
+	out, err := cmd.CombinedOutput()
+	return string(out), doltLog, err
 }
 
 func replaceCompactMarkerCreatedAt(t *testing.T, markerPath, createdAt string) {
@@ -851,6 +899,104 @@ exit 64
 	return logPath
 }
 
+func writeHostedCompactFakeDolt(t *testing.T, binDir string) string {
+	t.Helper()
+	logPath := filepath.Join(binDir, "hosted-dolt.log")
+	writeExecutable(t, filepath.Join(binDir, "dolt"), fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+log=%s
+mode="${GC_HOSTED_COMPACT_FAKE_MODE:-success}"
+query=""
+db=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --use-db)
+      db="$2"
+      shift 2
+      ;;
+    -q)
+      query="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+printf 'db=%%s query=%%s\n' "$db" "$query" >> "$log"
+print_cell() {
+  printf '+-------+\n'
+  printf '| value |\n'
+  printf '+-------+\n'
+  printf '| %%s |\n' "$1"
+  printf '+-------+\n'
+}
+print_databases() {
+  printf '+----------+\n'
+  printf '| Database |\n'
+  printf '+----------+\n'
+  printf '| hq |\n'
+  printf '| vg |\n'
+  printf '+----------+\n'
+}
+case "$query" in
+  *"SHOW DATABASES"*)
+    print_databases
+    exit 0
+    ;;
+  *"CALL DOLT_MAINTENANCE_STATUS()"*)
+    if [ "$mode" = "missing_capability" ]; then
+      printf 'procedure dolt_maintenance_status does not exist\n' >&2
+      exit 25
+    fi
+    print_cell false
+    exit 0
+    ;;
+  *"SELECT COUNT(*) FROM (SELECT 1 FROM dolt_log"*)
+    if [ "$db" = "hq" ]; then
+      print_cell 464000
+    else
+      print_cell 100
+    fi
+    exit 0
+    ;;
+  *"information_schema.columns"*)
+    print_cell 32
+    exit 0
+    ;;
+  *"SELECT COUNT(*) FROM issues i WHERE"*)
+    if [ "$mode" = "no_retention_candidates" ]; then
+      print_cell 0
+    else
+      print_cell 2
+    fi
+    exit 0
+    ;;
+  *"SELECT COUNT(*) FROM wisps w WHERE"*)
+    if [ "$mode" = "no_retention_candidates" ]; then
+      print_cell 0
+    else
+      print_cell 1
+    fi
+    exit 0
+    ;;
+  *"CALL DOLT_MAINTENANCE_ENTER"*DOLT_SERVER_COMPACT*DOLT_MAINTENANCE_EXIT*)
+    if [ "$query" != "${query#*gc_retention_sweep_issue_ids}" ] && [ "$query" != "${query#*DELETE FROM issues}" ]; then
+      exit 0
+    fi
+    if [ "$mode" = "no_retention_candidates" ]; then
+      exit 0
+    fi
+    printf 'hosted compact query missing retention delete SQL\n' >&2
+    exit 64
+    ;;
+esac
+printf 'unexpected hosted compact query: %%s\n' "$query" >&2
+exit 64
+`, shellQuote(logPath)))
+	return logPath
+}
+
 func TestCompactScriptExternalDoltDefaultIsStructuredNoop(t *testing.T) {
 	out, err := runExternalCompactScript(t)
 	if err != nil {
@@ -858,6 +1004,63 @@ func TestCompactScriptExternalDoltDefaultIsStructuredNoop(t *testing.T) {
 	}
 	if !strings.Contains(out, "compact: not_applicable reason=managed_local_false") {
 		t.Fatalf("external compact output missing structured not_applicable:\n%s", out)
+	}
+}
+
+func TestCompactScriptHostedDoltRunsServerSideMaintenance(t *testing.T) {
+	out, logPath, err := runHostedCompactScript(t, "success")
+	if err != nil {
+		t.Fatalf("hosted compact failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"retention_candidates=3",
+		"hosted server_side=complete",
+		"retention_candidates=3",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("hosted compact output missing %q:\n%s", want, out)
+		}
+	}
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read hosted dolt log: %v", err)
+	}
+	log := string(logData)
+	for _, want := range []string{
+		"SHOW DATABASES",
+		"CALL DOLT_MAINTENANCE_STATUS()",
+		"CALL DOLT_MAINTENANCE_ENTER",
+		"CREATE TEMPORARY TABLE gc_retention_sweep_issue_ids",
+		"DELETE FROM issues",
+		"CALL DOLT_COMMIT('-Am', 'gc dolt compact: prune operational_churn older than 48h', '--skip-empty')",
+		"CALL DOLT_SERVER_COMPACT",
+		"CALL DOLT_MAINTENANCE_EXIT",
+	} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("hosted compact log missing %q:\n%s", want, log)
+		}
+	}
+	for _, forbidden := range []string{"DOLT_RESET", "DOLT_GC('--full')"} {
+		if strings.Contains(log, forbidden) {
+			t.Fatalf("hosted compact must use server-side procedure, found %q:\n%s", forbidden, log)
+		}
+	}
+}
+
+func TestCompactScriptHostedDoltRequireApplicableFailsWithoutServerMaintenance(t *testing.T) {
+	out, _, err := runHostedCompactScript(t, "missing_capability", "GC_DOLT_COMPACT_REQUIRE_APPLICABLE=1")
+	if err == nil {
+		t.Fatalf("hosted compact without server maintenance unexpectedly succeeded:\n%s", out)
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("hosted compact returned non-exit error: %v\n%s", err, out)
+	}
+	if code := exitErr.ExitCode(); code != 2 {
+		t.Fatalf("hosted compact exit code = %d, want 2\n%s", code, out)
+	}
+	if !strings.Contains(out, "compact: not_applicable reason=server_maintenance_unavailable") {
+		t.Fatalf("hosted compact output missing structured not_applicable:\n%s", out)
 	}
 }
 
