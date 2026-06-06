@@ -869,6 +869,61 @@ func TestBdStoreRuntimeUpdateRetriesTransientWriteError(t *testing.T) {
 	}
 }
 
+func TestIsBdTransientWriteErrorClassifiesDoltMaintenanceReadOnly(t *testing.T) {
+	for _, msg := range []string{
+		"exit status 1: DOLT_MAINTENANCE_ACTIVE: database is read only",
+		"exit status 1: database is read only",
+		"exit status 1: database is read-only",
+	} {
+		if !isBdTransientWriteError(errors.New(msg)) {
+			t.Fatalf("isBdTransientWriteError(%q) = false, want true", msg)
+		}
+	}
+	if isBdTransientWriteError(errors.New("write failed: read-only filesystem")) {
+		t.Fatal("read-only filesystem must not be classified as a transient Dolt maintenance error")
+	}
+}
+
+func TestBdStoreRuntimeUpdateRetriesDoltMaintenanceReadOnlyError(t *testing.T) {
+	tracePath := filepath.Join(t.TempDir(), "bd.trace")
+	t.Setenv("GC_BD_TRACE", tracePath)
+	var calls atomic.Int64
+	store := NewBdStore(t.TempDir(), nil).WithContextRunner(func(_ context.Context, _ string, _ string, _ ...string) ([]byte, error) {
+		if calls.Add(1) == 1 {
+			return nil, fmt.Errorf("exit status 1: DOLT_MAINTENANCE_ACTIVE: database is read only")
+		}
+		return []byte(`[]`), nil
+	})
+	policy := RuntimeWritePolicy(WriteClassHotState, "test.runtime-maintenance-retry", "session:gc-1")
+	if err := store.RuntimeUpdate(context.Background(), "gc-1", UpdateOpts{Metadata: map[string]string{"state": "active"}}, policy); err != nil {
+		t.Fatalf("RuntimeUpdate: %v", err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("runtime update calls = %d, want retry success on second attempt", got)
+	}
+	traceBytes, err := os.ReadFile(tracePath)
+	if err != nil {
+		t.Fatalf("read trace: %v", err)
+	}
+	trace := string(traceBytes)
+	for _, want := range []string{
+		"outcome=success",
+		"transient_retries=1",
+		"last_transient_err=",
+	} {
+		if !strings.Contains(trace, want) {
+			t.Fatalf("trace missing %q:\n%s", want, trace)
+		}
+	}
+	if strings.Contains(trace, "outcome=failed") || strings.Contains(trace, "outcome=ambiguous-timeout") {
+		t.Fatalf("trace recorded maintenance retry as degraded:\n%s", trace)
+	}
+	stats := store.RuntimeWriteManagerStats()
+	if stats.Failures != 0 || stats.Timeouts != 0 || stats.BreakerState != RuntimeWriteBreakerClosed {
+		t.Fatalf("runtime writer stats after maintenance retry = %+v, want no failures/timeouts and closed breaker", stats)
+	}
+}
+
 func TestBdStoreRuntimeGetIndexedNotFoundIsNonDegraded(t *testing.T) {
 	var runnerCalls atomic.Int64
 	indexed := &runtimeReadIndexedGetStub{getErr: ErrNotFound}

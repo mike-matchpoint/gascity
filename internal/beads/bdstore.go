@@ -1509,7 +1509,11 @@ func isBdTransientWriteError(err error) bool {
 		return false
 	}
 	msg := err.Error()
+	lower := strings.ToLower(msg)
 	return strings.Contains(msg, "Error 1213 (40001): serialization failure") ||
+		strings.Contains(msg, "DOLT_MAINTENANCE_ACTIVE") ||
+		strings.Contains(lower, "database is read only") ||
+		strings.Contains(lower, "database is read-only") ||
 		strings.Contains(msg, "this transaction conflicts with a committed transaction") ||
 		strings.Contains(msg, "i/o timeout") ||
 		strings.Contains(msg, "invalid connection") ||

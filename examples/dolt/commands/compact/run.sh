@@ -86,7 +86,7 @@
 #                                         skip-and-exit-0 behavior.
 #   GC_DOLT_COMPACT_RETENTION_OLDER_THAN  (hosted only, default: 48h) — closed
 #                                         operational-churn retention window
-#                                         applied before server compaction.
+#                                         applied before compact.
 #   GC_DOLT_COMPACT_RETENTION_MAX_DELETE  (hosted only, default: 200000) —
 #                                         safety cap for retention candidates.
 #   GC_DOLT_COMPACT_RETENTION_DB          (hosted only, default: hq) —
@@ -138,12 +138,15 @@ is_local_dolt_host() {
   return 1
 }
 
-hosted_server_compact=0
+hosted_remote_compact=0
+dolt_maintenance_token=""
+dolt_maintenance_active=0
+dolt_maintenance_anchor_db=""
 
 case "${GC_DOLT_MANAGED_LOCAL:-}" in
   0|false|FALSE|no|NO)
     if [ -n "$gc_dolt_port_input" ] && ! is_local_dolt_host "$gc_dolt_host_input"; then
-      hosted_server_compact=1
+      hosted_remote_compact=1
       GC_DOLT_PORT="$gc_dolt_port_input"
     else
       compact_not_applicable "managed_local_false"
@@ -151,7 +154,7 @@ case "${GC_DOLT_MANAGED_LOCAL:-}" in
     ;;
 esac
 
-if [ "$hosted_server_compact" = "1" ]; then
+if [ "$hosted_remote_compact" = "1" ]; then
   :
 elif [ "${GC_DOLT_MANAGED_LOCAL:-}" = "1" ]; then
   managed_port=$(managed_runtime_port "$DOLT_STATE_FILE" "$DOLT_DATA_DIR" || true)
@@ -167,7 +170,7 @@ elif [ "${GC_DOLT_MANAGED_LOCAL:-}" = "1" ]; then
   fi
 elif [ -n "$gc_dolt_port_input" ]; then
   if ! is_local_dolt_host "$gc_dolt_host_input"; then
-    hosted_server_compact=1
+    hosted_remote_compact=1
     GC_DOLT_PORT="$gc_dolt_port_input"
   else
   managed_port=$(managed_runtime_port "$DOLT_STATE_FILE" "$DOLT_DATA_DIR" || true)
@@ -470,18 +473,44 @@ discover_database_names() {
   fi
 }
 
-# dolt_query — wrapper that runs a single SQL statement against the
-# managed server with the configured port/host/user. Honors the
-# per-call timeout. Output is the raw -r result-format-tsv body.
+maintenance_token_prefix() {
+  [ -n "$dolt_maintenance_token" ] || return 0
+  printf "SET @@SESSION.dolt_maintenance_token = '%s';\n" \
+    "$(sql_quote "$dolt_maintenance_token")"
+}
+
+random_maintenance_token() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32
+    return $?
+  fi
+  if [ -r /dev/urandom ]; then
+    od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
+    return $?
+  fi
+  printf '%s-%s-%s\n' "$$" "$(date +%s)" "$(awk 'BEGIN{srand(); printf "%d", rand() * 1000000000}')"
+}
+
+# dolt_query — wrapper that runs a SQL statement against the configured
+# server. In hosted maintenance mode it sets the token before selecting the
+# database so Dolt does not cache a read-only database wrapper for this client.
 dolt_query() {
   db="$1"
   query="$2"
   export DOLT_CLI_PASSWORD="${GC_DOLT_PASSWORD:-}"
-  run_bounded "$call_timeout" \
-    dolt --no-tls --host "$host" --port "$GC_DOLT_PORT" \
-    --user "$GC_DOLT_USER" \
-    --use-db "$db" \
-    sql -r tabular -q "$query"
+  if [ -n "$dolt_maintenance_token" ]; then
+    run_bounded "$call_timeout" \
+      dolt --no-tls --host "$host" --port "$GC_DOLT_PORT" \
+      --user "$GC_DOLT_USER" \
+      sql -r tabular -q "$(maintenance_token_prefix)USE \`$db\`;
+$query"
+  else
+    run_bounded "$call_timeout" \
+      dolt --no-tls --host "$host" --port "$GC_DOLT_PORT" \
+      --user "$GC_DOLT_USER" \
+      --use-db "$db" \
+      sql -r tabular -q "$query"
+  fi
 }
 
 dolt_query_global() {
@@ -490,7 +519,7 @@ dolt_query_global() {
   run_bounded "$call_timeout" \
     dolt --no-tls --host "$host" --port "$GC_DOLT_PORT" \
     --user "$GC_DOLT_USER" \
-    sql -r tabular -q "$query"
+    sql -r tabular -q "$(maintenance_token_prefix)$query"
 }
 
 tabular_first_column_rows() {
@@ -948,6 +977,7 @@ verify_counts() {
 
 oldgen_has_files() {
   db="$1"
+  [ "$hosted_remote_compact" = "1" ] && return 1
   oldgen_dir="$DOLT_DATA_DIR/$db/.dolt/noms/oldgen"
   [ -d "$oldgen_dir" ] || return 1
   [ -n "$(find "$oldgen_dir" -mindepth 1 -print -quit 2>/dev/null)" ]
@@ -1324,22 +1354,19 @@ hosted_database_list_contains() {
   return 1
 }
 
-run_hosted_server_compact() {
-  db_file="$1"
+only_dbs_contains() {
+  candidate="$1"
+  [ -z "$only_dbs" ] && return 0
+  case ",$only_dbs," in
+    *,"$candidate",*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
-  if [ -n "$only_dbs" ]; then
-    printf 'compact: hosted server-side compact does not support GC_DOLT_COMPACT_ONLY_DBS because the server procedure owns the complete maintenance window\n' >&2
-    return 1
-  fi
-
-  anchor_db=$(sed -n '1p' "$db_file")
-  if [ -z "$anchor_db" ]; then
-    printf 'compact: hosted server-side compact found no user databases\n' >&2
-    return 1
-  fi
-
+hosted_maintenance_capability_check() {
+  anchor_db="$1"
   capability_err=$(mktemp)
-  if ! dolt_query "$anchor_db" "CALL DOLT_MAINTENANCE_STATUS()" >/dev/null 2>"$capability_err"; then
+  if ! dolt_query "$anchor_db" "SET @@SESSION.dolt_maintenance_token = 'capability_probe'; CALL DOLT_MAINTENANCE_STATUS()" >/dev/null 2>"$capability_err"; then
     while IFS= read -r err_line; do
       printf 'compact: hosted maintenance capability check: %s\n' "$err_line" >&2
     done < "$capability_err"
@@ -1347,13 +1374,67 @@ run_hosted_server_compact() {
     compact_not_applicable "server_maintenance_unavailable"
   fi
   rm -f "$capability_err"
+}
+
+enter_hosted_maintenance() {
+  anchor_db="$1"
+  reason=$(sql_quote "gc dolt compact: hosted maintenance")
+  dolt_maintenance_token=$(random_maintenance_token)
+  enter_err=$(mktemp)
+  if ! dolt_query "$anchor_db" "CALL DOLT_MAINTENANCE_ENTER('$reason', '$server_drain_timeout_ms', '$server_max_duration_ms', '$(sql_quote "$dolt_maintenance_token")')" >/dev/null 2>"$enter_err"; then
+    printf 'compact: hosted maintenance enter failed\n' >&2
+    emit_error_file "$anchor_db" "$enter_err"
+    rm -f "$enter_err"
+    dolt_maintenance_token=""
+    return 1
+  fi
+  rm -f "$enter_err"
+  dolt_maintenance_active=1
+  dolt_maintenance_anchor_db="$anchor_db"
+  return 0
+}
+
+exit_hosted_maintenance() {
+  message="$1"
+  [ "$dolt_maintenance_active" = "1" ] || return 0
+  anchor_db="${dolt_maintenance_anchor_db:-}"
+  [ -n "$anchor_db" ] || return 0
+  exit_message=$(sql_quote "$message")
+  exit_err=$(mktemp)
+  if ! dolt_query "$anchor_db" "CALL DOLT_MAINTENANCE_EXIT('$exit_message')" >/dev/null 2>"$exit_err"; then
+    printf 'compact: hosted maintenance exit failed\n' >&2
+    emit_error_file "$anchor_db" "$exit_err"
+    rm -f "$exit_err"
+    return 1
+  fi
+  rm -f "$exit_err"
+  dolt_maintenance_active=0
+  dolt_maintenance_token=""
+  dolt_maintenance_anchor_db=""
+  return 0
+}
+
+run_hosted_maintenance_compact() {
+  db_file="$1"
+
+  anchor_db=$(sed -n '1p' "$db_file")
+  if [ -z "$anchor_db" ]; then
+    printf 'compact: hosted compact found no user databases\n' >&2
+    return 1
+  fi
+
+  hosted_maintenance_capability_check "$anchor_db"
 
   highest_commits=0
   threshold_triggered=0
   db_count=0
   while IFS= read -r db; do
     [ -n "$db" ] || continue
+    only_dbs_contains "$db" || continue
     db_count=$((db_count + 1))
+    if has_compact_marker "$quarantine_dir" "$db" || has_compact_marker "$pending_gc_dir" "$db" || has_compact_marker "$pending_push_dir" "$db"; then
+      threshold_triggered=1
+    fi
     count=$(commit_count "$db") || return 1
     case "$count" in
       ''|*[!0-9]*)
@@ -1374,7 +1455,7 @@ run_hosted_server_compact() {
   fi
   retention_enabled=0
   hosted_retention_candidates=0
-  if hosted_database_list_contains "$db_file" "$retention_db"; then
+  if hosted_database_list_contains "$db_file" "$retention_db" && only_dbs_contains "$retention_db"; then
     hosted_retention_plan "$retention_db" || return 1
     if [ "$hosted_retention_candidates" -gt 0 ]; then
       retention_enabled=1
@@ -1388,42 +1469,46 @@ run_hosted_server_compact() {
   fi
 
   if [ "$threshold_triggered" != "1" ] && [ "$retention_enabled" != "1" ]; then
-    printf 'compact: hosted server_side databases=%s highest_commits=%s below_threshold=%s retention_candidates=0 — skip\n' \
+    printf 'compact: hosted databases=%s highest_commits=%s below_threshold=%s retention_candidates=0 — skip\n' \
       "$db_count" "$highest_commits" "$threshold_commits"
     return 0
   fi
 
   if [ -n "$dry_run" ]; then
-    printf 'compact: hosted server_side databases=%s highest_commits=%s retention_candidates=%s — dry-run (would enter maintenance, prune, compact, full GC)\n' \
+    printf 'compact: hosted databases=%s highest_commits=%s retention_candidates=%s — dry-run (would enter maintenance, prune, flatten, full GC)\n' \
       "$db_count" "$highest_commits" "$hosted_retention_candidates"
     return 0
   fi
 
-  reason=$(sql_quote "gc dolt compact: hosted server-side maintenance")
-  compact_message=$(sql_quote "gc dolt compact: server-side hosted compact")
-  exit_message=$(sql_quote "gc dolt compact completed")
-  sql_tmp=$(mktemp)
-  {
-    printf "CALL DOLT_MAINTENANCE_ENTER('%s', '%s', '%s');\n" \
-      "$reason" "$server_drain_timeout_ms" "$server_max_duration_ms"
-    if [ "$retention_enabled" = "1" ]; then
-      hosted_retention_sql "$retention_db"
-    fi
-    printf "CALL DOLT_SERVER_COMPACT('%s', 'true', '%s', '%s');\n" \
-      "$compact_message" "$server_drain_timeout_ms" "$server_max_duration_ms"
-    printf "CALL DOLT_MAINTENANCE_EXIT('%s');\n" "$exit_message"
-  } > "$sql_tmp"
+  enter_hosted_maintenance "$anchor_db" || return 1
 
-  compact_err=$(mktemp)
-  if ! dolt_query "$anchor_db" "$(cat "$sql_tmp")" >/dev/null 2>"$compact_err"; then
-    printf 'compact: hosted server-side maintenance failed\n' >&2
-    emit_error_file "$anchor_db" "$compact_err"
-    rm -f "$sql_tmp" "$compact_err"
+  if [ "$retention_enabled" = "1" ]; then
+    retention_err=$(mktemp)
+    if ! dolt_query "$retention_db" "$(hosted_retention_sql "$retention_db")" >/dev/null 2>"$retention_err"; then
+      printf 'compact: db=%s hosted retention failed\n' "$retention_db" >&2
+      emit_error_file "$retention_db" "$retention_err"
+      rm -f "$retention_err"
+      return 1
+    fi
+    rm -f "$retention_err"
+  fi
+
+  failed_count=0
+  while IFS= read -r db; do
+    [ -n "$db" ] || continue
+    if ! flatten_database "$db"; then
+      failed_count=$((failed_count + 1))
+    fi
+  done < "$db_file"
+
+  if [ "$failed_count" -gt 0 ]; then
+    printf 'compact: hosted %s database(s) failed compaction\n' "$failed_count" >&2
     return 1
   fi
-  rm -f "$sql_tmp" "$compact_err"
 
-  printf 'compact: hosted server_side=complete databases=%s highest_commits=%s retention_candidates=%s full_gc=true\n' \
+  exit_hosted_maintenance "gc dolt compact completed" || return 1
+
+  printf 'compact: hosted maintenance=complete databases=%s highest_commits=%s retention_candidates=%s full_gc=true\n' \
     "$db_count" "$highest_commits" "$hosted_retention_candidates"
   return 0
 }
@@ -2266,6 +2351,9 @@ flatten_database() {
 
 # shellcheck disable=SC2317
 cleanup() {
+  if [ "${dolt_maintenance_active:-0}" = "1" ]; then
+    exit_hosted_maintenance "gc dolt compact interrupted" >/dev/null 2>&1 || true
+  fi
   if [ "$flock_acquired" = "1" ]; then
     flock -u 9 2>/dev/null || true
     exec 9>&- 2>/dev/null || true
@@ -2416,13 +2504,13 @@ main() {
   fi
 
   _meta_tmp=$(mktemp)
-  if [ "$hosted_server_compact" != "1" ]; then
+  if [ "$hosted_remote_compact" != "1" ]; then
     metadata_files > "$_meta_tmp"
   fi
 
   _db_tmp=$(mktemp)
   _unique_db_tmp=$(mktemp)
-  if [ "$hosted_server_compact" = "1" ]; then
+  if [ "$hosted_remote_compact" = "1" ]; then
     discover_server_database_names > "$_db_tmp"
   else
     discover_database_names > "$_db_tmp"
@@ -2438,8 +2526,8 @@ main() {
     printf '%s\n' "$db" >> "$_unique_db_tmp"
   done < "$_db_tmp"
 
-  if [ "$hosted_server_compact" = "1" ]; then
-    run_hosted_server_compact "$_unique_db_tmp"
+  if [ "$hosted_remote_compact" = "1" ]; then
+    run_hosted_maintenance_compact "$_unique_db_tmp"
     exit $?
   fi
 
