@@ -84,6 +84,17 @@
 #                                         safely apply to the current Dolt
 #                                         runtime. Default keeps historical
 #                                         skip-and-exit-0 behavior.
+#   GC_DOLT_COMPACT_RETENTION_OLDER_THAN  (hosted only, default: 48h) — closed
+#                                         operational-churn retention window
+#                                         applied before server compaction.
+#   GC_DOLT_COMPACT_RETENTION_MAX_DELETE  (hosted only, default: 200000) —
+#                                         safety cap for retention candidates.
+#   GC_DOLT_COMPACT_RETENTION_DB          (hosted only, default: hq) —
+#                                         database that owns bead retention.
+#   GC_DOLT_COMPACT_DRAIN_TIMEOUT_MS      (hosted only, default: 120000) —
+#                                         server maintenance write-drain bound.
+#   GC_DOLT_COMPACT_MAX_DURATION_MS       (hosted only, default: 3600000) —
+#                                         server maintenance lease bound.
 #   GC_DOLT_REFSPEC_<DB_UPPER>            (optional) — compact remote push
 #                                         refspec in <local>:<remote> form.
 #                                         DB name is uppercased with '-'
@@ -115,13 +126,34 @@ compact_not_applicable() {
   esac
 }
 
+is_local_dolt_host() {
+  case "${1:-}" in
+    ''|127.0.0.1|localhost|0.0.0.0|::1|::|'[::1]'|'[::]')
+      return 0
+      ;;
+    127.*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+hosted_server_compact=0
+
 case "${GC_DOLT_MANAGED_LOCAL:-}" in
   0|false|FALSE|no|NO)
-    compact_not_applicable "managed_local_false"
+    if [ -n "$gc_dolt_port_input" ] && ! is_local_dolt_host "$gc_dolt_host_input"; then
+      hosted_server_compact=1
+      GC_DOLT_PORT="$gc_dolt_port_input"
+    else
+      compact_not_applicable "managed_local_false"
+    fi
     ;;
 esac
 
-if [ "${GC_DOLT_MANAGED_LOCAL:-}" = "1" ]; then
+if [ "$hosted_server_compact" = "1" ]; then
+  :
+elif [ "${GC_DOLT_MANAGED_LOCAL:-}" = "1" ]; then
   managed_port=$(managed_runtime_port "$DOLT_STATE_FILE" "$DOLT_DATA_DIR" || true)
   if [ -n "$managed_port" ]; then
     if [ -n "$gc_dolt_port_input" ] && [ "$gc_dolt_port_input" != "$managed_port" ]; then
@@ -134,18 +166,16 @@ if [ "${GC_DOLT_MANAGED_LOCAL:-}" = "1" ]; then
     GC_DOLT_PORT="$gc_dolt_port_input"
   fi
 elif [ -n "$gc_dolt_port_input" ]; then
-  case "$gc_dolt_host_input" in
-    ''|127.0.0.1|localhost|0.0.0.0|::1|::|'[::1]'|'[::]')
-      ;;
-    *)
-      compact_not_applicable "non_local_host"
-      ;;
-  esac
+  if ! is_local_dolt_host "$gc_dolt_host_input"; then
+    hosted_server_compact=1
+    GC_DOLT_PORT="$gc_dolt_port_input"
+  else
   managed_port=$(managed_runtime_port "$DOLT_STATE_FILE" "$DOLT_DATA_DIR" || true)
   if [ -z "$managed_port" ] || [ "$gc_dolt_port_input" != "$managed_port" ]; then
     compact_not_applicable "port_mismatch"
   fi
   GC_DOLT_PORT="$managed_port"
+  fi
 elif [ -z "$gc_dolt_port_input" ]; then
   managed_port=$(managed_runtime_port "$DOLT_STATE_FILE" "$DOLT_DATA_DIR" || true)
   if [ -z "$managed_port" ]; then
@@ -165,6 +195,10 @@ pending_push_max_age_secs="${GC_DOLT_COMPACT_PENDING_PUSH_MAX_AGE_SECS:-172800}"
 compact_remote="${GC_DOLT_COMPACT_REMOTE:-}"
 dry_run="${GC_DOLT_COMPACT_DRY_RUN:-}"
 only_dbs="${GC_DOLT_COMPACT_ONLY_DBS:-}"
+server_retention_older_than="${GC_DOLT_COMPACT_RETENTION_OLDER_THAN:-48h}"
+server_retention_max_delete="${GC_DOLT_COMPACT_RETENTION_MAX_DELETE:-${GC_DOLT_RETENTION_SWEEP_MAX_DELETE:-200000}}"
+server_drain_timeout_ms="${GC_DOLT_COMPACT_DRAIN_TIMEOUT_MS:-120000}"
+server_max_duration_ms="${GC_DOLT_COMPACT_MAX_DURATION_MS:-3600000}"
 
 case "$threshold_commits" in
   ''|*[!0-9]*)
@@ -194,6 +228,30 @@ case "$pending_push_max_age_secs" in
   ''|*[!0-9]*)
     printf 'compact: invalid GC_DOLT_COMPACT_PENDING_PUSH_MAX_AGE_SECS=%s (must be a non-negative integer)\n' \
       "$pending_push_max_age_secs" >&2
+    exit 2
+    ;;
+esac
+
+case "$server_retention_max_delete" in
+  ''|*[!0-9]*)
+    printf 'compact: invalid GC_DOLT_COMPACT_RETENTION_MAX_DELETE=%s (must be a non-negative integer)\n' \
+      "$server_retention_max_delete" >&2
+    exit 2
+    ;;
+esac
+
+case "$server_drain_timeout_ms" in
+  ''|*[!0-9]*|0)
+    printf 'compact: invalid GC_DOLT_COMPACT_DRAIN_TIMEOUT_MS=%s (must be a positive integer)\n' \
+      "$server_drain_timeout_ms" >&2
+    exit 2
+    ;;
+esac
+
+case "$server_max_duration_ms" in
+  ''|*[!0-9]*|0)
+    printf 'compact: invalid GC_DOLT_COMPACT_MAX_DURATION_MS=%s (must be a positive integer)\n' \
+      "$server_max_duration_ms" >&2
     exit 2
     ;;
 esac
@@ -420,10 +478,46 @@ dolt_query() {
   query="$2"
   export DOLT_CLI_PASSWORD="${GC_DOLT_PASSWORD:-}"
   run_bounded "$call_timeout" \
-    dolt --host "$host" --port "$GC_DOLT_PORT" \
-    --user "$GC_DOLT_USER" --no-tls \
+    dolt --no-tls --host "$host" --port "$GC_DOLT_PORT" \
+    --user "$GC_DOLT_USER" \
     --use-db "$db" \
     sql -r tabular -q "$query"
+}
+
+dolt_query_global() {
+  query="$1"
+  export DOLT_CLI_PASSWORD="${GC_DOLT_PASSWORD:-}"
+  run_bounded "$call_timeout" \
+    dolt --no-tls --host "$host" --port "$GC_DOLT_PORT" \
+    --user "$GC_DOLT_USER" \
+    sql -r tabular -q "$query"
+}
+
+tabular_first_column_rows() {
+  awk 'NR>=4 && /^\|/ {
+    line=$0
+    sub(/^\|[[:space:]]*/, "", line)
+    sub(/[[:space:]]*\|.*$/, "", line)
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+    if (line != "") print line
+  }'
+}
+
+discover_server_database_names() {
+  out_tmp=$(mktemp)
+  err_tmp=$(mktemp)
+  if ! dolt_query_global "SHOW DATABASES" > "$out_tmp" 2>"$err_tmp"; then
+    printf 'compact: hosted database discovery failed\n' >&2
+    while IFS= read -r err_line; do
+      printf 'compact: %s\n' "$err_line" >&2
+    done < "$err_tmp"
+    rm -f "$out_tmp" "$err_tmp"
+    return 1
+  fi
+  tabular_first_column_rows < "$out_tmp" | while IFS= read -r db; do
+    emit_database_name "$db"
+  done
+  rm -f "$out_tmp" "$err_tmp"
 }
 
 emit_error_file() {
@@ -649,8 +743,8 @@ push_remote_refspec() {
   fi
   export DOLT_CLI_PASSWORD="${GC_DOLT_PASSWORD:-}"
   run_bounded "$push_timeout" \
-    dolt --host "$host" --port "$GC_DOLT_PORT" \
-    --user "$GC_DOLT_USER" --no-tls \
+    dolt --no-tls --host "$host" --port "$GC_DOLT_PORT" \
+    --user "$GC_DOLT_USER" \
     --use-db "$db" \
     sql -r tabular -q "CALL DOLT_PUSH('--force', '--set-upstream', '$remote', '$refspec_arg')"
 }
@@ -1083,6 +1177,238 @@ run_full_gc() {
 
   printf 'compact: db=%s %s duration=%ss — ok\n' \
     "$db" "$success_prefix" "$elapsed"
+  return 0
+}
+
+sql_quote() {
+  printf '%s' "$1" | sed "s/'/''/g"
+}
+
+hosted_retention_cutoff_utc() {
+  older_than_value="$1"
+  if ! command -v python3 >/dev/null 2>&1; then
+    printf 'compact: hosted retention requires python3\n' >&2
+    return 1
+  fi
+  python3 - "$older_than_value" <<'PY'
+from datetime import datetime, timedelta, timezone
+import re
+import sys
+
+value = sys.argv[1].strip()
+match = re.fullmatch(r"([1-9][0-9]*)([smhdw]?)", value)
+if not match:
+    raise SystemExit("invalid retention window")
+amount = int(match.group(1))
+unit = match.group(2) or "d"
+seconds = {
+    "s": 1,
+    "m": 60,
+    "h": 3600,
+    "d": 86400,
+    "w": 604800,
+}[unit] * amount
+cutoff = datetime.now(timezone.utc) - timedelta(seconds=seconds)
+print(cutoff.strftime("%Y-%m-%d %H:%M:%S"))
+PY
+}
+
+hosted_retention_plan() {
+  db="$1"
+  hosted_retention_candidates=0
+  hosted_retention_issue_candidates=0
+  hosted_retention_wisp_candidates=0
+  hosted_retention_cutoff=""
+  hosted_retention_issue_predicate=""
+  hosted_retention_wisp_predicate=""
+
+  required_schema_count=32
+  schema_count=$(query_single_cell "$db" "retention schema validation query failed" \
+    "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND CONCAT(table_name,'.',column_name) IN ('issues.id','issues.status','issues.metadata','issues.closed_at','issues.updated_at','issues.created_at','issues.pinned','labels.issue_id','labels.label','comments.issue_id','events.issue_id','issue_snapshots.issue_id','compaction_snapshots.issue_id','dependencies.issue_id','dependencies.depends_on_issue_id','dependencies.depends_on_wisp_id','child_counters.parent_id','wisps.id','wisps.status','wisps.metadata','wisps.closed_at','wisps.updated_at','wisps.created_at','wisps.pinned','wisp_labels.issue_id','wisp_labels.label','wisp_comments.issue_id','wisp_events.issue_id','wisp_dependencies.issue_id','wisp_dependencies.depends_on_issue_id','wisp_dependencies.depends_on_wisp_id','wisp_child_counters.parent_id');") || return 1
+  if [ "$schema_count" != "$required_schema_count" ]; then
+    printf 'compact: db=%s retention schema mismatch; saw %s/%s required columns\n' \
+      "$db" "$schema_count" "$required_schema_count" >&2
+    return 1
+  fi
+
+  hosted_retention_cutoff=$(hosted_retention_cutoff_utc "$server_retention_older_than") || {
+    printf 'compact: invalid GC_DOLT_COMPACT_RETENTION_OLDER_THAN=%s\n' "$server_retention_older_than" >&2
+    return 1
+  }
+
+  hosted_retention_issue_predicate="i.status = 'closed' AND COALESCE(i.pinned, 0) = 0 AND COALESCE(i.closed_at, i.updated_at, i.created_at) < '$hosted_retention_cutoff' AND (JSON_UNQUOTE(JSON_EXTRACT(COALESCE(i.metadata, JSON_OBJECT()), '$.\"gc.retention_class\"')) = 'operational_churn' OR EXISTS (SELECT 1 FROM labels l WHERE l.issue_id = i.id AND (l.label = 'order-tracking' OR l.label LIKE 'order-run:%'))) AND NOT EXISTS (SELECT 1 FROM dependencies d WHERE d.issue_id = i.id OR d.depends_on_issue_id = i.id) AND NOT EXISTS (SELECT 1 FROM issues child_i WHERE child_i.id LIKE CONCAT(i.id, '.%') AND child_i.status <> 'closed') AND NOT EXISTS (SELECT 1 FROM wisps child_w WHERE child_w.id LIKE CONCAT(i.id, '.%') AND child_w.status <> 'closed')"
+  hosted_retention_wisp_predicate="w.status = 'closed' AND COALESCE(w.pinned, 0) = 0 AND COALESCE(w.closed_at, w.updated_at, w.created_at) < '$hosted_retention_cutoff' AND (JSON_UNQUOTE(JSON_EXTRACT(COALESCE(w.metadata, JSON_OBJECT()), '$.\"gc.retention_class\"')) = 'operational_churn' OR EXISTS (SELECT 1 FROM wisp_labels l WHERE l.issue_id = w.id AND (l.label = 'order-tracking' OR l.label LIKE 'order-run:%'))) AND NOT EXISTS (SELECT 1 FROM wisp_dependencies d WHERE d.issue_id = w.id OR d.depends_on_wisp_id = w.id) AND NOT EXISTS (SELECT 1 FROM dependencies d WHERE d.depends_on_wisp_id = w.id) AND NOT EXISTS (SELECT 1 FROM issues child_i WHERE child_i.id LIKE CONCAT(w.id, '.%') AND child_i.status <> 'closed') AND NOT EXISTS (SELECT 1 FROM wisps child_w WHERE child_w.id LIKE CONCAT(w.id, '.%') AND child_w.status <> 'closed')"
+
+  hosted_retention_issue_candidates=$(query_single_cell "$db" "retention issue candidate count failed" \
+    "SELECT COUNT(*) FROM issues i WHERE $hosted_retention_issue_predicate") || return 1
+  hosted_retention_wisp_candidates=$(query_single_cell "$db" "retention wisp candidate count failed" \
+    "SELECT COUNT(*) FROM wisps w WHERE $hosted_retention_wisp_predicate") || return 1
+
+  case "$hosted_retention_issue_candidates" in
+    ''|*[!0-9]*)
+      printf 'compact: db=%s retention issue candidate count returned invalid value=%s\n' \
+        "$db" "$hosted_retention_issue_candidates" >&2
+      return 1
+      ;;
+  esac
+  case "$hosted_retention_wisp_candidates" in
+    ''|*[!0-9]*)
+      printf 'compact: db=%s retention wisp candidate count returned invalid value=%s\n' \
+        "$db" "$hosted_retention_wisp_candidates" >&2
+      return 1
+      ;;
+  esac
+
+  hosted_retention_candidates=$((hosted_retention_issue_candidates + hosted_retention_wisp_candidates))
+  if [ "$hosted_retention_candidates" -gt "$server_retention_max_delete" ]; then
+    printf 'compact: db=%s retention candidates=%s exceeds max_delete=%s\n' \
+      "$db" "$hosted_retention_candidates" "$server_retention_max_delete" >&2
+    return 1
+  fi
+  return 0
+}
+
+hosted_retention_sql() {
+  db="$1"
+  message=$(sql_quote "gc dolt compact: prune operational_churn older than $server_retention_older_than")
+  cat <<SQL
+USE \`$db\`;
+START TRANSACTION;
+CREATE TEMPORARY TABLE gc_retention_sweep_issue_ids AS
+  SELECT i.id FROM issues i WHERE $hosted_retention_issue_predicate;
+CREATE TEMPORARY TABLE gc_retention_sweep_wisp_ids AS
+  SELECT w.id FROM wisps w WHERE $hosted_retention_wisp_predicate;
+DELETE FROM labels WHERE issue_id IN (SELECT id FROM gc_retention_sweep_issue_ids);
+DELETE FROM comments WHERE issue_id IN (SELECT id FROM gc_retention_sweep_issue_ids);
+DELETE FROM events WHERE issue_id IN (SELECT id FROM gc_retention_sweep_issue_ids);
+DELETE FROM issue_snapshots WHERE issue_id IN (SELECT id FROM gc_retention_sweep_issue_ids);
+DELETE FROM compaction_snapshots WHERE issue_id IN (SELECT id FROM gc_retention_sweep_issue_ids);
+DELETE FROM child_counters WHERE parent_id IN (SELECT id FROM gc_retention_sweep_issue_ids);
+DELETE FROM dependencies WHERE issue_id IN (SELECT id FROM gc_retention_sweep_issue_ids) OR depends_on_issue_id IN (SELECT id FROM gc_retention_sweep_issue_ids);
+DELETE FROM wisp_dependencies WHERE depends_on_issue_id IN (SELECT id FROM gc_retention_sweep_issue_ids);
+DELETE FROM issues WHERE id IN (SELECT id FROM gc_retention_sweep_issue_ids);
+DELETE FROM wisp_labels WHERE issue_id IN (SELECT id FROM gc_retention_sweep_wisp_ids);
+DELETE FROM wisp_comments WHERE issue_id IN (SELECT id FROM gc_retention_sweep_wisp_ids);
+DELETE FROM wisp_events WHERE issue_id IN (SELECT id FROM gc_retention_sweep_wisp_ids);
+DELETE FROM wisp_child_counters WHERE parent_id IN (SELECT id FROM gc_retention_sweep_wisp_ids);
+DELETE FROM wisp_dependencies WHERE issue_id IN (SELECT id FROM gc_retention_sweep_wisp_ids) OR depends_on_wisp_id IN (SELECT id FROM gc_retention_sweep_wisp_ids);
+DELETE FROM dependencies WHERE depends_on_wisp_id IN (SELECT id FROM gc_retention_sweep_wisp_ids);
+DELETE FROM wisps WHERE id IN (SELECT id FROM gc_retention_sweep_wisp_ids);
+COMMIT;
+CALL DOLT_COMMIT('-Am', '$message', '--skip-empty');
+SQL
+}
+
+hosted_database_list_contains() {
+  db_file="$1"
+  needle="$2"
+  while IFS= read -r listed; do
+    [ "$listed" = "$needle" ] && return 0
+  done < "$db_file"
+  return 1
+}
+
+run_hosted_server_compact() {
+  db_file="$1"
+
+  if [ -n "$only_dbs" ]; then
+    printf 'compact: hosted server-side compact does not support GC_DOLT_COMPACT_ONLY_DBS because the server procedure owns the complete maintenance window\n' >&2
+    return 1
+  fi
+
+  anchor_db=$(sed -n '1p' "$db_file")
+  if [ -z "$anchor_db" ]; then
+    printf 'compact: hosted server-side compact found no user databases\n' >&2
+    return 1
+  fi
+
+  capability_err=$(mktemp)
+  if ! dolt_query "$anchor_db" "CALL DOLT_MAINTENANCE_STATUS()" >/dev/null 2>"$capability_err"; then
+    while IFS= read -r err_line; do
+      printf 'compact: hosted maintenance capability check: %s\n' "$err_line" >&2
+    done < "$capability_err"
+    rm -f "$capability_err"
+    compact_not_applicable "server_maintenance_unavailable"
+  fi
+  rm -f "$capability_err"
+
+  highest_commits=0
+  threshold_triggered=0
+  db_count=0
+  while IFS= read -r db; do
+    [ -n "$db" ] || continue
+    db_count=$((db_count + 1))
+    count=$(commit_count "$db") || return 1
+    case "$count" in
+      ''|*[!0-9]*)
+        printf 'compact: db=%s commit count probe returned invalid value=%s\n' "$db" "$count" >&2
+        return 1
+        ;;
+    esac
+    [ "$count" -gt "$highest_commits" ] && highest_commits="$count"
+    if [ "$count" -ge "$threshold_commits" ]; then
+      threshold_triggered=1
+    fi
+  done < "$db_file"
+
+  retention_db="${GC_DOLT_COMPACT_RETENTION_DB:-hq}"
+  if ! valid_database_name "$retention_db"; then
+    printf 'compact: invalid GC_DOLT_COMPACT_RETENTION_DB=%s\n' "$retention_db" >&2
+    return 1
+  fi
+  retention_enabled=0
+  hosted_retention_candidates=0
+  if hosted_database_list_contains "$db_file" "$retention_db"; then
+    hosted_retention_plan "$retention_db" || return 1
+    if [ "$hosted_retention_candidates" -gt 0 ]; then
+      retention_enabled=1
+    fi
+    printf 'compact: db=%s retention_candidates=%s issues=%s wisps=%s older_than=%s\n' \
+      "$retention_db" "$hosted_retention_candidates" \
+      "$hosted_retention_issue_candidates" "$hosted_retention_wisp_candidates" \
+      "$server_retention_older_than"
+  else
+    printf 'compact: db=%s retention database not present — skip retention\n' "$retention_db"
+  fi
+
+  if [ "$threshold_triggered" != "1" ] && [ "$retention_enabled" != "1" ]; then
+    printf 'compact: hosted server_side databases=%s highest_commits=%s below_threshold=%s retention_candidates=0 — skip\n' \
+      "$db_count" "$highest_commits" "$threshold_commits"
+    return 0
+  fi
+
+  if [ -n "$dry_run" ]; then
+    printf 'compact: hosted server_side databases=%s highest_commits=%s retention_candidates=%s — dry-run (would enter maintenance, prune, compact, full GC)\n' \
+      "$db_count" "$highest_commits" "$hosted_retention_candidates"
+    return 0
+  fi
+
+  reason=$(sql_quote "gc dolt compact: hosted server-side maintenance")
+  compact_message=$(sql_quote "gc dolt compact: server-side hosted compact")
+  exit_message=$(sql_quote "gc dolt compact completed")
+  sql_tmp=$(mktemp)
+  {
+    printf "CALL DOLT_MAINTENANCE_ENTER('%s', '%s', '%s');\n" \
+      "$reason" "$server_drain_timeout_ms" "$server_max_duration_ms"
+    if [ "$retention_enabled" = "1" ]; then
+      hosted_retention_sql "$retention_db"
+    fi
+    printf "CALL DOLT_SERVER_COMPACT('%s', 'true', '%s', '%s');\n" \
+      "$compact_message" "$server_drain_timeout_ms" "$server_max_duration_ms"
+    printf "CALL DOLT_MAINTENANCE_EXIT('%s');\n" "$exit_message"
+  } > "$sql_tmp"
+
+  compact_err=$(mktemp)
+  if ! dolt_query "$anchor_db" "$(cat "$sql_tmp")" >/dev/null 2>"$compact_err"; then
+    printf 'compact: hosted server-side maintenance failed\n' >&2
+    emit_error_file "$anchor_db" "$compact_err"
+    rm -f "$sql_tmp" "$compact_err"
+    return 1
+  fi
+  rm -f "$sql_tmp" "$compact_err"
+
+  printf 'compact: hosted server_side=complete databases=%s highest_commits=%s retention_candidates=%s full_gc=true\n' \
+    "$db_count" "$highest_commits" "$hosted_retention_candidates"
   return 0
 }
 
@@ -2074,11 +2400,17 @@ main() {
   fi
 
   _meta_tmp=$(mktemp)
-  metadata_files > "$_meta_tmp"
+  if [ "$hosted_server_compact" != "1" ]; then
+    metadata_files > "$_meta_tmp"
+  fi
 
   _db_tmp=$(mktemp)
   _unique_db_tmp=$(mktemp)
-  discover_database_names > "$_db_tmp"
+  if [ "$hosted_server_compact" = "1" ]; then
+    discover_server_database_names > "$_db_tmp"
+  else
+    discover_database_names > "$_db_tmp"
+  fi
 
   seen_dbs=""
   while IFS= read -r db; do
@@ -2089,6 +2421,11 @@ main() {
     seen_dbs="$seen_dbs $db"
     printf '%s\n' "$db" >> "$_unique_db_tmp"
   done < "$_db_tmp"
+
+  if [ "$hosted_server_compact" = "1" ]; then
+    run_hosted_server_compact "$_unique_db_tmp"
+    exit $?
+  fi
 
   failed_count=0
   while IFS= read -r db; do
