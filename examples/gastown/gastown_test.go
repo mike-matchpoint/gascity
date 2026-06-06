@@ -3022,6 +3022,25 @@ func TestGastownCodegenSupportOrdersAreCityScoped(t *testing.T) {
 	}
 }
 
+func TestMayorHeartbeatChecklistIncludesHoldingReleaseScan(t *testing.T) {
+	scriptPath := filepath.Join(exampleDir(), "packs", "gastown", "assets", "scripts", "mayor-heartbeat.sh")
+	data, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatalf("reading mayor heartbeat script: %v", err)
+	}
+	body := string(data)
+	for _, want := range []string{
+		"HOLDING release",
+		"scan open HOLDING placeholder beads",
+		"dependent task has already been fully implemented",
+		"close the HOLDING",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("mayor heartbeat checklist missing %q", want)
+		}
+	}
+}
+
 func TestAllPromptTemplatesExist(t *testing.T) {
 	var count int
 	for _, a := range discoverPackAgents(t, filepath.Join("packs", "gastown")) {

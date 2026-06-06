@@ -1,8 +1,9 @@
 # Mayor heartbeat — every 30 minutes, take a cheap mechanical pulse of the
 # city, then UNCONDITIONALLY nudge the mayor to run a FULL all-agent wedge scan
 # and resolve whatever it finds. The nudge carries a standing checklist that
-# walks every agent (controller, cartographer, debugger, refinery, polecat
-# dispatch, sessions, orphaned in_progress work).
+# walks every agent plus stale release gates (controller, cartographer, HOLDING
+# placeholders, debugger, refinery, polecat dispatch, sessions, orphaned
+# in_progress work).
 #
 # WHY UNCONDITIONAL: the old version woke the mayor only on unread mail or
 # Dolt-down and stayed silent on clean ticks. That missed SILENT wedges that
@@ -26,7 +27,7 @@
 # controller is what fires it). Controller liveness is the machine-level
 # supervisor's responsibility, not this heartbeat's.
 [order]
-description = "Mayor wedge-sweep heartbeat — every 30m UNCONDITIONALLY wake the mayor for a full all-agent wedge scan + resolve"
+description = "Mayor wedge-sweep heartbeat — every 30m UNCONDITIONALLY wake the mayor for a full all-agent wedge + HOLDING release scan"
 trigger = "cooldown"
 scope = "city"
 interval = "30m"
