@@ -579,7 +579,23 @@ query_single_cell() {
     rm -f "$out_tmp" "$err_tmp"
     return 1
   fi
-  awk 'NR==2 {sub(/\r$/, ""); print; exit}' "$out_tmp"
+  # Scalar compact probes use CSV because the hosted maintenance path prepends
+  # session setup statements, which shift fixed tabular line numbers. Keep this
+  # helper scoped to constrained scalar values: counts, hashes, branch names,
+  # and remote names. It is not a general CSV/text extractor.
+  awk '
+    !seen_header && /^[[:space:]]*$/ { next }
+    !seen_header && /^Enter password:/ { next }
+    !seen_header {
+      seen_header = 1
+      next
+    }
+    {
+      sub(/\r$/, "")
+      print
+      exit
+    }
+  ' "$out_tmp"
   rm -f "$out_tmp" "$err_tmp"
 }
 

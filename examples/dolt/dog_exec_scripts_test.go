@@ -960,6 +960,7 @@ set_head() {
 }
 print_cell() {
   if [ "$format" = "csv" ]; then
+    printf '\n'
     printf 'value\n'
     printf '%%s\n' "$1"
     return 0
