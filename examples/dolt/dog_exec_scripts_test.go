@@ -923,7 +923,26 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+if [ -z "$db" ]; then
+  db_part="${query#*USE }"
+  if [ "$db_part" != "$query" ]; then
+    db_part="${db_part%%;*}"
+    db_part="${db_part#?}"
+    db="${db_part%%?}"
+  fi
+fi
 printf 'db=%%s query=%%s\n' "$db" "$query" >> "$log"
+state_file="$log.$db.state"
+current_head() {
+  if [ -f "$state_file" ]; then
+    cat "$state_file"
+  else
+    printf 'headcommit'
+  fi
+}
+set_head() {
+  printf '%%s\n' "$1" > "$state_file"
+}
 print_cell() {
   printf '+-------+\n'
   printf '| value |\n'
@@ -950,6 +969,12 @@ case "$query" in
       exit 25
     fi
     print_cell false
+    exit 0
+    ;;
+  *"CALL DOLT_MAINTENANCE_ENTER"*)
+    exit 0
+    ;;
+  *"CALL DOLT_MAINTENANCE_EXIT"*)
     exit 0
     ;;
   *"SELECT COUNT(*) FROM (SELECT 1 FROM dolt_log"*)
@@ -980,14 +1005,74 @@ case "$query" in
     fi
     exit 0
     ;;
-  *"CALL DOLT_MAINTENANCE_ENTER"*DOLT_SERVER_COMPACT*DOLT_MAINTENANCE_EXIT*)
+  *"CREATE TEMPORARY TABLE gc_retention_sweep_issue_ids"*)
     if [ "$query" != "${query#*gc_retention_sweep_issue_ids}" ] && [ "$query" != "${query#*DELETE FROM issues}" ]; then
       exit 0
     fi
     if [ "$mode" = "no_retention_candidates" ]; then
       exit 0
     fi
-    printf 'hosted compact query missing retention delete SQL\n' >&2
+    printf 'hosted retention query missing retention delete SQL\n' >&2
+    exit 64
+    ;;
+  *"SELECT commit_hash FROM dolt_log ORDER BY date ASC LIMIT 1"*)
+    print_cell rootcommit
+    exit 0
+    ;;
+  *"SELECT commit_hash FROM dolt_log ORDER BY date DESC LIMIT 1"*)
+    print_cell "$(current_head)"
+    exit 0
+    ;;
+  *"information_schema.tables"*)
+    print_cell beads
+    exit 0
+    ;;
+  *"DOLT_HASHOF_DB()"*)
+    print_cell hash-hq
+    exit 0
+    ;;
+  *"DOLT_HASHOF_TABLE('beads')"*)
+    print_cell hash-beads
+    exit 0
+    ;;
+  *"SELECT COUNT(*) FROM"*"beads"*)
+    print_cell 10
+    exit 0
+    ;;
+  *"DOLT_RESET('--soft', 'rootcommit')"*)
+    set_head compactcommit
+    exit 0
+    ;;
+  *"DOLT_GC('--full')"*)
+    exit 0
+    ;;
+  *"SELECT COUNT(*) FROM dolt_remotes"*)
+    print_cell 0
+    exit 0
+    ;;
+  *"SELECT name FROM dolt_remotes"*)
+    exit 0
+    ;;
+  *"SELECT active_branch()"*)
+    print_cell main
+    exit 0
+    ;;
+  *"SELECT hash FROM dolt_remote_branches"*)
+    print_cell ""
+    exit 0
+    ;;
+  *"SELECT COUNT(*) FROM dolt_log WHERE commit_hash"*)
+    print_cell 0
+    exit 0
+    ;;
+  *"DOLT_FETCH"*)
+    exit 0
+    ;;
+  *"DOLT_PUSH"*)
+    exit 0
+    ;;
+  *"DOLT_SERVER_COMPACT"*)
+    printf 'DOLT_SERVER_COMPACT must not be called\n' >&2
     exit 64
     ;;
 esac
@@ -1007,14 +1092,14 @@ func TestCompactScriptExternalDoltDefaultIsStructuredNoop(t *testing.T) {
 	}
 }
 
-func TestCompactScriptHostedDoltRunsServerSideMaintenance(t *testing.T) {
+func TestCompactScriptHostedDoltRunsMaintenanceFlatten(t *testing.T) {
 	out, logPath, err := runHostedCompactScript(t, "success")
 	if err != nil {
 		t.Fatalf("hosted compact failed: %v\n%s", err, out)
 	}
 	for _, want := range []string{
 		"retention_candidates=3",
-		"hosted server_side=complete",
+		"hosted maintenance=complete",
 		"retention_candidates=3",
 	} {
 		if !strings.Contains(out, want) {
@@ -1035,7 +1120,10 @@ func TestCompactScriptHostedDoltRunsServerSideMaintenance(t *testing.T) {
 		"CREATE TEMPORARY TABLE gc_retention_sweep_issue_ids",
 		"DELETE FROM issues",
 		"CALL DOLT_COMMIT('-Am', 'gc dolt compact: prune operational_churn older than 48h', '--skip-empty')",
-		"CALL DOLT_SERVER_COMPACT",
+		"SET @@SESSION.dolt_maintenance_token",
+		"CALL DOLT_RESET('--soft', 'rootcommit')",
+		"CALL DOLT_COMMIT('-Am', 'compaction: flatten history')",
+		"CALL DOLT_GC('--full')",
 		"CALL DOLT_MAINTENANCE_EXIT",
 	} {
 		if !strings.Contains(log, want) {
@@ -1043,13 +1131,12 @@ func TestCompactScriptHostedDoltRunsServerSideMaintenance(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{
-		"DOLT_RESET",
-		"DOLT_GC('--full')",
+		"CALL DOLT_SERVER_COMPACT",
 		"SELECT COUNT(*) FROM issues i WHERE",
 		"SELECT COUNT(*) FROM wisps w WHERE",
 	} {
 		if strings.Contains(log, forbidden) {
-			t.Fatalf("hosted compact must use server-side procedure, found %q:\n%s", forbidden, log)
+			t.Fatalf("hosted compact must not use removed server procedure, found %q:\n%s", forbidden, log)
 		}
 	}
 }

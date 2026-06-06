@@ -774,12 +774,25 @@ exit 2
 			Timeout  bool `json:"timeout"`
 			ExitCode int  `json:"exit_code"`
 		} `json:"real_query"`
+		Databases []struct {
+			Name    string `json:"name"`
+			Commits int    `json:"commits"`
+		} `json:"databases"`
+		Storage struct {
+			NomsBytesVisible bool `json:"noms_bytes_visible"`
+		} `json:"storage"`
 	}
 	if err := json.Unmarshal(out, &report); err != nil {
 		t.Fatalf("health.sh --json returned invalid JSON: %v\n%s", err, out)
 	}
 	if !report.RealQuery.Enabled || !report.RealQuery.OK || report.RealQuery.Timeout || report.RealQuery.ExitCode != 0 {
 		t.Fatalf("real_query = %+v, want enabled ok without timeout:\n%s", report.RealQuery, out)
+	}
+	if len(report.Databases) != 1 || report.Databases[0].Name != "hq" || report.Databases[0].Commits != 7 {
+		t.Fatalf("databases = %+v, want remote hq commit count:\n%s", report.Databases, out)
+	}
+	if report.Storage.NomsBytesVisible {
+		t.Fatalf("storage.noms_bytes_visible = true, want false for remote health without local noms path:\n%s", out)
 	}
 	data, err := os.ReadFile(gcLog)
 	if err != nil {

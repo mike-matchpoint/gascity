@@ -196,8 +196,100 @@ func TestDoltHealthCheckFailsSlowRepresentativeQuery(t *testing.T) {
 	if err == nil {
 		t.Fatalf("health-check unexpectedly succeeded:\n%s", out)
 	}
-	if !strings.Contains(string(out), "representative query latency") {
+	if !strings.Contains(string(out), "Dolt representative query latency 4500ms exceeded threshold 3000ms") {
 		t.Fatalf("health-check output missing representative query threshold:\n%s", out)
+	}
+	if strings.Contains(string(out), "Dolt SELECT 1 latency") {
+		t.Fatalf("health-check blamed SELECT 1 instead of representative query:\n%s", out)
+	}
+}
+
+func TestDoltHealthCheckFailsCommitThresholdWhenPingAndRealQueryHealthy(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not installed; skipping nested JSON threshold check")
+	}
+	root := repoRoot(t)
+	script := filepath.Join(root, "commands", "health-check", "run.sh")
+	input := `{
+  "server": {
+    "running": true,
+    "reachable": true,
+    "pid": 123,
+    "port": 3311,
+    "latency_ms": 12,
+    "ping_latency_ms": 12
+  },
+  "real_query": {
+    "enabled": true,
+    "ok": true,
+    "timeout": false,
+    "latency_ms": 42,
+    "exit_code": 0
+  },
+  "databases": [
+    {"name": "hq", "commits": 412000, "open_beads": 17}
+  ],
+  "storage": {
+    "noms_bytes_visible": false,
+    "noms_bytes_total": 0
+  }
+}`
+
+	cmd := exec.Command("sh", script)
+	cmd.Env = append(filteredEnv(
+		"GC_DOLT_HEALTH_REAL_QUERY",
+		"GC_DOLT_HEALTHCHECK_MAX_REAL_QUERY_MS",
+		"GC_DOLT_HEALTHCHECK_MAX_COMMITS",
+	),
+		"GC_DOLT_HEALTH_REAL_QUERY=1",
+		"GC_DOLT_HEALTHCHECK_MAX_REAL_QUERY_MS=3000",
+		"GC_DOLT_HEALTHCHECK_MAX_COMMITS=200000",
+	)
+	cmd.Stdin = strings.NewReader(input)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("health-check unexpectedly succeeded:\n%s", out)
+	}
+	if !strings.Contains(string(out), "Dolt commit count exceeded threshold: hq=412000 > 200000") {
+		t.Fatalf("health-check output missing commit threshold:\n%s", out)
+	}
+}
+
+func TestDoltHealthCheckFailsNomsThresholdWhenVisible(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not installed; skipping nested JSON threshold check")
+	}
+	root := repoRoot(t)
+	script := filepath.Join(root, "commands", "health-check", "run.sh")
+	input := `{
+  "server": {
+    "running": true,
+    "reachable": true,
+    "pid": 123,
+    "port": 3311,
+    "latency_ms": 12,
+    "ping_latency_ms": 12
+  },
+  "databases": [
+    {"name": "hq", "commits": 1000, "open_beads": 17, "noms_bytes": 27917287424}
+  ],
+  "storage": {
+    "noms_bytes_visible": true,
+    "noms_bytes_total": 27917287424
+  }
+}`
+
+	cmd := exec.Command("sh", script)
+	cmd.Env = append(filteredEnv("GC_DOLT_HEALTHCHECK_MAX_NOMS_BYTES"),
+		"GC_DOLT_HEALTHCHECK_MAX_NOMS_BYTES=10737418240",
+	)
+	cmd.Stdin = strings.NewReader(input)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("health-check unexpectedly succeeded:\n%s", out)
+	}
+	if !strings.Contains(string(out), "Dolt database noms bytes exceeded threshold: hq=27917287424 > 10737418240") {
+		t.Fatalf("health-check output missing noms threshold:\n%s", out)
 	}
 }
 
