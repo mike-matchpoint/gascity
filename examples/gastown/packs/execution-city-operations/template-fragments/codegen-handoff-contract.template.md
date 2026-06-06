@@ -14,6 +14,21 @@ request shape; the deterministic emitter
 `assets/scripts/publish-cross-city-event.sh` validates against the schemas above
 and performs the actual publish.
 
+Do not put `route`, `gc_route`, or `gc.routed_to` in `RepoChangeRequested.v1`
+or `RepoBugReported.v1` payloads. The receiving code-generation-city adapter
+derives the PackV2 binding-qualified routes:
+`RepoChangeRequested.v1` -> `codegen-support.cartographer`, and
+`RepoBugReported.v1` -> `codegen-support.debugger`. Short forms such as
+`cartographer` or `debugger` are invalid for these codegen-support agents.
+
+Do not guess the target code-generation city. The supported runtime path is:
+name the repository in `payload.repo`; the publisher resolves that repo through
+`GASCITY_CODEGEN_OWNERSHIP_JSON` to the owning code-generation city and its
+purpose. If the repo is not in that index, do not publish. Add the durable
+ownership entry first. This keeps the generic event family open for future
+GasCity-management cities without letting application execution cities file
+work against unrelated city configuration repos by accident.
+
 Use these generic event intents:
 
 - `RepoBugReported.v1` for a concrete regression, runtime failure, validation
@@ -29,7 +44,7 @@ Use these generic event intents:
 `source_city`, `source_city_role`, `target_city`,
 `target_city_role` (`code-generation-city`), `correlation_id`,
 `idempotency_key`, `occurred_at` (RFC3339), `payload`. The emitter fills the
-envelope; you supply the typed `payload` and the routing facts.
+envelope; you supply the typed `payload` and target code-generation-city facts.
 
 ### `RepoBugReported.v1` payload
 

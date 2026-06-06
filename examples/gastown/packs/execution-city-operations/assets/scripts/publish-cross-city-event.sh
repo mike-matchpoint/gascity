@@ -13,7 +13,7 @@
 #   publish-cross-city-event.sh \
 #     --event-type RepoBugReported.v1 \
 #     --payload-file /path/to/payload.json \
-#     --target-city vehicle-graph-code-generation-city-dev \
+#     [--target-city vehicle-graph-code-generation-city-dev] \
 #     [--correlation-id UUID] [--idempotency-key KEY | --dedupe-key STR] \
 #     [--process-slug SLUG] [--city-pair-slug SLUG] [--dry-run]
 #
@@ -24,6 +24,7 @@
 # Optional env:
 #   GASCITY_SOURCE_CITY_ROLE (default: execution-monitoring-city)
 #   GASCITY_PROCESS_SLUG, GASCITY_CITY_PAIR_SLUG, GASCITY_EVENT_SOURCE
+#   GASCITY_CODEGEN_OWNERSHIP_JSON maps payload.repo to its owning code city
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -62,7 +63,6 @@ command -v jq >/dev/null 2>&1 || die "jq is required"
 [ -n "$PAYLOAD_FILE" ] || die "--payload-file is required"
 [ -f "$PAYLOAD_FILE" ] || die "payload file not found: $PAYLOAD_FILE"
 jq -e . "$PAYLOAD_FILE" >/dev/null 2>&1 || die "payload file is not valid JSON: $PAYLOAD_FILE"
-[ -n "$TARGET_CITY" ] || die "--target-city is required"
 
 SOURCE_CITY="${GASCITY_SOURCE_CITY:-}"
 [ -n "$SOURCE_CITY" ] || die "GASCITY_SOURCE_CITY env (or harness injection) is required"
@@ -77,6 +77,48 @@ case "$EVENT_TYPE" in
   *) die "unsupported --event-type: $EVENT_TYPE (expected RepoBugReported.v1 or RepoChangeRequested.v1)" ;;
 esac
 [ -f "$SCHEMA_FILE" ] || die "schema not found: $SCHEMA_FILE"
+
+resolve_codegen_owner() {
+  local repo="$1"
+  local target_city="$2"
+  jq -ce \
+    --arg repo "$repo" \
+    --arg target_city "$target_city" \
+    --arg event_type "$EVENT_TYPE" '
+      def norm:
+        tostring
+        | ascii_downcase
+        | sub("^git\\+https://github.com/"; "")
+        | sub("^https://github.com/"; "")
+        | sub("\\.git$"; "");
+      def short: norm | split("/")[-1];
+      def repo_matches($entry):
+        (($entry.repo_name // "" | norm) == ($repo | norm)) or
+        (($entry.repo_full_name // "" | norm) == ($repo | norm)) or
+        (($entry.repo_url // "" | norm) == ($repo | norm)) or
+        (($entry.repo_name // "" | short) == ($repo | short)) or
+        (($entry.repo_full_name // "" | short) == ($repo | short)) or
+        (($entry.repo_url // "" | short) == ($repo | short));
+      first(.[] | select(repo_matches(.) and
+        (($target_city | length) == 0 or .code_city == $target_city) and
+        ((.supported_event_types // []) | index($event_type))))
+    ' <<<"${GASCITY_CODEGEN_OWNERSHIP_JSON:-[]}"
+}
+
+PAYLOAD_REPO="$(jq -r '.repo // empty' "$PAYLOAD_FILE")"
+[ -n "$PAYLOAD_REPO" ] || die "payload.repo is required for $EVENT_TYPE ownership lookup"
+if jq -e 'has("route") or has("gc_route") or has("gc.routed_to")' "$PAYLOAD_FILE" >/dev/null; then
+  die "$EVENT_TYPE payload must not include route, gc_route, or gc.routed_to; routing is derived from the ownership index and receiving adapter"
+fi
+CODEGEN_OWNER="$(resolve_codegen_owner "$PAYLOAD_REPO" "$TARGET_CITY" 2>/dev/null)" || {
+  if [ -n "$TARGET_CITY" ]; then
+    die "payload.repo=$PAYLOAD_REPO event_type=$EVENT_TYPE is not indexed for target_city=$TARGET_CITY in GASCITY_CODEGEN_OWNERSHIP_JSON"
+  fi
+  die "payload.repo=$PAYLOAD_REPO event_type=$EVENT_TYPE is not in GASCITY_CODEGEN_OWNERSHIP_JSON; add a repo ownership entry before publishing"
+}
+RESOLVED_TARGET_CITY="$(printf '%s' "$CODEGEN_OWNER" | jq -r '.code_city // empty')"
+[ -n "$RESOLVED_TARGET_CITY" ] || die "matched ownership entry for payload.repo=$PAYLOAD_REPO has no code_city"
+TARGET_CITY="$RESOLVED_TARGET_CITY"
 
 gen_uuid() {
   if command -v uuidgen >/dev/null 2>&1; then uuidgen | tr 'A-Z' 'a-z'; return; fi
@@ -165,6 +207,7 @@ fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "[dry-run] validated $EVENT_TYPE against $(basename "$SCHEMA_FILE")"
+  echo "[dry-run] codegen_owner=$(printf '%s' "$CODEGEN_OWNER" | jq -c '{repo_name, repo_full_name, code_city, code_city_purpose, execution_city, execution_city_purpose}')"
   echo "[dry-run] idempotency_key=$IDEMPOTENCY_KEY"
   echo "[dry-run] correlation_id=$CORRELATION_ID"
   echo "[dry-run] would put-events to bus=${GASCITY_EVENT_BUS:-<unset>} region=${AWS_REGION:-<unset>}"

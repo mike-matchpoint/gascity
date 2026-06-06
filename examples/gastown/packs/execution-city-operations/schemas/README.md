@@ -16,6 +16,18 @@ Contract version: **1.0**
 - `events/repo-change-requested.v1.schema.json` — `RepoChangeRequested.v1`: a
   missing capability / change request to a code-generation city.
 
+The repo handoff schemas intentionally do not expose `route`, `gc_route`, or
+`gc.routed_to` payload fields. Code-generation-city routing is derived by the
+receiving adapter: `RepoChangeRequested.v1` becomes
+`gc.routed_to=codegen-support.cartographer`, and `RepoBugReported.v1` becomes
+`gc.routed_to=codegen-support.debugger`.
+
+Repo handoffs are also resolved through a runtime ownership index. Publishers
+set `payload.repo`; the hosting harness injects `GASCITY_CODEGEN_OWNERSHIP_JSON`
+with repo -> owning code-generation-city entries and city purpose text. If a
+repo is not indexed, the publisher must fail and the city pair must add a
+durable ownership entry before emitting the event.
+
 The human-readable field contract lives in
 `template-fragments/codegen-handoff-contract.template.md` and is kept in sync
 with these schemas.

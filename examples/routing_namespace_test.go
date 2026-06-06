@@ -2,6 +2,7 @@ package examples_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -18,6 +19,8 @@ func TestShippedExamplesDoNotHardcodeShortRoutedToPools(t *testing.T) {
 	badRoutes := []string{
 		"gc.routed_to=dog",
 		"gc.routed_to=worker",
+		"gc.routed_to=cartographer",
+		"gc.routed_to=debugger",
 		"gc.routed_to=<rig>/polecat",
 		"gc.routed_to=<rig>/refinery",
 		"gc.routed_to={rig}/polecat",
@@ -25,6 +28,8 @@ func TestShippedExamplesDoNotHardcodeShortRoutedToPools(t *testing.T) {
 		"gc.routed_to={rig}/worker",
 		"gc.routed_to={rig}/{role}",
 		"gc.routed_to={{ .RigName }}/refinery",
+		"pool:cartographer",
+		"pool:debugger",
 		"pool:dog",
 	}
 
@@ -49,6 +54,121 @@ func TestShippedExamplesDoNotHardcodeShortRoutedToPools(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestExecutionCityOpsPublisherResolvesCodeCityFromOwnershipIndex(t *testing.T) {
+	root := examplesRoot(t)
+	script := filepath.Join(root,
+		"gastown/packs/execution-city-operations/assets/scripts/publish-cross-city-event.sh")
+	payload := filepath.Join(t.TempDir(), "payload.json")
+	if err := os.WriteFile(payload, []byte(`{
+  "repo": "Matchpoint-Vehicle-Graph",
+  "target_branch": "main",
+  "severity": "high",
+  "observed_behavior": "bad",
+  "expected_behavior": "good",
+  "reproduction_steps": ["run test"],
+  "failing_command": "just test",
+  "evidence_uris": []
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("bash", script,
+		"--event-type", "RepoBugReported.v1",
+		"--payload-file", payload,
+		"--dry-run")
+	cmd.Env = append(os.Environ(), executionCityOpsPublisherEnv()...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("publisher dry-run failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		`"target_city": "vehicle-graph-code-generation-city-dev"`,
+		`"code_city":"vehicle-graph-code-generation-city-dev"`,
+		`"repo_name":"Matchpoint-Vehicle-Graph"`,
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("publisher output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestExecutionCityOpsPublisherRejectsUnindexedRepo(t *testing.T) {
+	root := examplesRoot(t)
+	script := filepath.Join(root,
+		"gastown/packs/execution-city-operations/assets/scripts/publish-cross-city-event.sh")
+	payload := filepath.Join(t.TempDir(), "payload.json")
+	if err := os.WriteFile(payload, []byte(`{
+  "repo": "GasCity-Dev",
+  "target_branch": "main",
+  "severity": "high",
+  "observed_behavior": "bad",
+  "expected_behavior": "good",
+  "reproduction_steps": ["run test"],
+  "failing_command": "just test",
+  "evidence_uris": []
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("bash", script,
+		"--event-type", "RepoBugReported.v1",
+		"--payload-file", payload,
+		"--dry-run")
+	cmd.Env = append(os.Environ(), executionCityOpsPublisherEnv()...)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("publisher unexpectedly accepted unindexed repo:\n%s", out)
+	}
+	if !strings.Contains(string(out), "is not in GASCITY_CODEGEN_OWNERSHIP_JSON") {
+		t.Fatalf("publisher rejection did not name ownership index:\n%s", out)
+	}
+}
+
+func TestExecutionCityOpsPublisherRejectsRoutePayloadFields(t *testing.T) {
+	root := examplesRoot(t)
+	script := filepath.Join(root,
+		"gastown/packs/execution-city-operations/assets/scripts/publish-cross-city-event.sh")
+	payload := filepath.Join(t.TempDir(), "payload.json")
+	if err := os.WriteFile(payload, []byte(`{
+  "repo": "Matchpoint-Vehicle-Graph",
+  "route": "debugger",
+  "target_branch": "main",
+  "severity": "high",
+  "observed_behavior": "bad",
+  "expected_behavior": "good",
+  "reproduction_steps": ["run test"],
+  "failing_command": "just test",
+  "evidence_uris": []
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("bash", script,
+		"--event-type", "RepoBugReported.v1",
+		"--payload-file", payload,
+		"--dry-run")
+	cmd.Env = append(os.Environ(), executionCityOpsPublisherEnv()...)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("publisher unexpectedly accepted route payload field:\n%s", out)
+	}
+	if !strings.Contains(string(out), "must not include route") {
+		t.Fatalf("publisher rejection did not name forbidden route field:\n%s", out)
+	}
+}
+
+func executionCityOpsPublisherEnv() []string {
+	return []string{
+		"AWS_REGION=us-west-2",
+		"GASCITY_EVENT_BUS=gascity-handoff-dev",
+		"GASCITY_SOURCE_CITY=vehicle-graph-execution-monitoring-city-dev",
+		"GASCITY_SOURCE_CITY_ROLE=execution-monitoring-city",
+		"GASCITY_PROCESS_SLUG=vehicle-graph",
+		"GASCITY_CITY_PAIR_SLUG=vehicle-graph-codegen-execution-dev",
+		`GASCITY_CODEGEN_OWNERSHIP_JSON=[{"repo_name":"Matchpoint-Vehicle-Graph","repo_full_name":"Matchpoint-Intelligence/Matchpoint-Vehicle-Graph","repo_url":"https://github.com/Matchpoint-Intelligence/Matchpoint-Vehicle-Graph.git","process_slug":"vehicle-graph","city_pair_slug":"vehicle-graph-codegen-execution-dev","execution_city":"vehicle-graph-execution-monitoring-city-dev","execution_city_role":"execution-monitoring-city","execution_city_purpose":"Executes within and monitors Matchpoint-Vehicle-Graph AWS runs.","code_city":"vehicle-graph-code-generation-city-dev","code_city_role":"code-generation-city","code_city_purpose":"Owns code-generation work for Matchpoint-Vehicle-Graph.","supported_event_types":["RepoChangeRequested.v1","RepoBugReported.v1"]}]`,
 	}
 }
 

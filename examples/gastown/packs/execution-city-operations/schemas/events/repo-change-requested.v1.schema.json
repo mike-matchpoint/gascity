@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://gastown.dev/schemas/execution-city-operations/events/repo-change-requested.v1.schema.json",
   "title": "RepoChangeRequested v1",
-  "description": "Cross-city handoff: a monitoring city requests a capability/change from a code-generation city. Canonical in the execution-city-operations pack. Contract version 1.0.",
+  "description": "Cross-city handoff: a monitoring city requests a capability/change from a code-generation city. payload.repo is resolved through GASCITY_CODEGEN_OWNERSHIP_JSON to the owning code-generation city. The payload intentionally has no route field; the receiving adapter derives gc.routed_to=codegen-support.cartographer for code-generation cities. Canonical in the execution-city-operations pack. Contract version 1.0.",
   "type": "object",
   "required": [
     "event_type",
