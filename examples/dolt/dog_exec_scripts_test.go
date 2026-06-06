@@ -964,7 +964,7 @@ case "$query" in
     print_cell 32
     exit 0
     ;;
-  *"SELECT COUNT(*) FROM issues i WHERE"*)
+  *"SELECT COUNT(*) FROM (SELECT c.id FROM (SELECT DISTINCT l.issue_id AS id FROM labels"*)
     if [ "$mode" = "no_retention_candidates" ]; then
       print_cell 0
     else
@@ -972,7 +972,7 @@ case "$query" in
     fi
     exit 0
     ;;
-  *"SELECT COUNT(*) FROM wisps w WHERE"*)
+  *"SELECT COUNT(*) FROM (SELECT c.id FROM (SELECT DISTINCT l.issue_id AS id FROM wisp_labels"*)
     if [ "$mode" = "no_retention_candidates" ]; then
       print_cell 0
     else
@@ -1029,6 +1029,8 @@ func TestCompactScriptHostedDoltRunsServerSideMaintenance(t *testing.T) {
 	for _, want := range []string{
 		"SHOW DATABASES",
 		"CALL DOLT_MAINTENANCE_STATUS()",
+		"SELECT DISTINCT l.issue_id AS id FROM labels",
+		"SELECT DISTINCT l.issue_id AS id FROM wisp_labels",
 		"CALL DOLT_MAINTENANCE_ENTER",
 		"CREATE TEMPORARY TABLE gc_retention_sweep_issue_ids",
 		"DELETE FROM issues",
@@ -1040,7 +1042,12 @@ func TestCompactScriptHostedDoltRunsServerSideMaintenance(t *testing.T) {
 			t.Fatalf("hosted compact log missing %q:\n%s", want, log)
 		}
 	}
-	for _, forbidden := range []string{"DOLT_RESET", "DOLT_GC('--full')"} {
+	for _, forbidden := range []string{
+		"DOLT_RESET",
+		"DOLT_GC('--full')",
+		"SELECT COUNT(*) FROM issues i WHERE",
+		"SELECT COUNT(*) FROM wisps w WHERE",
+	} {
 		if strings.Contains(log, forbidden) {
 			t.Fatalf("hosted compact must use server-side procedure, found %q:\n%s", forbidden, log)
 		}
