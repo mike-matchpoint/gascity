@@ -1219,8 +1219,10 @@ hosted_retention_plan() {
   hosted_retention_issue_candidates=0
   hosted_retention_wisp_candidates=0
   hosted_retention_cutoff=""
-  hosted_retention_issue_predicate=""
-  hosted_retention_wisp_predicate=""
+  hosted_retention_issue_candidate_query=""
+  hosted_retention_wisp_candidate_query=""
+  hosted_retention_issue_delete_limit=0
+  hosted_retention_wisp_delete_limit=0
 
   required_schema_count=32
   schema_count=$(query_single_cell "$db" "retention schema validation query failed" \
@@ -1236,13 +1238,14 @@ hosted_retention_plan() {
     return 1
   }
 
-  hosted_retention_issue_predicate="i.status = 'closed' AND COALESCE(i.pinned, 0) = 0 AND COALESCE(i.closed_at, i.updated_at, i.created_at) < '$hosted_retention_cutoff' AND (JSON_UNQUOTE(JSON_EXTRACT(COALESCE(i.metadata, JSON_OBJECT()), '$.\"gc.retention_class\"')) = 'operational_churn' OR EXISTS (SELECT 1 FROM labels l WHERE l.issue_id = i.id AND (l.label = 'order-tracking' OR l.label LIKE 'order-run:%'))) AND NOT EXISTS (SELECT 1 FROM dependencies d WHERE d.issue_id = i.id OR d.depends_on_issue_id = i.id) AND NOT EXISTS (SELECT 1 FROM issues child_i WHERE child_i.id LIKE CONCAT(i.id, '.%') AND child_i.status <> 'closed') AND NOT EXISTS (SELECT 1 FROM wisps child_w WHERE child_w.id LIKE CONCAT(i.id, '.%') AND child_w.status <> 'closed')"
-  hosted_retention_wisp_predicate="w.status = 'closed' AND COALESCE(w.pinned, 0) = 0 AND COALESCE(w.closed_at, w.updated_at, w.created_at) < '$hosted_retention_cutoff' AND (JSON_UNQUOTE(JSON_EXTRACT(COALESCE(w.metadata, JSON_OBJECT()), '$.\"gc.retention_class\"')) = 'operational_churn' OR EXISTS (SELECT 1 FROM wisp_labels l WHERE l.issue_id = w.id AND (l.label = 'order-tracking' OR l.label LIKE 'order-run:%'))) AND NOT EXISTS (SELECT 1 FROM wisp_dependencies d WHERE d.issue_id = w.id OR d.depends_on_wisp_id = w.id) AND NOT EXISTS (SELECT 1 FROM dependencies d WHERE d.depends_on_wisp_id = w.id) AND NOT EXISTS (SELECT 1 FROM issues child_i WHERE child_i.id LIKE CONCAT(w.id, '.%') AND child_i.status <> 'closed') AND NOT EXISTS (SELECT 1 FROM wisps child_w WHERE child_w.id LIKE CONCAT(w.id, '.%') AND child_w.status <> 'closed')"
+  hosted_retention_count_limit=$((server_retention_max_delete + 1))
+  hosted_retention_issue_order_query="SELECT DISTINCT l.issue_id AS id FROM labels l JOIN issues i ON i.id = l.issue_id WHERE (l.label = 'order-tracking' OR l.label LIKE 'order-run:%') AND i.status = 'closed' AND COALESCE(i.pinned, 0) = 0 AND COALESCE(i.closed_at, i.updated_at, i.created_at) < '$hosted_retention_cutoff'"
+  hosted_retention_wisp_order_query="SELECT DISTINCT l.issue_id AS id FROM wisp_labels l JOIN wisps w ON w.id = l.issue_id WHERE (l.label = 'order-tracking' OR l.label LIKE 'order-run:%') AND w.status = 'closed' AND COALESCE(w.pinned, 0) = 0 AND COALESCE(w.closed_at, w.updated_at, w.created_at) < '$hosted_retention_cutoff'"
+  hosted_retention_issue_candidate_query="SELECT c.id FROM ($hosted_retention_issue_order_query) c WHERE NOT EXISTS (SELECT 1 FROM dependencies d WHERE d.issue_id = c.id OR d.depends_on_issue_id = c.id) AND NOT EXISTS (SELECT 1 FROM issues child_i WHERE child_i.id LIKE CONCAT(c.id, '.%') AND child_i.status <> 'closed') AND NOT EXISTS (SELECT 1 FROM wisps child_w WHERE child_w.id LIKE CONCAT(c.id, '.%') AND child_w.status <> 'closed')"
+  hosted_retention_wisp_candidate_query="SELECT c.id FROM ($hosted_retention_wisp_order_query) c WHERE NOT EXISTS (SELECT 1 FROM wisp_dependencies d WHERE d.issue_id = c.id OR d.depends_on_wisp_id = c.id) AND NOT EXISTS (SELECT 1 FROM dependencies d WHERE d.depends_on_wisp_id = c.id) AND NOT EXISTS (SELECT 1 FROM issues child_i WHERE child_i.id LIKE CONCAT(c.id, '.%') AND child_i.status <> 'closed') AND NOT EXISTS (SELECT 1 FROM wisps child_w WHERE child_w.id LIKE CONCAT(c.id, '.%') AND child_w.status <> 'closed')"
 
   hosted_retention_issue_candidates=$(query_single_cell "$db" "retention issue candidate count failed" \
-    "SELECT COUNT(*) FROM issues i WHERE $hosted_retention_issue_predicate") || return 1
-  hosted_retention_wisp_candidates=$(query_single_cell "$db" "retention wisp candidate count failed" \
-    "SELECT COUNT(*) FROM wisps w WHERE $hosted_retention_wisp_predicate") || return 1
+    "SELECT COUNT(*) FROM ($hosted_retention_issue_candidate_query LIMIT $hosted_retention_count_limit) gc_retention_limited_issues") || return 1
 
   case "$hosted_retention_issue_candidates" in
     ''|*[!0-9]*)
@@ -1251,6 +1254,17 @@ hosted_retention_plan() {
       return 1
       ;;
   esac
+
+  if [ "$hosted_retention_issue_candidates" -gt "$server_retention_max_delete" ]; then
+    printf 'compact: db=%s retention issue candidates exceed max_delete=%s\n' \
+      "$db" "$server_retention_max_delete" >&2
+    return 1
+  fi
+
+  hosted_retention_remaining_limit=$((server_retention_max_delete - hosted_retention_issue_candidates + 1))
+  hosted_retention_wisp_candidates=$(query_single_cell "$db" "retention wisp candidate count failed" \
+    "SELECT COUNT(*) FROM ($hosted_retention_wisp_candidate_query LIMIT $hosted_retention_remaining_limit) gc_retention_limited_wisps") || return 1
+
   case "$hosted_retention_wisp_candidates" in
     ''|*[!0-9]*)
       printf 'compact: db=%s retention wisp candidate count returned invalid value=%s\n' \
@@ -1265,6 +1279,8 @@ hosted_retention_plan() {
       "$db" "$hosted_retention_candidates" "$server_retention_max_delete" >&2
     return 1
   fi
+  hosted_retention_issue_delete_limit="$hosted_retention_issue_candidates"
+  hosted_retention_wisp_delete_limit="$hosted_retention_wisp_candidates"
   return 0
 }
 
@@ -1275,9 +1291,9 @@ hosted_retention_sql() {
 USE \`$db\`;
 START TRANSACTION;
 CREATE TEMPORARY TABLE gc_retention_sweep_issue_ids AS
-  SELECT i.id FROM issues i WHERE $hosted_retention_issue_predicate;
+  $hosted_retention_issue_candidate_query LIMIT $hosted_retention_issue_delete_limit;
 CREATE TEMPORARY TABLE gc_retention_sweep_wisp_ids AS
-  SELECT w.id FROM wisps w WHERE $hosted_retention_wisp_predicate;
+  $hosted_retention_wisp_candidate_query LIMIT $hosted_retention_wisp_delete_limit;
 DELETE FROM labels WHERE issue_id IN (SELECT id FROM gc_retention_sweep_issue_ids);
 DELETE FROM comments WHERE issue_id IN (SELECT id FROM gc_retention_sweep_issue_ids);
 DELETE FROM events WHERE issue_id IN (SELECT id FROM gc_retention_sweep_issue_ids);
