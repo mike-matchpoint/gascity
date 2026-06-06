@@ -4,6 +4,7 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -2183,12 +2184,17 @@ func (d *DaemonConfig) StartReadyTimeoutDuration() time.Duration {
 }
 
 // WispGCIntervalDuration returns the wisp GC interval as a time.Duration.
-// Returns 0 if empty or unparseable.
+// Returns 0 if empty or unparseable. Hosted runtimes may supply a default via
+// GC_DAEMON_WISP_GC_INTERVAL_DEFAULT without rewriting source-owned city.toml.
 func (d *DaemonConfig) WispGCIntervalDuration() time.Duration {
-	if d.WispGCInterval == "" {
+	value := d.WispGCInterval
+	if value == "" {
+		value = os.Getenv("GC_DAEMON_WISP_GC_INTERVAL_DEFAULT")
+	}
+	if value == "" {
 		return 0
 	}
-	dur, err := time.ParseDuration(d.WispGCInterval)
+	dur, err := time.ParseDuration(value)
 	if err != nil {
 		return 0
 	}
@@ -2196,12 +2202,17 @@ func (d *DaemonConfig) WispGCIntervalDuration() time.Duration {
 }
 
 // WispTTLDuration returns the wisp TTL as a time.Duration.
-// Returns 0 if empty or unparseable.
+// Returns 0 if empty or unparseable. Hosted runtimes may supply a default via
+// GC_DAEMON_WISP_TTL_DEFAULT without rewriting source-owned city.toml.
 func (d *DaemonConfig) WispTTLDuration() time.Duration {
-	if d.WispTTL == "" {
+	value := d.WispTTL
+	if value == "" {
+		value = os.Getenv("GC_DAEMON_WISP_TTL_DEFAULT")
+	}
+	if value == "" {
 		return 0
 	}
-	dur, err := time.ParseDuration(d.WispTTL)
+	dur, err := time.ParseDuration(value)
 	if err != nil {
 		return 0
 	}

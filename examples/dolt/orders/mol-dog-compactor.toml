@@ -2,5 +2,5 @@
 description = "Flatten Dolt commit history to reduce storage"
 trigger = "cooldown"
 interval = "24h"
-exec = "gc dolt compact"
+exec = "GC_DOLT_COMPACT_REQUIRE_APPLICABLE=1 gc dolt compact 2>&1 | gc dolt health-check --compact-result"
 timeout = "24h"

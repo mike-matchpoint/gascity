@@ -51,7 +51,7 @@ func TestWispGC_PurgesExpiredMolecules(t *testing.T) {
 	now := time.Now()
 	store := newGCStore([]beads.Bead{
 		makeGCBead("mol-1", now.Add(-2*time.Hour), "closed", "molecule"),
-		makeGCBeadWithMetadata("wisp-1", now.Add(-2*time.Hour), "closed", "task", map[string]string{"gc.kind": "wisp"}),
+		makeGCBeadWithMetadata("wisp-1", now.Add(-2*time.Hour), map[string]string{"gc.kind": "wisp"}),
 		makeGCBead("mol-2", now.Add(-30*time.Minute), "closed", "molecule"),
 		makeGCBead("mol-3", now.Add(-3*time.Hour), "closed", "molecule"),
 	})
@@ -388,6 +388,59 @@ func TestWispGC_PurgesLegacyIssuesTierTrackingBeads(t *testing.T) {
 	assertDeletedIDs(t, store.deletedIDs, "track-legacy")
 }
 
+func TestWispGC_PurgesMetadataMarkedOperationalChurn(t *testing.T) {
+	now := time.Now()
+	store := newGCStore([]beads.Bead{
+		makeGCBeadWithMetadata("retained-old", now.Add(-3*time.Hour), map[string]string{
+			retentionClassMetadataKey: operationalChurnRetentionClass,
+			retentionTTLMetadataKey:   operationalChurnRetentionTTL,
+		}),
+		makeGCBeadWithMetadata("non-operational-old", now.Add(-3*time.Hour), map[string]string{
+			retentionClassMetadataKey: "audit",
+		}),
+	})
+
+	wg := newWispGC(5*time.Minute, time.Hour)
+	purged, err := wg.runGC(store, now)
+	if err != nil {
+		t.Fatalf("runGC: %v", err)
+	}
+	if purged != 1 {
+		t.Fatalf("purged = %d, want 1", purged)
+	}
+	assertDeletedIDs(t, store.deletedIDs, "retained-old")
+	if _, err := store.Get("non-operational-old"); err != nil {
+		t.Fatalf("non-operational bead was deleted: %v", err)
+	}
+}
+
+func TestWispGC_OperationalChurnUsesClosedAtRetentionReference(t *testing.T) {
+	now := time.Now()
+	store := newGCStore([]beads.Bead{
+		makeGCBeadWithMetadata("created-old-closed-recent", now.Add(-72*time.Hour), map[string]string{
+			retentionClassMetadataKey:    operationalChurnRetentionClass,
+			retentionClosedAtMetadataKey: now.Add(-10 * time.Minute).Format(time.RFC3339Nano),
+		}),
+		makeGCBeadWithMetadata("created-recent-closed-old", now.Add(-10*time.Minute), map[string]string{
+			retentionClassMetadataKey:    operationalChurnRetentionClass,
+			retentionClosedAtMetadataKey: now.Add(-72 * time.Hour).Format(time.RFC3339Nano),
+		}),
+	})
+
+	wg := newWispGC(5*time.Minute, time.Hour)
+	purged, err := wg.runGC(store, now)
+	if err != nil {
+		t.Fatalf("runGC: %v", err)
+	}
+	if purged != 1 {
+		t.Fatalf("purged = %d, want 1", purged)
+	}
+	assertDeletedIDs(t, store.deletedIDs, "created-recent-closed-old")
+	if _, err := store.Get("created-old-closed-recent"); err != nil {
+		t.Fatalf("recently closed operational bead was deleted: %v", err)
+	}
+}
+
 func TestWispGC_TrackingListErrorIsSurfacedAndMoleculePurgeContinues(t *testing.T) {
 	now := time.Now()
 	store := newGCStore([]beads.Bead{
@@ -431,10 +484,15 @@ func TestWispGC_TrackingBeadsDoNotDeleteParentChildDescendants(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runGC: %v", err)
 	}
-	if purged != 1 {
-		t.Fatalf("purged = %d, want 1", purged)
+	if purged != 0 {
+		t.Fatalf("purged = %d, want 0", purged)
 	}
-	assertDeletedIDs(t, store.deletedIDs, "track-old")
+	if len(store.deletedIDs) != 0 {
+		t.Fatalf("deleted = %v, want none", store.deletedIDs)
+	}
+	if _, err := store.Get("track-old"); err != nil {
+		t.Fatalf("tracking root was deleted: %v", err)
+	}
 	if _, err := store.Get("track-child"); err != nil {
 		t.Fatalf("tracking child was deleted: %v", err)
 	}
@@ -516,8 +574,8 @@ func makeGCBeadWithLabels(id string, createdAt time.Time, status, beadType strin
 	}
 }
 
-func makeGCBeadWithMetadata(id string, createdAt time.Time, status, beadType string, metadata map[string]string) beads.Bead {
-	bead := makeGCBead(id, createdAt, status, beadType)
+func makeGCBeadWithMetadata(id string, createdAt time.Time, metadata map[string]string) beads.Bead {
+	bead := makeGCBead(id, createdAt, "closed", "task")
 	bead.Metadata = metadata
 	return bead
 }

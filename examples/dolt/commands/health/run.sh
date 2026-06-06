@@ -85,6 +85,32 @@ is_local_dolt_host() {
   return 1
 }
 
+truthy() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+  esac
+  return 1
+}
+
+safe_database_name() {
+  case "$1" in
+    [A-Za-z0-9_]*)
+      case "$1" in *[!A-Za-z0-9_-]*) return 1 ;; esac
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+system_database_name() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    information_schema|mysql|dolt_cluster|performance_schema|sys|__gc_probe)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 dolt_tcp_reachable() {
   probe_host="$1"
   probe_port="$2"
@@ -127,6 +153,20 @@ server_running=false
 server_pid=0
 server_latency=0
 server_reachable=false
+real_query_enabled=false
+real_query_ok=false
+real_query_timeout=false
+real_query_latency=0
+real_query_exit_code=0
+real_query_timeout_secs="${GC_DOLT_HEALTH_REAL_QUERY_TIMEOUT_SECS:-10}"
+if truthy "${GC_DOLT_HEALTH_REAL_QUERY:-}"; then
+  real_query_enabled=true
+fi
+case "$real_query_timeout_secs" in
+  ''|*[!0-9]*|0)
+    real_query_timeout_secs=10
+    ;;
+esac
 
 # Portable millisecond timestamp. BSD date(1) on macOS treats %N as a
 # literal 'N' (exits 0, output like "1776740122N"), so the GNU-only
@@ -167,10 +207,32 @@ if [ -n "$pid" ] || dolt_tcp_reachable "$host" "$GC_DOLT_PORT"; then
   fi
 fi
 
+if [ "$real_query_enabled" = true ]; then
+  if [ "$server_reachable" = true ]; then
+    start_ms=$(now_ms)
+    set +e
+    run_bounded "$real_query_timeout_secs" gc bd list --json --status open --limit 1 >/dev/null 2>&1
+    real_query_exit_code=$?
+    set -e
+    end_ms=$(now_ms)
+    real_query_latency=$((end_ms - start_ms))
+    [ "$real_query_latency" -lt 0 ] && real_query_latency=0
+    if [ "$real_query_exit_code" -eq 0 ]; then
+      real_query_ok=true
+    fi
+    if [ "$real_query_exit_code" -eq 124 ]; then
+      real_query_timeout=true
+    fi
+  else
+    real_query_exit_code=1
+  fi
+fi
+
 # Cache metadata file paths once (avoids repeated gc calls and word-splitting).
 _meta_cache=$(mktemp)
+_db_names_cache=$(mktemp)
 metadata_files > "$_meta_cache"
-trap 'rm -f "$_meta_cache"' EXIT
+trap 'rm -f "$_meta_cache" "$_db_names_cache"' EXIT
 
 # Collect database info.
 #
@@ -183,11 +245,31 @@ trap 'rm -f "$_meta_cache"' EXIT
 # SQL instead — it's the authoritative source, never deadlocks with
 # itself, and is cheap (dolt_log is indexed by commit hash).
 db_info=""
-if [ -d "$data_dir" ] && [ "$server_reachable" = true ]; then
-  for d in "$data_dir"/*/; do
-    [ ! -d "$d/.dolt" ] && continue
-    name="$(basename "$d")"
-    case "$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')" in information_schema|mysql|dolt_cluster|performance_schema|sys|__gc_probe) continue ;; esac
+storage_noms_bytes_visible=false
+storage_noms_bytes_total=0
+if [ "$server_reachable" = true ]; then
+  if [ -d "$data_dir" ]; then
+    for d in "$data_dir"/*/; do
+      [ ! -d "$d/.dolt" ] && continue
+      name="$(basename "$d")"
+      system_database_name "$name" && continue
+      safe_database_name "$name" || continue
+      printf '%s|%s\n' "$name" "$d" >> "$_db_names_cache"
+    done
+  fi
+  if [ ! -s "$_db_names_cache" ]; then
+    show_dbs_csv=$(run_bounded 5 dolt $conn_args sql --result-format csv -q "SHOW DATABASES;" 2>/dev/null || true)
+    printf '%s\n' "$show_dbs_csv" | while IFS= read -r name; do
+      name=$(printf '%s' "$name" | tr -d '\r"')
+      [ "$name" = "Database" ] && continue
+      [ -z "$name" ] && continue
+      system_database_name "$name" && continue
+      safe_database_name "$name" || continue
+      printf '%s|\n' "$name" >> "$_db_names_cache"
+    done
+  fi
+  while IFS='|' read -r name db_dir; do
+    [ -n "$name" ] || continue
     # Reject names with anything outside [A-Za-z0-9_-] before interpolating
     # into the SQL identifier. The first byte must still be alnum/underscore
     # to avoid option-shaped names. Dolt permits directory names that shell
@@ -196,12 +278,7 @@ if [ -d "$data_dir" ] && [ "$server_reachable" = true ]; then
     # as the patrol user. Not an external-attack surface today — data
     # directories are server-controlled — but fragile enough under
     # config drift that it's worth skipping rather than probing.
-    case "$name" in
-      [A-Za-z0-9_]*)
-        case "$name" in *[!A-Za-z0-9_-]*) continue ;; esac
-        ;;
-      *) continue ;;
-    esac
+    safe_database_name "$name" || continue
     # Count commits via SQL (bounded). 0 on timeout or error — keep
     # going rather than hang the whole report. Extract the first
     # fully-numeric line rather than `sed -n '2p'`: future dolt builds
@@ -229,9 +306,19 @@ if [ -d "$data_dir" ] && [ "$server_reachable" = true ]; then
         break
       fi
     done < "$_meta_cache"
-    db_info="$db_info$name|$commits|$open_beads
+    noms_bytes=null
+    if [ -n "$db_dir" ] && [ -d "$db_dir/.dolt/noms" ]; then
+      size_kb=$(du -sk "$db_dir/.dolt/noms" 2>/dev/null | cut -f1)
+      case "$size_kb" in
+        ''|*[!0-9]*) size_kb=0 ;;
+      esac
+      noms_bytes=$((size_kb * 1024))
+      storage_noms_bytes_total=$((storage_noms_bytes_total + noms_bytes))
+      storage_noms_bytes_visible=true
+    fi
+    db_info="$db_info$name|$commits|$open_beads|$noms_bytes
 "
-  done
+  done < "$_db_names_cache"
 fi
 
 # Check backup freshness.
@@ -344,19 +431,31 @@ if [ "$json_output" = true ]; then
     "reachable": $server_reachable,
     "pid": $server_pid,
     "port": $GC_DOLT_PORT,
-    "latency_ms": $server_latency
+    "latency_ms": $server_latency,
+    "ping_latency_ms": $server_latency
+  },
+  "real_query": {
+    "enabled": $real_query_enabled,
+    "ok": $real_query_ok,
+    "timeout": $real_query_timeout,
+    "latency_ms": $real_query_latency,
+    "exit_code": $real_query_exit_code
   },
   "databases": [
 JSONEOF
   first=true
-  echo "$db_info" | while IFS='|' read -r name commits open_beads; do
+  echo "$db_info" | while IFS='|' read -r name commits open_beads noms_bytes; do
     [ -z "$name" ] && continue
     if [ "$first" = true ]; then first=false; else echo ","; fi
-    printf '    {"name": "%s", "commits": %s, "open_beads": %s}' "$name" "$commits" "$open_beads"
+    printf '    {"name": "%s", "commits": %s, "open_beads": %s, "noms_bytes": %s}' "$name" "$commits" "$open_beads" "$noms_bytes"
   done
   cat <<JSONEOF
 
   ],
+  "storage": {
+    "noms_bytes_visible": $storage_noms_bytes_visible,
+    "noms_bytes_total": $storage_noms_bytes_total
+  },
   "backups": {
     "dolt_freshness": "$backup_freshness",
     "dolt_age_sec": $backup_age_sec,
@@ -399,9 +498,13 @@ fi
 if [ -n "$db_info" ]; then
   echo ""
   echo "Databases:"
-  echo "$db_info" | while IFS='|' read -r name commits open_beads; do
+  echo "$db_info" | while IFS='|' read -r name commits open_beads noms_bytes; do
     [ -z "$name" ] && continue
-    echo "  $name: $commits commits, $open_beads open beads"
+    if [ "$noms_bytes" = "null" ]; then
+      echo "  $name: $commits commits, $open_beads open beads"
+    else
+      echo "  $name: $commits commits, $open_beads open beads, noms_bytes=$noms_bytes"
+    fi
   done
 fi
 

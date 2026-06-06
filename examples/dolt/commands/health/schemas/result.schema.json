@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["timestamp", "server", "databases", "backups", "orphans", "processes"],
+  "required": ["timestamp", "server", "real_query", "databases", "backups", "orphans", "processes", "storage"],
   "properties": {
     "timestamp": {
       "type": "string",
@@ -9,7 +9,7 @@
     },
     "server": {
       "type": "object",
-      "required": ["running", "reachable", "pid", "port", "latency_ms"],
+      "required": ["running", "reachable", "pid", "port", "latency_ms", "ping_latency_ms"],
       "properties": {
         "running": {
           "type": "boolean"
@@ -24,6 +24,31 @@
           "type": "integer"
         },
         "latency_ms": {
+          "type": "integer"
+        },
+        "ping_latency_ms": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": true
+    },
+    "real_query": {
+      "type": "object",
+      "required": ["enabled", "ok", "timeout", "latency_ms", "exit_code"],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "timeout": {
+          "type": "boolean"
+        },
+        "latency_ms": {
+          "type": "integer"
+        },
+        "exit_code": {
           "type": "integer"
         }
       },
@@ -43,6 +68,9 @@
           },
           "open_beads": {
             "type": "integer"
+          },
+          "noms_bytes": {
+            "type": ["integer", "null"]
           }
         },
         "additionalProperties": true
@@ -92,6 +120,19 @@
           "items": {
             "type": "integer"
           }
+        }
+      },
+      "additionalProperties": true
+    },
+    "storage": {
+      "type": "object",
+      "required": ["noms_bytes_visible", "noms_bytes_total"],
+      "properties": {
+        "noms_bytes_visible": {
+          "type": "boolean"
+        },
+        "noms_bytes_total": {
+          "type": "integer"
         }
       },
       "additionalProperties": true

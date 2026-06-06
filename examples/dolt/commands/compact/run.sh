@@ -79,6 +79,11 @@
 #   GC_DOLT_COMPACT_ONLY_DBS              (optional) — comma-separated list of
 #                                         database names to compact. When set,
 #                                         all other databases are skipped.
+#   GC_DOLT_COMPACT_REQUIRE_APPLICABLE    (optional) — when set to 1, fail
+#                                         with exit 2 when this command cannot
+#                                         safely apply to the current Dolt
+#                                         runtime. Default keeps historical
+#                                         skip-and-exit-0 behavior.
 #   GC_DOLT_REFSPEC_<DB_UPPER>            (optional) — compact remote push
 #                                         refspec in <local>:<remote> form.
 #                                         DB name is uppercased with '-'
@@ -96,10 +101,23 @@ PACK_DIR="${GC_PACK_DIR:-$(unset CDPATH; cd -- "$(dirname "$0")/.." && pwd)}"
 # shellcheck disable=SC1091
 . "$PACK_DIR/assets/scripts/runtime.sh"
 
+compact_not_applicable() {
+  reason="$1"
+  case "${GC_DOLT_COMPACT_REQUIRE_APPLICABLE:-0}" in
+    1|true|TRUE|yes|YES)
+      printf 'compact: not_applicable reason=%s\n' "$reason" >&2
+      exit 2
+      ;;
+    *)
+      printf 'compact: not_applicable reason=%s\n' "$reason"
+      exit 0
+      ;;
+  esac
+}
+
 case "${GC_DOLT_MANAGED_LOCAL:-}" in
   0|false|FALSE|no|NO)
-    printf 'compact: managed local Dolt runtime is not applicable for this order — skip\n'
-    exit 0
+    compact_not_applicable "managed_local_false"
     ;;
 esac
 
@@ -107,15 +125,11 @@ if [ "${GC_DOLT_MANAGED_LOCAL:-}" = "1" ]; then
   managed_port=$(managed_runtime_port "$DOLT_STATE_FILE" "$DOLT_DATA_DIR" || true)
   if [ -n "$managed_port" ]; then
     if [ -n "$gc_dolt_port_input" ] && [ "$gc_dolt_port_input" != "$managed_port" ]; then
-      printf 'compact: GC_DOLT_PORT=%s does not match managed runtime port=%s for data_dir=%s — skip\n' \
-        "$gc_dolt_port_input" "$managed_port" "$DOLT_DATA_DIR"
-      exit 0
+      compact_not_applicable "port_mismatch"
     fi
     GC_DOLT_PORT="$managed_port"
   elif [ -z "$gc_dolt_port_input" ]; then
-    printf 'compact: managed local Dolt runtime is not active for data_dir=%s — skip\n' \
-      "$DOLT_DATA_DIR"
-    exit 0
+    compact_not_applicable "managed_runtime_inactive"
   else
     GC_DOLT_PORT="$gc_dolt_port_input"
   fi
@@ -124,24 +138,18 @@ elif [ -n "$gc_dolt_port_input" ]; then
     ''|127.0.0.1|localhost|0.0.0.0|::1|::|'[::1]'|'[::]')
       ;;
     *)
-      printf 'compact: GC_DOLT_HOST=%s is not a local managed Dolt host — skip\n' \
-        "$gc_dolt_host_input"
-      exit 0
+      compact_not_applicable "non_local_host"
       ;;
   esac
   managed_port=$(managed_runtime_port "$DOLT_STATE_FILE" "$DOLT_DATA_DIR" || true)
   if [ -z "$managed_port" ] || [ "$gc_dolt_port_input" != "$managed_port" ]; then
-    printf 'compact: GC_DOLT_PORT=%s does not match managed runtime port=%s for data_dir=%s — skip\n' \
-      "$gc_dolt_port_input" "${managed_port:-<inactive>}" "$DOLT_DATA_DIR"
-    exit 0
+    compact_not_applicable "port_mismatch"
   fi
   GC_DOLT_PORT="$managed_port"
 elif [ -z "$gc_dolt_port_input" ]; then
   managed_port=$(managed_runtime_port "$DOLT_STATE_FILE" "$DOLT_DATA_DIR" || true)
   if [ -z "$managed_port" ]; then
-    printf 'compact: managed local Dolt runtime is not active for data_dir=%s — skip\n' \
-      "$DOLT_DATA_DIR"
-    exit 0
+    compact_not_applicable "managed_runtime_inactive"
   fi
   GC_DOLT_PORT="$managed_port"
 fi

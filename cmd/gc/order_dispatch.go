@@ -75,6 +75,16 @@ const (
 	staleOrderWispCloseReason     = "order-tracking sweep: stale order wisp subtree exceeded retention window"
 
 	completedOrderTrackingCloseReason = "order dispatch completed: tracking bead lifecycle finished"
+
+	operationalChurnRetentionClass = "operational_churn"
+	operationalChurnRetentionTTL   = "48h"
+	retentionClassMetadataKey      = "gc.retention_class"
+	retentionTTLMetadataKey        = "gc.retention_ttl"
+	retentionClosedAtMetadataKey   = "gc.retention_closed_at"
+	retentionKindMetadataKey       = "gc.retention_kind"
+	retentionScopedMetadataKey     = "gc.retention_scoped"
+	retentionOrderTrackingKind     = "order_tracking"
+	retentionOrderWispRootKind     = "order_wisp_root"
 )
 
 var (
@@ -99,6 +109,25 @@ func scopedOrderTrackingLabel(scopedName string) string {
 
 func orderTrackingLabels(scopedName string) []string {
 	return []string{orderRunLabel(scopedName), labelOrderTracking, scopedOrderTrackingLabel(scopedName)}
+}
+
+func operationalChurnRetentionMetadata(kind, scopedName string) map[string]string {
+	metadata := map[string]string{
+		retentionClassMetadataKey: operationalChurnRetentionClass,
+		retentionTTLMetadataKey:   operationalChurnRetentionTTL,
+		retentionKindMetadataKey:  kind,
+	}
+	if scopedName != "" {
+		metadata[retentionScopedMetadataKey] = scopedName
+	}
+	return metadata
+}
+
+func orderTrackingCloseMetadata(reason string) map[string]string {
+	metadata := operationalChurnRetentionMetadata(retentionOrderTrackingKind, "")
+	metadata["close_reason"] = reason
+	metadata[retentionClosedAtMetadataKey] = time.Now().UTC().Format(time.RFC3339Nano)
+	return metadata
 }
 
 var (
@@ -850,22 +879,22 @@ func (m *memoryOrderDispatcher) reserveOrderForDispatch(ctx context.Context, sto
 		LeaseID:    reservation.Lease.LeaseID,
 		EventSeq:   eventSeq,
 	}
+	metadata := operationalChurnRetentionMetadata(retentionOrderTrackingKind, scoped)
+	metadata["gc.order.runtime_write_isolation"] = orderRuntimeLeaseVersion
+	metadata["gc.order.scoped"] = scoped
+	metadata["gc.order.store_key"] = storeKey
+	metadata["gc.order.trigger_kind"] = a.Trigger
+	metadata["gc.order.trigger_fingerprint"] = reservation.Fingerprint
+	metadata["gc.order.reservation_input"] = orderRuntimeReservationMetadataInput(reservation.Input)
+	metadata["gc.order.reservation_input_format"] = "base64url-raw-v2"
+	metadata["gc.order.reservation_hash"] = reservation.Hash
+	metadata["gc.order.lease_id"] = reservation.Lease.LeaseID
+	metadata["gc.idempotency_key"] = reservation.Hash
 	bead := beads.Bead{
-		ID:     reservation.TrackingID,
-		Title:  "order:" + scoped,
-		Labels: labels,
-		Metadata: map[string]string{
-			"gc.order.runtime_write_isolation":  orderRuntimeLeaseVersion,
-			"gc.order.scoped":                   scoped,
-			"gc.order.store_key":                storeKey,
-			"gc.order.trigger_kind":             a.Trigger,
-			"gc.order.trigger_fingerprint":      reservation.Fingerprint,
-			"gc.order.reservation_input":        orderRuntimeReservationMetadataInput(reservation.Input),
-			"gc.order.reservation_input_format": "base64url-raw-v2",
-			"gc.order.reservation_hash":         reservation.Hash,
-			"gc.order.lease_id":                 reservation.Lease.LeaseID,
-			"gc.idempotency_key":                reservation.Hash,
-		},
+		ID:       reservation.TrackingID,
+		Title:    "order:" + scoped,
+		Labels:   labels,
+		Metadata: metadata,
 	}
 	policy := orderDispatchTrackingWritePolicy(beads.WriteClassReservation, "order.dispatch.tracking-reservation", reservation.Hash)
 	created, err := beads.RuntimeCreate(ctx, store, bead, policy)
@@ -1623,9 +1652,7 @@ func (m *memoryOrderDispatcher) closeOrderTrackingRuntime(ctx context.Context, s
 		return nil
 	}
 	writeCtx := orderDispatchPostActionWriteContext(ctx)
-	_, err := beads.RuntimeCloseAll(writeCtx, store, []string{run.TrackingID}, map[string]string{
-		"close_reason": completedOrderTrackingCloseReason,
-	}, orderDispatchTrackingWritePolicy(beads.WriteClassPostActionCritical, "order.dispatch.tracking-close", run.TrackingID))
+	_, err := beads.RuntimeCloseAll(writeCtx, store, []string{run.TrackingID}, orderTrackingCloseMetadata(completedOrderTrackingCloseReason), orderDispatchTrackingWritePolicy(beads.WriteClassPostActionCritical, "order.dispatch.tracking-close", run.TrackingID))
 	return err
 }
 
@@ -1663,9 +1690,7 @@ func (m *memoryOrderDispatcher) recordOrderTrackingDegraded(scoped, trackingID, 
 }
 
 func closeOrderTrackingBead(ctx context.Context, store beads.Store, trackingID string) error {
-	_, err := closeAndVerifyOrderTrackingBeads(ctx, store, []string{trackingID}, map[string]string{
-		"close_reason": completedOrderTrackingCloseReason,
-	})
+	_, err := closeAndVerifyOrderTrackingBeads(ctx, store, []string{trackingID}, orderTrackingCloseMetadata(completedOrderTrackingCloseReason))
 	return err
 }
 
@@ -1974,7 +1999,11 @@ func (m *memoryOrderDispatcher) dispatchWisp(ctx context.Context, store beads.St
 
 	// Stamp the created wisp through the store contract rather than a raw
 	// bd subprocess so controller dispatch stays provider-aware.
-	update := beads.UpdateOpts{Labels: []string{"order-run:" + scoped}}
+	rootMetadata := operationalChurnRetentionMetadata(retentionOrderWispRootKind, scoped)
+	update := beads.UpdateOpts{
+		Labels:   []string{"order-run:" + scoped},
+		Metadata: rootMetadata,
+	}
 	if a.Trigger == "event" && m.ep != nil {
 		update.Labels = append(update.Labels,
 			fmt.Sprintf("order:%s", scoped),
@@ -1982,7 +2011,9 @@ func (m *memoryOrderDispatcher) dispatchWisp(ctx context.Context, store beads.St
 		)
 	}
 	if a.Pool != "" {
-		update.Metadata = routedwork.FormulaOrderPoolDemandMetadata(pool)
+		for key, value := range routedwork.FormulaOrderPoolDemandMetadata(pool) {
+			update.Metadata[key] = value
+		}
 	}
 	writeCtx := orderDispatchPostActionWriteContext(ctx)
 	if err := m.runtimeTrackingUpdate(writeCtx, store, rootID, update, beads.WriteClassPostActionCritical, "order.dispatch.wisp-root-critical", rootID); err != nil {
@@ -2189,9 +2220,7 @@ func sweepOrphanedOrderTracking(store beads.Store) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	n, err := closeAndVerifyOrderTrackingBeads(context.Background(), store, ids, map[string]string{
-		"close_reason": orphanedOrderTrackingCloseReason,
-	})
+	n, err := closeAndVerifyOrderTrackingBeads(context.Background(), store, ids, orderTrackingCloseMetadata(orphanedOrderTrackingCloseReason))
 	if err != nil {
 		return n, fmt.Errorf("closing orphaned order-tracking beads: %w", err)
 	}
@@ -2318,10 +2347,8 @@ func sweepStaleOrderTrackingWithWispOptions(store beads.Store, now time.Time, st
 			return result, nil
 		}
 	} else {
-		metadata := map[string]string{
-			"order_tracking_sweep": orderTrackingSweepMetadataReason,
-			"close_reason":         staleOrderTrackingCloseReason,
-		}
+		metadata := orderTrackingCloseMetadata(staleOrderTrackingCloseReason)
+		metadata["order_tracking_sweep"] = orderTrackingSweepMetadataReason
 		if initiator != "" {
 			metadata["order_tracking_sweep_by"] = initiator
 		}
@@ -2432,11 +2459,11 @@ func sweepStaleOrderWispSubtreesWithOptions(store beads.Store, cutoff time.Time,
 	if err != nil {
 		return 0, fmt.Errorf("ordering stale order wisp closes: %w", err)
 	}
-	metadata := map[string]string{
-		"order_tracking_sweep": orderTrackingSweepMetadataReason,
-		"order_wisp_sweep":     "stale-order-wisp",
-		"close_reason":         staleOrderWispCloseReason,
-	}
+	metadata := operationalChurnRetentionMetadata(retentionOrderWispRootKind, "")
+	metadata["order_tracking_sweep"] = orderTrackingSweepMetadataReason
+	metadata["order_wisp_sweep"] = "stale-order-wisp"
+	metadata["close_reason"] = staleOrderWispCloseReason
+	metadata[retentionClosedAtMetadataKey] = time.Now().UTC().Format(time.RFC3339Nano)
 	if initiator != "" {
 		metadata["order_tracking_sweep_by"] = initiator
 	}

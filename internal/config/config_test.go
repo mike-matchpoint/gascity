@@ -4175,6 +4175,51 @@ func TestDaemonConfig_WispGCDisabledByDefault(t *testing.T) {
 	}
 }
 
+func TestDaemonConfig_WispGCHostedEnvDefaults(t *testing.T) {
+	t.Setenv("GC_DAEMON_WISP_GC_INTERVAL_DEFAULT", "10m")
+	t.Setenv("GC_DAEMON_WISP_TTL_DEFAULT", "48h")
+
+	d := DaemonConfig{}
+	if !d.WispGCEnabled() {
+		t.Error("wisp GC should be enabled when hosted runtime defaults are set")
+	}
+	if d.WispGCIntervalDuration() != 10*time.Minute {
+		t.Errorf("WispGCIntervalDuration = %v, want 10m", d.WispGCIntervalDuration())
+	}
+	if d.WispTTLDuration() != 48*time.Hour {
+		t.Errorf("WispTTLDuration = %v, want 48h", d.WispTTLDuration())
+	}
+}
+
+func TestDaemonConfig_WispGCExplicitValuesOverrideHostedEnvDefaults(t *testing.T) {
+	t.Setenv("GC_DAEMON_WISP_GC_INTERVAL_DEFAULT", "10m")
+	t.Setenv("GC_DAEMON_WISP_TTL_DEFAULT", "48h")
+
+	d := DaemonConfig{WispGCInterval: "30m", WispTTL: "72h"}
+	if !d.WispGCEnabled() {
+		t.Error("wisp GC should be enabled when explicit fields are set")
+	}
+	if d.WispGCIntervalDuration() != 30*time.Minute {
+		t.Errorf("WispGCIntervalDuration = %v, want 30m", d.WispGCIntervalDuration())
+	}
+	if d.WispTTLDuration() != 72*time.Hour {
+		t.Errorf("WispTTLDuration = %v, want 72h", d.WispTTLDuration())
+	}
+}
+
+func TestDaemonConfig_WispGCExplicitZeroDisablesHostedEnvDefaults(t *testing.T) {
+	t.Setenv("GC_DAEMON_WISP_GC_INTERVAL_DEFAULT", "10m")
+	t.Setenv("GC_DAEMON_WISP_TTL_DEFAULT", "48h")
+
+	d := DaemonConfig{WispGCInterval: "0s", WispTTL: "48h"}
+	if d.WispGCEnabled() {
+		t.Error("wisp GC should stay disabled when an explicit zero interval is configured")
+	}
+	if d.WispGCIntervalDuration() != 0 {
+		t.Errorf("WispGCIntervalDuration = %v, want 0", d.WispGCIntervalDuration())
+	}
+}
+
 func TestDaemonConfig_WispGCEnabled(t *testing.T) {
 	d := DaemonConfig{
 		WispGCInterval: "5m",

@@ -1329,7 +1329,7 @@ source = "`+doltDir+`"
 
 	wantExecDogOrders := map[string]string{
 		"mol-dog-backup":     "$PACK_DIR/assets/scripts/mol-dog-backup.sh",
-		"mol-dog-compactor":  "gc dolt compact",
+		"mol-dog-compactor":  "GC_DOLT_COMPACT_REQUIRE_APPLICABLE=1 gc dolt compact 2>&1 | gc dolt health-check --compact-result",
 		"mol-dog-doctor":     "$PACK_DIR/assets/scripts/mol-dog-doctor.sh",
 		"mol-dog-jsonl":      "$PACK_DIR/assets/scripts/jsonl-export.sh",
 		"mol-dog-phantom-db": "$PACK_DIR/assets/scripts/mol-dog-phantom-db.sh",
@@ -1942,6 +1942,19 @@ func TestOrderDispatchTrackingReservationUsesWriteBudgetNotTickDeadline(t *testi
 	}
 	if !run.TrackingReserved {
 		t.Fatal("run was not marked tracking-reserved")
+	}
+	tracking, err := store.Get(run.TrackingID)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", run.TrackingID, err)
+	}
+	if got := tracking.Metadata[retentionClassMetadataKey]; got != operationalChurnRetentionClass {
+		t.Fatalf("%s = %q, want %q", retentionClassMetadataKey, got, operationalChurnRetentionClass)
+	}
+	if got := tracking.Metadata[retentionTTLMetadataKey]; got != operationalChurnRetentionTTL {
+		t.Fatalf("%s = %q, want %q", retentionTTLMetadataKey, got, operationalChurnRetentionTTL)
+	}
+	if got := tracking.Metadata[retentionKindMetadataKey]; got != retentionOrderTrackingKind {
+		t.Fatalf("%s = %q, want %q", retentionKindMetadataKey, got, retentionOrderTrackingKind)
 	}
 
 	select {
@@ -7141,6 +7154,12 @@ func TestOrderDispatchClosesTrackingBead(t *testing.T) {
 				}
 				if got := b.Metadata["close_reason"]; got != completedOrderTrackingCloseReason {
 					t.Errorf("close_reason = %q, want %q", got, completedOrderTrackingCloseReason)
+				}
+				if got := b.Metadata[retentionClassMetadataKey]; got != operationalChurnRetentionClass {
+					t.Errorf("%s = %q, want %q", retentionClassMetadataKey, got, operationalChurnRetentionClass)
+				}
+				if got := b.Metadata[retentionClosedAtMetadataKey]; got == "" {
+					t.Errorf("%s was not stamped on closed tracking bead", retentionClosedAtMetadataKey)
 				}
 				return
 			}

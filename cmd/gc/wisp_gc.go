@@ -8,6 +8,8 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 )
 
+var errExpiredBeadPreserved = errors.New("expired bead preserved")
+
 // wispGC performs mechanical garbage collection of closed molecules that
 // have exceeded their TTL. Follows the nil-guard tracker pattern used by
 // crashTracker and idleTracker: nil means disabled.
@@ -59,13 +61,13 @@ func (m *memoryWispGC) runGC(store beads.Store, now time.Time) (int, error) {
 	cutoff := now.Add(-m.ttl)
 	purged, deleteErr := purgeExpiredBeadClosures(store, entries, cutoff)
 
-	trackEntries, trackErr := store.List(beads.ListQuery{Status: "closed", Label: labelOrderTracking, TierMode: beads.TierBoth})
+	trackEntries, trackErr := closedOperationalChurnGCEntries(store)
 	if trackErr == nil {
-		trackPurged, trackDeleteErr := purgeExpiredBeadRoots(store, trackEntries, cutoff)
+		trackPurged, trackDeleteErr := purgeExpiredOperationalChurnRoots(store, trackEntries, cutoff)
 		purged += trackPurged
 		deleteErr = errors.Join(deleteErr, trackDeleteErr)
 	} else {
-		deleteErr = errors.Join(deleteErr, fmt.Errorf("listing closed order-tracking beads: %w", trackErr))
+		deleteErr = errors.Join(deleteErr, fmt.Errorf("listing closed operational churn beads: %w", trackErr))
 	}
 
 	return purged, deleteErr
@@ -99,22 +101,88 @@ func closedWispGCEntries(store beads.Store) ([]beads.Bead, error) {
 	return entries, nil
 }
 
+func closedOperationalChurnGCEntries(store beads.Store) ([]beads.Bead, error) {
+	entries := make([]beads.Bead, 0)
+	seen := make(map[string]struct{})
+	appendUnique := func(items []beads.Bead) {
+		for _, item := range items {
+			if item.ID == "" || !isOperationalChurnBead(item) {
+				continue
+			}
+			if _, ok := seen[item.ID]; ok {
+				continue
+			}
+			seen[item.ID] = struct{}{}
+			entries = append(entries, item)
+		}
+	}
+	labeled, err := store.List(beads.ListQuery{Status: "closed", Label: labelOrderTracking, TierMode: beads.TierBoth})
+	if err != nil {
+		return nil, fmt.Errorf("listing closed order-tracking beads: %w", err)
+	}
+	appendUnique(labeled)
+	retained, err := store.List(beads.ListQuery{Status: "closed", Metadata: map[string]string{retentionClassMetadataKey: operationalChurnRetentionClass}, TierMode: beads.TierBoth})
+	if err != nil {
+		return nil, fmt.Errorf("listing closed operational-retention beads: %w", err)
+	}
+	appendUnique(retained)
+	return entries, nil
+}
+
+func isOperationalChurnBead(b beads.Bead) bool {
+	if b.Metadata[retentionClassMetadataKey] == operationalChurnRetentionClass {
+		return true
+	}
+	for _, label := range b.Labels {
+		if label == labelOrderTracking {
+			return true
+		}
+	}
+	return false
+}
+
+func expiredBeadReferenceTime(b beads.Bead) time.Time {
+	for _, key := range []string{retentionClosedAtMetadataKey, "closed_at", "gc.hqstore.closed_at"} {
+		if t, ok := parseBeadMetadataTime(b.Metadata[key]); ok {
+			return t
+		}
+	}
+	return b.CreatedAt
+}
+
+func parseBeadMetadataTime(raw string) (time.Time, bool) {
+	if raw == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+		t, err := time.Parse(layout, raw)
+		if err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
 func purgeExpiredBeadClosures(store beads.Store, entries []beads.Bead, cutoff time.Time) (int, error) {
 	return purgeExpiredBeads(store, entries, cutoff, deleteExpiredBeadClosure)
 }
 
-func purgeExpiredBeadRoots(store beads.Store, entries []beads.Bead, cutoff time.Time) (int, error) {
-	return purgeExpiredBeads(store, entries, cutoff, deleteWorkflowBead)
+func purgeExpiredOperationalChurnRoots(store beads.Store, entries []beads.Bead, cutoff time.Time) (int, error) {
+	return purgeExpiredBeads(store, entries, cutoff, deleteExpiredOperationalChurnRoot)
 }
 
 func purgeExpiredBeads(store beads.Store, entries []beads.Bead, cutoff time.Time, deleteFn func(beads.Store, string) error) (int, error) {
 	purged := 0
 	var deleteErr error
 	for _, entry := range entries {
-		if entry.CreatedAt.IsZero() || !entry.CreatedAt.Before(cutoff) {
+		ref := expiredBeadReferenceTime(entry)
+		if ref.IsZero() || !ref.Before(cutoff) {
 			continue
 		}
 		if err := deleteFn(store, entry.ID); err != nil {
+			if errors.Is(err, errExpiredBeadPreserved) {
+				continue
+			}
 			deleteErr = errors.Join(deleteErr, fmt.Errorf("deleting expired bead %q: %w", entry.ID, err))
 			continue
 		}
@@ -137,6 +205,72 @@ func deleteExpiredBeadClosure(store beads.Store, rootID string) error {
 		}
 	}
 	return nil
+}
+
+func deleteExpiredOperationalChurnRoot(store beads.Store, rootID string) error {
+	active, err := beadHasOpenOwnedDescendant(store, rootID)
+	if err != nil {
+		return err
+	}
+	if active {
+		return errExpiredBeadPreserved
+	}
+	return deleteWorkflowBead(store, rootID)
+}
+
+func beadHasOpenOwnedDescendant(store beads.Store, rootID string) (bool, error) {
+	seen := map[string]struct{}{}
+	var visit func(string) (bool, error)
+	visit = func(id string) (bool, error) {
+		if id == "" {
+			return false, nil
+		}
+		if _, ok := seen[id]; ok {
+			return false, nil
+		}
+		seen[id] = struct{}{}
+
+		children, err := store.List(beads.ListQuery{
+			ParentID:      id,
+			IncludeClosed: true,
+			TierMode:      beads.TierBoth,
+		})
+		if err != nil {
+			return false, fmt.Errorf("list children for %s: %w", id, err)
+		}
+		for _, child := range children {
+			if child.Status != "closed" {
+				return true, nil
+			}
+			active, err := visit(child.ID)
+			if active || err != nil {
+				return active, err
+			}
+		}
+
+		upDeps, err := store.DepList(id, "up")
+		if err != nil {
+			return false, fmt.Errorf("list dependents for %s: %w", id, err)
+		}
+		for _, dep := range upDeps {
+			if dep.Type != "parent-child" || dep.IssueID == "" {
+				continue
+			}
+			dependent, err := store.Get(dep.IssueID)
+			if err != nil {
+				return false, fmt.Errorf("get dependent %s: %w", dep.IssueID, err)
+			}
+			if dependent.Status != "closed" {
+				return true, nil
+			}
+			active, err := visit(dep.IssueID)
+			if active || err != nil {
+				return active, err
+			}
+		}
+		return false, nil
+	}
+	return visit(rootID)
 }
 
 func collectExpiredBeadClosure(store beads.Store, rootID string) ([]string, error) {

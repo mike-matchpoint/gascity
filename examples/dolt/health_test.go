@@ -213,6 +213,77 @@ func TestHealthScriptDoesNotInvokeDoltLog(t *testing.T) {
 	}
 }
 
+func TestHealthScriptReportsOptInRepresentativeQuery(t *testing.T) {
+	root := repoRoot(t)
+	cityPath := t.TempDir()
+	binDir := t.TempDir()
+	writeExecutable(t, filepath.Join(binDir, "gc"), `#!/bin/sh
+if [ "${1:-}" = "rig" ] && [ "${2:-}" = "list" ]; then
+  printf '{"rigs":[]}\n'
+  exit 0
+fi
+if [ "${1:-}" = "bd" ] && [ "${2:-}" = "list" ]; then
+  printf '[]\n'
+  exit 0
+fi
+printf 'unexpected gc args: %s\n' "$*" >&2
+exit 64
+`)
+
+	cmd := exec.Command("sh", filepath.Join(root, healthScript), "--json")
+	cmd.Env = append(filteredEnv(
+		"PATH",
+		"GC_CITY_PATH",
+		"GC_PACK_DIR",
+		"GC_DOLT_HOST",
+		"GC_DOLT_PORT",
+		"GC_DOLT_USER",
+		"GC_DOLT_PASSWORD",
+		"GC_DOLT_HEALTH_REAL_QUERY",
+		"GC_DOLT_HEALTH_REAL_QUERY_TIMEOUT_SECS",
+		"GC_HEALTH_SKIP_ZOMBIE_SCAN",
+	),
+		"PATH="+binDir+":"+os.Getenv("PATH"),
+		"GC_CITY_PATH="+cityPath,
+		"GC_PACK_DIR="+root,
+		"GC_DOLT_HOST=127.0.0.1",
+		"GC_DOLT_PORT=1",
+		"GC_DOLT_USER=root",
+		"GC_DOLT_PASSWORD=",
+		"GC_DOLT_HEALTH_REAL_QUERY=1",
+		"GC_DOLT_HEALTH_REAL_QUERY_TIMEOUT_SECS=2",
+		"GC_HEALTH_SKIP_ZOMBIE_SCAN=1",
+	)
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("health --json failed: %v\n%s", err, out)
+	}
+	var report struct {
+		RealQuery struct {
+			Enabled bool `json:"enabled"`
+			OK      bool `json:"ok"`
+			Timeout bool `json:"timeout"`
+			Bytes   int  `json:"bytes"`
+		} `json:"real_query"`
+		Storage struct {
+			NomsBytesVisible bool `json:"noms_bytes_visible"`
+		} `json:"storage"`
+		Server struct {
+			PingLatencyMS int `json:"ping_latency_ms"`
+		} `json:"server"`
+	}
+	if err := json.Unmarshal(out, &report); err != nil {
+		t.Fatalf("health output is not JSON: %v\n%s", err, out)
+	}
+	if !report.RealQuery.Enabled || report.RealQuery.OK || report.RealQuery.Timeout {
+		t.Fatalf("real_query status = %+v, want enabled but not run when server is unreachable\n%s", report.RealQuery, out)
+	}
+	if report.Storage.NomsBytesVisible {
+		t.Fatalf("storage.noms_bytes_visible = true, want false without local data dir")
+	}
+}
+
 func TestRuntimeScriptPortPrecedence(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -630,6 +701,92 @@ exit 0
 	}
 	if !strings.Contains(string(args), "--host\n"+host+"\n") {
 		t.Fatalf("dolt was not called with configured remote host; args:\n%s", args)
+	}
+}
+
+func TestHealthScriptReportsBoundedRepresentativeQuery(t *testing.T) {
+	cityPath := t.TempDir()
+	fakeBin := t.TempDir()
+	port := "3307"
+	gcLog := filepath.Join(t.TempDir(), "gc-args")
+
+	writeExecutable(t, filepath.Join(fakeBin, "lsof"), `#!/bin/sh
+exit 0
+`)
+	writeExecutable(t, filepath.Join(fakeBin, "nc"), `#!/bin/sh
+if [ "$1" = "-z" ] && [ "$2" = "127.0.0.1" ] && [ "$3" = "`+port+`" ]; then
+  exit 0
+fi
+exit 1
+`)
+	writeExecutable(t, filepath.Join(fakeBin, "dolt"), `#!/bin/sh
+case "$*" in
+  *"SHOW DATABASES"*) printf 'Database\nhq\n'; exit 0 ;;
+  *"SELECT COUNT(*) FROM dolt_log"*) printf 'COUNT(*)\n7\n'; exit 0 ;;
+  *) exit 0 ;;
+esac
+`)
+	writeExecutable(t, filepath.Join(fakeBin, "gc"), `#!/bin/sh
+printf '%s\n' "$*" >> "$GC_HEALTH_TEST_GC_LOG"
+case "$*" in
+  "bd list --json --status open --limit 1") printf '[]\n'; exit 0 ;;
+  "rig list --json") printf '{"rigs":[]}\n'; exit 0 ;;
+esac
+exit 2
+`)
+
+	root := repoRoot(t)
+	cmd := exec.Command("sh", filepath.Join(root, healthScript), "--json")
+	cmd.Env = append(filteredEnv(
+		"GC_CITY_PATH",
+		"GC_PACK_DIR",
+		"GC_DOLT_HOST",
+		"GC_DOLT_PORT",
+		"GC_DOLT_USER",
+		"GC_DOLT_PASSWORD",
+		"GC_DOLT_HEALTH_REAL_QUERY",
+		"GC_DOLT_HEALTH_REAL_QUERY_TIMEOUT_SECS",
+		"GC_HEALTH_SKIP_ZOMBIE_SCAN",
+		"GC_HEALTH_TEST_GC_LOG",
+		"PATH",
+	),
+		"GC_CITY_PATH="+cityPath,
+		"GC_PACK_DIR="+root,
+		"GC_DOLT_HOST=127.0.0.1",
+		"GC_DOLT_PORT="+port,
+		"GC_DOLT_USER=root",
+		"GC_DOLT_PASSWORD=",
+		"GC_DOLT_HEALTH_REAL_QUERY=1",
+		"GC_DOLT_HEALTH_REAL_QUERY_TIMEOUT_SECS=2",
+		"GC_HEALTH_SKIP_ZOMBIE_SCAN=1",
+		"GC_HEALTH_TEST_GC_LOG="+gcLog,
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("health.sh failed: %v\n%s", err, out)
+	}
+
+	var report struct {
+		RealQuery struct {
+			Enabled  bool `json:"enabled"`
+			OK       bool `json:"ok"`
+			Timeout  bool `json:"timeout"`
+			ExitCode int  `json:"exit_code"`
+		} `json:"real_query"`
+	}
+	if err := json.Unmarshal(out, &report); err != nil {
+		t.Fatalf("health.sh --json returned invalid JSON: %v\n%s", err, out)
+	}
+	if !report.RealQuery.Enabled || !report.RealQuery.OK || report.RealQuery.Timeout || report.RealQuery.ExitCode != 0 {
+		t.Fatalf("real_query = %+v, want enabled ok without timeout:\n%s", report.RealQuery, out)
+	}
+	data, err := os.ReadFile(gcLog)
+	if err != nil {
+		t.Fatalf("read gc log: %v", err)
+	}
+	if !strings.Contains(string(data), "bd list --json --status open --limit 1") {
+		t.Fatalf("representative query did not use bounded bd list probe:\n%s", data)
 	}
 }
 

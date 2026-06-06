@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gascity.local/schemas/dolt/retention-sweep/result.schema.json",
+  "type": "object",
+  "required": ["schema", "ok", "applied", "class", "older_than", "cutoff_utc", "candidates", "deleted"],
+  "additionalProperties": true,
+  "properties": {
+    "schema": { "const": "gc.dolt.retention_sweep.v1" },
+    "ok": { "type": "boolean" },
+    "applied": { "type": "boolean" },
+    "class": { "type": "string" },
+    "older_than": { "type": "string" },
+    "cutoff_utc": { "type": "string" },
+    "candidates": {
+      "type": "object",
+      "required": ["issues", "wisps", "total"],
+      "additionalProperties": false,
+      "properties": {
+        "issues": { "type": "integer", "minimum": 0 },
+        "wisps": { "type": "integer", "minimum": 0 },
+        "total": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "deleted": {
+      "type": "object",
+      "required": ["issues", "wisps", "total"],
+      "additionalProperties": false,
+      "properties": {
+        "issues": { "type": "integer", "minimum": 0 },
+        "wisps": { "type": "integer", "minimum": 0 },
+        "total": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

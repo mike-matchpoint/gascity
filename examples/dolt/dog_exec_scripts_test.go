@@ -165,6 +165,7 @@ func (f compactScriptFixture) run(t *testing.T, mode string, extraEnv ...string)
 		"GC_DOLT_COMPACT_DRY_RUN",
 		"GC_DOLT_COMPACT_ONLY_DBS",
 		"GC_DOLT_COMPACT_REMOTE",
+		"GC_DOLT_COMPACT_REQUIRE_APPLICABLE",
 		"GC_FAKE_DOLT_COMPACT_MODE",
 		"GC_FAKE_DOLT_COUNT_FILE",
 		"GC_FAKE_DOLT_STATE_FILE",
@@ -185,6 +186,36 @@ func (f compactScriptFixture) run(t *testing.T, mode string, extraEnv ...string)
 		"GC_FAKE_DOLT_COUNT_FILE="+filepath.Join(f.binDir, "row-count-calls"),
 		"GC_FAKE_DOLT_STATE_FILE="+f.stateFile,
 		"GC_FAKE_DOLT_HASH_STATE_FILE="+f.hashStateFile,
+	)
+	cmd.Env = append(cmd.Env, extraEnv...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func runExternalCompactScript(t *testing.T, extraEnv ...string) (string, error) {
+	t.Helper()
+	root := repoRoot(t)
+	cityPath := t.TempDir()
+	cmd := exec.Command("sh", filepath.Join(root, "commands", "compact", "run.sh"))
+	cmd.Env = append(filteredEnv(
+		"GC_CITY_PATH",
+		"GC_PACK_DIR",
+		"GC_DOLT_DATA_DIR",
+		"GC_DOLT_PORT",
+		"GC_DOLT_HOST",
+		"GC_DOLT_USER",
+		"GC_DOLT_PASSWORD",
+		"GC_DOLT_MANAGED_LOCAL",
+		"GC_DOLT_COMPACT_REQUIRE_APPLICABLE",
+	),
+		"GC_CITY_PATH="+cityPath,
+		"GC_PACK_DIR="+root,
+		"GC_DOLT_DATA_DIR="+filepath.Join(cityPath, ".beads", "dolt"),
+		"GC_DOLT_HOST=dolt.example-city.svc.cluster.local",
+		"GC_DOLT_PORT=3307",
+		"GC_DOLT_USER=root",
+		"GC_DOLT_PASSWORD=",
+		"GC_DOLT_MANAGED_LOCAL=0",
 	)
 	cmd.Env = append(cmd.Env, extraEnv...)
 	out, err := cmd.CombinedOutput()
@@ -818,6 +849,33 @@ printf 'unexpected query: %%s\n' "$query" >&2
 exit 64
 `, shellQuote(logPath)))
 	return logPath
+}
+
+func TestCompactScriptExternalDoltDefaultIsStructuredNoop(t *testing.T) {
+	out, err := runExternalCompactScript(t)
+	if err != nil {
+		t.Fatalf("compact external default failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "compact: not_applicable reason=managed_local_false") {
+		t.Fatalf("external compact output missing structured not_applicable:\n%s", out)
+	}
+}
+
+func TestCompactScriptExternalDoltRequireApplicableFails(t *testing.T) {
+	out, err := runExternalCompactScript(t, "GC_DOLT_COMPACT_REQUIRE_APPLICABLE=1")
+	if err == nil {
+		t.Fatalf("compact external require applicable unexpectedly succeeded:\n%s", out)
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("compact external require applicable returned non-exit error: %v\n%s", err, out)
+	}
+	if code := exitErr.ExitCode(); code != 2 {
+		t.Fatalf("compact external require applicable exit code = %d, want 2\n%s", code, out)
+	}
+	if !strings.Contains(out, "compact: not_applicable reason=managed_local_false") {
+		t.Fatalf("external compact output missing structured not_applicable:\n%s", out)
+	}
 }
 
 func TestCompactScriptSkipsBelowThresholdWithoutFlattening(t *testing.T) {
