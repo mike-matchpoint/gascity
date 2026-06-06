@@ -66,88 +66,15 @@ is_in_flight() {
   echo "$IN_FLIGHT" | grep -qFx "$id"
 }
 
-# 3. Enumerate registered rigs. Skip the city itself (hq=true) and
-# any suspended rigs.
-RIGS_JSON=$(gc rig list --json)
-log "rigs JSON: $(echo "$RIGS_JSON" | jq -c '.rigs[] | {name, hq, suspended}' | tr '\n' ' ')"
-log "IN_FLIGHT plan-mode bug_ids: $(echo "$IN_FLIGHT" | tr '\n' ',')"
-created=0
-closed=0
+close_decided_bugs_for_rig() {
+  local RIG="$1"
 
-while read -r RIG_JSON; do
-  RIG=$(echo "$RIG_JSON" | jq -r '.name')
-  log "iterating RIG=$RIG"
-
-  # 4. Investigation re-plan signal. For each bug with
-  # `decision_state=decided_investigation`, check whether its
-  # investigation child closed. If yes, flip the bug back to `pending`
-  # with the investigation's findings injected — plan-mode re-runs on
-  # the next tick with the new evidence. Idempotent.
-  INVEST_BUGS=$(gc --rig "$RIG" bd list \
-    --type=bug --status=open \
-    --metadata-field gc.kind=bug \
-    --metadata-field decision_state=decided_investigation \
-    --json | jq -r '.[].id')
-  for bug in $INVEST_BUGS; do
-    invest_id=$(gc --rig "$RIG" bd show "$bug" --json 2>/dev/null \
-      | jq -r '.[0].metadata.repair_beads // ""' | xargs)
-    [ -z "$invest_id" ] && continue
-    invest_status=$(gc --rig "$RIG" bd show "$invest_id" --json 2>/dev/null \
-      | jq -r '.[0].status // empty')
-    if [ "$invest_status" = "closed" ]; then
-      findings=$(gc --rig "$RIG" bd show "$invest_id" --json \
-        | jq -r '.[0].metadata.findings // empty')
-      recommendation=$(gc --rig "$RIG" bd show "$invest_id" --json \
-        | jq -r '.[0].metadata.recommended_decision_class // empty')
-      gc --rig "$RIG" bd update "$bug" \
-        --set-metadata decision_state=pending \
-        --set-metadata investigation_findings="$findings" \
-        --set-metadata investigation_recommendation="$recommendation" \
-        --assignee="" >/dev/null
-      log "  re-plan: flipped $bug → pending (invest $invest_id closed)"
-    fi
-  done
-
-# 5. Find pending bugs for this rig and create plan-mode beads.
-  PENDING=$(gc --rig "$RIG" bd list \
-    --type=bug --status=open \
-    --metadata-field gc.kind=bug \
-    --metadata-field decision_state=pending \
-    --metadata-field "gc.routed_to=$ROLE_ROUTE" \
-    --json | jq -r '.[].id')
-  log "  PENDING[$RIG]: $(echo "$PENDING" | tr '\n' ',' | sed 's/,$//')"
-
-  for bug in $PENDING; do
-    if is_in_flight "$bug"; then continue; fi
-    metadata=$(jq -cn \
-      --arg agent "$AGENT" \
-      --arg bug "$bug" \
-      --arg rig "$RIG" \
-      --arg binding_prefix "$BINDING_PREFIX" \
-      '{
-        "gc.routed_to": $agent,
-        "bug_id": $bug,
-        "rig_name": $rig,
-        "binding_prefix": $binding_prefix,
-        "formula": "mol-debugger-plan"
-      }')
-    plan=$(gc bd create "mol-debugger-plan" \
-      --type molecule \
-      --metadata "$metadata" \
-      --json | jq -r '.id // empty')
-    if [ -n "$plan" ] && [ "$plan" != "null" ]; then
-      echo "Created debugger plan bead $plan for bug $bug in $RIG"
-      created=$((created + 1))
-    else
-      echo "FAILED to create debugger plan bead for bug $bug in $RIG" >&2
-    fi
-  done
-
-  # 6. Close decided bugs whose repair beads have all landed.
+  # Close decided bugs whose repair beads have all landed.
   #
   # Investigation-decided bugs are NOT closed here — they get re-planned
-  # by step 4. This block excludes them by filtering on
+  # separately. This block excludes them by filtering on
   # `decision_state=decided` (the code-fix decision class).
+  local DECIDED
   DECIDED=$(gc --rig "$RIG" bd list \
     --type=bug --status=open \
     --metadata-field gc.kind=bug \
@@ -155,7 +82,9 @@ while read -r RIG_JSON; do
     --json | jq -r '.[].id')
   log "  DECIDED[$RIG]: $(echo "$DECIDED" | tr '\n' ',' | sed 's/,$//')"
 
+  local bug
   for bug in $DECIDED; do
+    local REPAIR_BEADS
     REPAIR_BEADS=$(gc --rig "$RIG" bd show "$bug" --json 2>/dev/null \
       | jq -r '.[0].metadata.repair_beads // ""')
     if [ -z "$REPAIR_BEADS" ]; then
@@ -164,13 +93,16 @@ while read -r RIG_JSON; do
       continue
     fi
 
-    ALL_LANDED=true
-    REASON=""
-    SHAS=""
+    local ALL_LANDED=true
+    local REASON=""
+    local SHAS=""
+    local -a REPAIR_IDS
     IFS=',' read -ra REPAIR_IDS <<< "$REPAIR_BEADS"
+    local id
     for id in "${REPAIR_IDS[@]}"; do
       id=$(echo "$id" | xargs)
       [ -z "$id" ] && continue
+      local info st rest kind mr sha
       info=$(gc --rig "$RIG" bd show "$id" --json 2>/dev/null \
         | jq -r '.[0] | "\(.status)|\(.metadata.repair_kind // "")|\(.metadata.merge_result // "")|\(.metadata.merged_sha // "")"')
       st="${info%%|*}"; rest="${info#*|}"
@@ -184,9 +116,9 @@ while read -r RIG_JSON; do
         break
       fi
       # CANONICAL repair_kind vocabulary (must match decision_class
-       # exactly; see mol-debugger-plan formula "INVARIANT — repair_kind
-       # vocabulary"). Strict allowlist: any other value deadlocks the
-       # bug at decided-but-not-closed.
+      # exactly; see mol-debugger-plan formula "INVARIANT — repair_kind
+      # vocabulary"). Strict allowlist: any other value deadlocks the
+      # bug at decided-but-not-closed.
       case "$kind" in
         direct_bugfix|convoy)
           if [ "$mr" != "merged" ] || ! echo "$sha" | grep -qE '^[0-9a-f]{40}$'; then
@@ -222,6 +154,87 @@ while read -r RIG_JSON; do
       closed=$((closed + 1))
     else
       echo "FAILED to close bug $bug after landing detection" >&2
+    fi
+  done
+}
+
+# 3. Enumerate registered rigs. Skip the city itself (hq=true) and
+# any suspended rigs.
+RIGS_JSON=$(gc rig list --json)
+log "rigs JSON: $(echo "$RIGS_JSON" | jq -c '.rigs[] | {name, hq, suspended}' | tr '\n' ' ')"
+log "IN_FLIGHT plan-mode bug_ids: $(echo "$IN_FLIGHT" | tr '\n' ',')"
+created=0
+closed=0
+
+while read -r RIG_JSON; do
+  RIG=$(echo "$RIG_JSON" | jq -r '.name')
+  log "iterating RIG=$RIG"
+
+  # 4. Drain landed repair bugs before spending time creating new plan beads.
+  close_decided_bugs_for_rig "$RIG"
+
+  # 5. Investigation re-plan signal. For each bug with
+  # `decision_state=decided_investigation`, check whether its
+  # investigation child closed. If yes, flip the bug back to `pending`
+  # with the investigation's findings injected — plan-mode re-runs on
+  # the next tick with the new evidence. Idempotent.
+  INVEST_BUGS=$(gc --rig "$RIG" bd list \
+    --type=bug --status=open \
+    --metadata-field gc.kind=bug \
+    --metadata-field decision_state=decided_investigation \
+    --json | jq -r '.[].id')
+  for bug in $INVEST_BUGS; do
+    invest_id=$(gc --rig "$RIG" bd show "$bug" --json 2>/dev/null \
+      | jq -r '.[0].metadata.repair_beads // ""' | xargs)
+    [ -z "$invest_id" ] && continue
+    invest_status=$(gc --rig "$RIG" bd show "$invest_id" --json 2>/dev/null \
+      | jq -r '.[0].status // empty')
+    if [ "$invest_status" = "closed" ]; then
+      findings=$(gc --rig "$RIG" bd show "$invest_id" --json \
+        | jq -r '.[0].metadata.findings // empty')
+      recommendation=$(gc --rig "$RIG" bd show "$invest_id" --json \
+        | jq -r '.[0].metadata.recommended_decision_class // empty')
+      gc --rig "$RIG" bd update "$bug" \
+        --set-metadata decision_state=pending \
+        --set-metadata investigation_findings="$findings" \
+        --set-metadata investigation_recommendation="$recommendation" \
+        --assignee="" >/dev/null
+      log "  re-plan: flipped $bug → pending (invest $invest_id closed)"
+    fi
+  done
+
+  # 6. Find pending bugs for this rig and create plan-mode beads.
+  PENDING=$(gc --rig "$RIG" bd list \
+    --type=bug --status=open \
+    --metadata-field gc.kind=bug \
+    --metadata-field decision_state=pending \
+    --metadata-field "gc.routed_to=$ROLE_ROUTE" \
+    --json | jq -r '.[].id')
+  log "  PENDING[$RIG]: $(echo "$PENDING" | tr '\n' ',' | sed 's/,$//')"
+
+  for bug in $PENDING; do
+    if is_in_flight "$bug"; then continue; fi
+    metadata=$(jq -cn \
+      --arg agent "$AGENT" \
+      --arg bug "$bug" \
+      --arg rig "$RIG" \
+      --arg binding_prefix "$BINDING_PREFIX" \
+      '{
+        "gc.routed_to": $agent,
+        "bug_id": $bug,
+        "rig_name": $rig,
+        "binding_prefix": $binding_prefix,
+        "formula": "mol-debugger-plan"
+      }')
+    plan=$(gc bd create "mol-debugger-plan" \
+      --type molecule \
+      --metadata "$metadata" \
+      --json | jq -r '.id // empty')
+    if [ -n "$plan" ] && [ "$plan" != "null" ]; then
+      echo "Created debugger plan bead $plan for bug $bug in $RIG"
+      created=$((created + 1))
+    else
+      echo "FAILED to create debugger plan bead for bug $bug in $RIG" >&2
     fi
   done
 
