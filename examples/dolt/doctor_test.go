@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // doctorCheckScript is the on-disk path to the dolt doctor check.
@@ -67,7 +68,7 @@ type doctorSandboxOpts struct {
 func doctorSandbox(t *testing.T, opts doctorSandboxOpts) string {
 	t.Helper()
 	bin := t.TempDir()
-	for _, tool := range []string{"head", "sed"} {
+	for _, tool := range []string{"cat", "head", "mktemp", "rm", "sed", "sleep"} {
 		hostPath, err := exec.LookPath(tool)
 		if err != nil {
 			t.Fatalf("LookPath(%q): %v", tool, err)
@@ -109,11 +110,24 @@ func doctorSandbox(t *testing.T, opts doctorSandboxOpts) string {
 // stdout+stderr (the script writes its diagnostics to stdout, but
 // catching both is robust against a future refactor that splits
 // streams).
-func runDoctorCheck(t *testing.T, sandboxBin string) (int, string) {
+func runDoctorCheck(t *testing.T, sandboxBin string, extraEnv ...string) (int, string) {
 	t.Helper()
 	root := repoRoot(t)
 	cmd := exec.Command("bash", filepath.Join(root, doctorCheckScript))
-	cmd.Env = append(filteredEnv("PATH"), "PATH="+sandboxBin)
+	cmd.Env = append(filteredEnv(
+		"PATH",
+		"GC_BIN",
+		"GC_DOLT_HOST",
+		"GC_DOLT_PORT",
+		"GC_DOLT_DOCTOR_HEALTH",
+		"GC_DOLT_DOCTOR_HEALTH_TIMEOUT_SECS",
+		"GC_DOLT_HEALTHCHECK_MAX_COMMITS",
+		"GC_DOLT_HEALTHCHECK_MAX_NOMS_BYTES",
+		"GC_DOLT_HEALTHCHECK_MAX_REAL_QUERY_MS",
+		"GC_DOLT_HEALTHCHECK_MAX_SELECT_ONE_MS",
+		"GC_DOLT_HEALTH_REAL_QUERY",
+	), "PATH="+sandboxBin)
+	cmd.Env = append(cmd.Env, extraEnv...)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return 0, string(out)
@@ -321,6 +335,140 @@ func TestDoctorCheckVersionFloorDoesNotRequireVersionSort(t *testing.T) {
 	}
 	if !strings.Contains(out, "dolt available") {
 		t.Fatalf("output = %s, want successful version probe", out)
+	}
+}
+
+func installDoctorHealthGCShim(t *testing.T, bin, report string) string {
+	t.Helper()
+	logPath := filepath.Join(t.TempDir(), "gc-invocations.log")
+	writeExecutable(t, filepath.Join(bin, "gc"), fmt.Sprintf(`#!/bin/sh
+echo "$*" >> %s
+if [ "$1" = "dolt" ] && [ "$2" = "health" ] && [ "$3" = "--json" ]; then
+  if [ "${GC_FAKE_HEALTH_SLEEP:-0}" != "0" ]; then
+    sleep "$GC_FAKE_HEALTH_SLEEP"
+  fi
+  cat <<'JSON'
+%s
+JSON
+  exit 0
+fi
+if [ "$1" = "dolt" ] && [ "$2" = "health-check" ]; then
+  cat >/dev/null
+  if [ "${GC_FAKE_HEALTHCHECK_FAIL:-0}" != "0" ]; then
+    echo "Dolt commit count exceeded threshold: hq=412000 > 50000" >&2
+    exit 1
+  fi
+  exit 0
+fi
+echo "unexpected gc invocation: $*" >&2
+exit 64
+`, shellQuote(logPath), report))
+	return logPath
+}
+
+func TestDoctorCheckRunsStructuredHealthWhenEndpointPresent(t *testing.T) {
+	report := `{
+  "server": {"running": true, "reachable": true, "pid": 10, "port": 3307, "latency_ms": 12, "ping_latency_ms": 12},
+  "real_query": {"enabled": false, "ok": false, "timeout": false, "latency_ms": 0, "exit_code": 0},
+  "databases": [{"name": "hq", "commits": 7, "open_beads": 2, "noms_bytes": 1048576}],
+  "storage": {"noms_bytes_visible": true, "noms_bytes_total": 1048576}
+}`
+	bin := doctorSandbox(t, doctorSandboxOpts{
+		dolt:         strPtr("dolt version 1.86.2"),
+		includeFlock: true,
+		includeLsof:  true,
+	})
+	logPath := installDoctorHealthGCShim(t, bin, report)
+
+	code, out := runDoctorCheck(t, bin, "GC_DOLT_PORT=3307")
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0\noutput:\n%s", code, out)
+	}
+	if !strings.Contains(out, "health ok") {
+		t.Fatalf("output missing structured health success:\n%s", out)
+	}
+	if !strings.Contains(out, `"noms_bytes_total": 1048576`) {
+		t.Fatalf("output should include health report details for gc doctor --verbose:\n%s", out)
+	}
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read gc invocation log: %v", err)
+	}
+	for _, want := range []string{"dolt health --json", "dolt health-check"} {
+		if !strings.Contains(string(logData), want) {
+			t.Fatalf("gc invocation log missing %q:\n%s", want, logData)
+		}
+	}
+}
+
+func TestDoctorCheckStructuredHealthFailureSurfacesAsDoctorError(t *testing.T) {
+	report := `{
+  "server": {"running": true, "reachable": true, "pid": 10, "port": 3307, "latency_ms": 12, "ping_latency_ms": 12},
+  "real_query": {"enabled": false, "ok": false, "timeout": false, "latency_ms": 0, "exit_code": 0},
+  "databases": [{"name": "hq", "commits": 412000, "open_beads": 2, "noms_bytes": null}],
+  "storage": {"noms_bytes_visible": false, "noms_bytes_total": 0}
+}`
+	bin := doctorSandbox(t, doctorSandboxOpts{
+		dolt:         strPtr("dolt version 1.86.2"),
+		includeFlock: true,
+		includeLsof:  true,
+	})
+	installDoctorHealthGCShim(t, bin, report)
+
+	code, out := runDoctorCheck(t, bin, "GC_DOLT_PORT=3307", "GC_FAKE_HEALTHCHECK_FAIL=1")
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2\noutput:\n%s", code, out)
+	}
+	if !strings.Contains(out, "Dolt commit count exceeded threshold: hq=412000 > 50000") {
+		t.Fatalf("output missing health threshold failure:\n%s", out)
+	}
+	if !strings.Contains(out, `"commits": 412000`) {
+		t.Fatalf("output missing health report details:\n%s", out)
+	}
+}
+
+func TestDoctorCheckSkipsStructuredHealthWithoutEndpoint(t *testing.T) {
+	bin := doctorSandbox(t, doctorSandboxOpts{
+		dolt:         strPtr("dolt version 1.86.2"),
+		includeFlock: true,
+		includeLsof:  true,
+	})
+	writeExecutable(t, filepath.Join(bin, "gc"), "#!/bin/sh\necho unexpected gc invocation >&2\nexit 64\n")
+
+	code, out := runDoctorCheck(t, bin)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0\noutput:\n%s", code, out)
+	}
+	if !strings.Contains(out, "structured health skipped (no active Dolt endpoint)") {
+		t.Fatalf("output missing no-endpoint skip:\n%s", out)
+	}
+	if strings.Contains(out, "unexpected gc invocation") {
+		t.Fatalf("doctor should not invoke gc without an active endpoint:\n%s", out)
+	}
+}
+
+func TestDoctorCheckStructuredHealthTimeoutIsBounded(t *testing.T) {
+	bin := doctorSandbox(t, doctorSandboxOpts{
+		dolt:         strPtr("dolt version 1.86.2"),
+		includeFlock: true,
+		includeLsof:  true,
+	})
+	installDoctorHealthGCShim(t, bin, `{"server":{"reachable":true}}`)
+
+	start := time.Now()
+	code, out := runDoctorCheck(t, bin,
+		"GC_DOLT_PORT=3307",
+		"GC_DOLT_DOCTOR_HEALTH_TIMEOUT_SECS=1",
+		"GC_FAKE_HEALTH_SLEEP=10",
+	)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2\noutput:\n%s", code, out)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("health timeout took %s, want bounded well under 5s\noutput:\n%s", elapsed, out)
+	}
+	if !strings.Contains(out, "dolt health timed out after 1s") {
+		t.Fatalf("output missing timeout message:\n%s", out)
 	}
 }
 

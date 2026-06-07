@@ -1,1 +1,1 @@
-description = "Verify Dolt binary is available"
+description = "Verify Dolt binary, required tools, and structured data-plane health"

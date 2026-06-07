@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Pack doctor check: verify Dolt binary and required tools.
+# Pack doctor check: verify Dolt binary, required tools, and the structured
+# Dolt data-plane health report when a Dolt endpoint is active.
 #
 # Exit codes: 0=OK, 1=Warning, 2=Error
 # stdout: first line=message, rest=details
@@ -145,5 +146,86 @@ if version_lt "$ver_str" "$required"; then
     exit 2
 fi
 
-echo "dolt available ($version), flock ok, lsof ok"
+gc_bin="${GC_BIN:-gc}"
+health_mode="${GC_DOLT_DOCTOR_HEALTH:-auto}"
+health_timeout="${GC_DOLT_DOCTOR_HEALTH_TIMEOUT_SECS:-45}"
+case "$health_timeout" in
+    ''|*[!0-9]*|0) health_timeout=45 ;;
+esac
+
+run_health=false
+case "$health_mode" in
+    0|false|FALSE|no|NO|off|OFF)
+        run_health=false
+        ;;
+    1|true|TRUE|yes|YES|on|ON|required|REQUIRED)
+        run_health=true
+        ;;
+    *)
+        if [ -n "${GC_DOLT_PORT:-}" ]; then
+            run_health=true
+        fi
+        ;;
+esac
+
+if [ "$run_health" != true ]; then
+    echo "dolt available ($version), flock ok, lsof ok; structured health skipped (no active Dolt endpoint)"
+    exit 0
+fi
+
+if ! command -v "$gc_bin" >/dev/null 2>&1; then
+    echo "dolt health check unavailable: gc command not found ($gc_bin)"
+    echo "Set GC_BIN to the current gc binary or ensure gc is on PATH."
+    exit 2
+fi
+
+report_file=$(mktemp)
+health_err_file=$(mktemp)
+check_out_file=$(mktemp)
+check_err_file=$(mktemp)
+cleanup_health_files() {
+    rm -f "$report_file" "$health_err_file" "$check_out_file" "$check_err_file"
+}
+trap cleanup_health_files EXIT
+
+set +e
+run_bounded "$health_timeout" "$gc_bin" dolt health --json >"$report_file" 2>"$health_err_file"
+health_status=$?
+set -e
+if [ "$health_status" -ne 0 ]; then
+    if [ "$health_status" -eq 124 ]; then
+        echo "dolt health timed out after ${health_timeout}s"
+    else
+        echo "dolt health command failed with status $health_status"
+    fi
+    if [ -s "$health_err_file" ]; then
+        cat "$health_err_file"
+    fi
+    if [ -s "$report_file" ]; then
+        cat "$report_file"
+    fi
+    exit 2
+fi
+
+set +e
+run_bounded "$health_timeout" "$gc_bin" dolt health-check <"$report_file" >"$check_out_file" 2>"$check_err_file"
+check_status=$?
+set -e
+if [ "$check_status" -ne 0 ]; then
+    message=$(sed -n '1p' "$check_err_file" 2>/dev/null)
+    if [ -z "$message" ]; then
+        message="dolt health-check failed with status $check_status"
+    fi
+    echo "$message"
+    if [ -s "$check_err_file" ]; then
+        sed '1d' "$check_err_file"
+    fi
+    if [ -s "$report_file" ]; then
+        cat "$report_file"
+    fi
+    exit 2
+fi
+
+echo "dolt available ($version), flock ok, lsof ok, health ok"
+cat "$report_file"
 exit 0
