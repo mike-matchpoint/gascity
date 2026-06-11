@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gastown.dev/schemas/domain-handoff/events/gascity-domain-command-requested.v1.schema.json",
+  "title": "GasCityDomainCommandRequested v1",
+  "description": "Domain-addressed request for an allowlisted deterministic domain action; the city never mutates protected domain state directly. FLAT detail (no cross-city envelope): published with the domain event source and this object as the EventBridge detail. The domain bridge's deny-by-default command router validates, executes, and (when reply is present) answers with a GasCityDomainCommandTerminal.v1 envelope event addressed back to reply.target_city with payload.route=reply.route. Published only by the domain-handoff domain-command-publish order from an open domain_command_request bead, which stays open as the durable waiter until domain-command-reconcile closes it. Contract version 1.1.",
+  "type": "object",
+  "required": [
+    "command_id",
+    "execution_id",
+    "target_env",
+    "command",
+    "idempotency_key",
+    "payload_s3_uri",
+    "requested_at"
+  ],
+  "properties": {
+    "command_id": { "type": "string", "minLength": 1 },
+    "execution_id": { "type": "string", "minLength": 1 },
+    "job_id": { "type": "string", "minLength": 1 },
+    "gascity_molecule_id": { "type": "string", "minLength": 1 },
+    "gascity_bead_id": { "type": "string", "minLength": 1 },
+    "target_env": { "type": "string", "minLength": 1 },
+    "command": { "type": "string", "pattern": "^[a-z0-9_]+\\.[a-z0-9_]+$" },
+    "idempotency_key": { "type": "string", "minLength": 1 },
+    "payload_s3_uri": { "type": "string", "pattern": "^s3://" },
+    "correlation": { "type": "object" },
+    "reply": {
+      "type": "object",
+      "required": ["target_city", "route"],
+      "properties": {
+        "target_city": { "type": "string", "minLength": 1 },
+        "route": { "type": "string", "minLength": 1 },
+        "target_city_role": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "requested_at": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}

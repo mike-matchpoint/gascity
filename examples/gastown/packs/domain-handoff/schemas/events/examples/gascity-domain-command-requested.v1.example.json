@@ -1,0 +1,24 @@
+{
+  "command_id": "gcdc-20260610-survey-tractor-001",
+  "execution_id": "gce-20260610-tractor-drawbar-001",
+  "job_id": "job-001",
+  "gascity_molecule_id": "vgemcd-101",
+  "gascity_bead_id": "vgemcd-101.3",
+  "target_env": "dev",
+  "vehicle_type": "tractor",
+  "command": "schema_exploration.survey_sources",
+  "idempotency_key": "schema_exploration.survey_sources:gce-20260610-tractor-drawbar-001:source-001",
+  "payload_s3_uri": "s3://vehicle-graph-schema-generation-artifacts-317250221986-dev/gascity/executions/gce-20260610-tractor-drawbar-001/beads/vgemcd-101.3/input.json",
+  "correlation": {
+    "job_id": "job-001",
+    "exploration_id": "exp-001",
+    "vehicle_type": "tractor",
+    "category": "drawbar"
+  },
+  "reply": {
+    "target_city": "vehicle-graph-execution-monitoring-city-dev",
+    "route": "domain-handoff.command-terminal-reconciler",
+    "target_city_role": "execution-monitoring-city"
+  },
+  "requested_at": "2026-06-10T12:05:00Z"
+}

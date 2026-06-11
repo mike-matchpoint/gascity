@@ -1,0 +1,21 @@
+# Cook inbound GasCityWorkRequested.v1 handoff beads into molecules.
+#
+# The cross-city ingress adapter creates durable event_handoff beads routed to
+# domain-handoff.work-dispatcher. This order attaches the requested
+# city-resolved formula to each new bead (`gc formula cook --attach`), so the
+# molecule's gc.kind-stamped step beads flow through the city's own routing
+# scan and agent pools. Dispatch is 100% mechanical (no LLM): enumeration,
+# one cook per bead, metadata stamps. Frequent firing is safe — dispatched
+# beads carry handoff.molecule_root and are filtered out; a single-flight lock
+# in the state helper stops overlapping ticks.
+#
+# Undispatchable requests (unknown formula) publish a FAILED
+# GasCityExecutionTerminal.v1 back to the requesting domain runtime so its
+# execution ledger never waits forever.
+[order]
+description = "Dispatch inbound GasCityWorkRequested.v1 handoff beads by cooking their formula as an attached molecule"
+exec = "bash $PACK_DIR/assets/scripts/handoff-work-dispatch.sh"
+trigger = "cooldown"
+scope = "city"
+interval = "60s"
+timeout = "5m"

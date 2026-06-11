@@ -1,0 +1,21 @@
+# Reconcile inbound GasCityDomainCommandTerminal.v1 beads with their waiting
+# domain_command_request beads.
+#
+# The domain bridge answers command requests with an envelope event routed to
+# domain-handoff.command-terminal-reconciler; the ingress adapter
+# turns it into an event_handoff bead. This order stamps the terminal result
+# onto the matching waiter (handoff.command_status / handoff.command_terminal),
+# notes the origin step bead, and closes both the waiter and the terminal
+# bead — unblocking the molecule step that depended on the waiter.
+#
+# Reconciliation is 100% mechanical (no LLM). Idempotent: duplicate terminals
+# for already-closed waiters are closed as duplicates; unmatched terminals
+# stay open for the next tick and surface in city health patrols if they
+# never match.
+[order]
+description = "Apply domain command terminals to their waiter beads and unblock dependent molecule steps"
+exec = "bash $PACK_DIR/assets/scripts/domain-command-reconcile.sh"
+trigger = "cooldown"
+scope = "city"
+interval = "60s"
+timeout = "5m"

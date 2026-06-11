@@ -1,0 +1,21 @@
+{
+  "execution_id": "gce-20260610-tractor-drawbar-001",
+  "job_id": "job-001",
+  "gascity_city": "vehicle-graph-execution-monitoring-city-dev",
+  "gascity_molecule_id": "vgemcd-101",
+  "status": "SUCCEEDED",
+  "terminal_reason": "all_required_beads_closed",
+  "formula_name": "vehicle.schema_exploration.v1",
+  "formula_bundle_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "target_env": "dev",
+  "vehicle_type": "tractor",
+  "artifact_manifest_s3_uri": "s3://vehicle-graph-schema-generation-artifacts-317250221986-dev/gascity/executions/gce-20260610-tractor-drawbar-001/manifest.json",
+  "started_at": "2026-06-10T12:01:00Z",
+  "completed_at": "2026-06-10T12:41:00Z",
+  "correlation": {
+    "job_id": "job-001",
+    "exploration_id": "exp-001",
+    "vehicle_type": "tractor",
+    "category": "drawbar"
+  }
+}
