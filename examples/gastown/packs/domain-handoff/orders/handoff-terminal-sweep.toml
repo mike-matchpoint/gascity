@@ -1,0 +1,20 @@
+# Publish GasCityExecutionTerminal.v1 for completed handoff molecules.
+#
+# Dispatched handoff beads are blocked on their attached molecule. When the
+# molecule terminates (all step beads closed, or a failure recorded via
+# molecule_failed / handoff.step_status=failed / a finalizer's
+# handoff.terminal_status stamp), this order assembles the flat terminal
+# detail — echoing correlation, formula_bundle_hash, and job_id from the
+# original request verbatim — publishes it through
+# publish-cross-city-event.sh, and closes the handoff bead.
+#
+# Terminal derivation and publication are 100% mechanical (no LLM). Idempotent:
+# published beads carry handoff.terminal_published_at and are filtered out,
+# and the receiving domain ledger dedupes by terminal payload hash.
+[order]
+description = "Publish execution terminals for completed handoff molecules and close their handoff beads"
+exec = "bash $PACK_DIR/assets/scripts/handoff-terminal-sweep.sh"
+trigger = "cooldown"
+scope = "city"
+interval = "120s"
+timeout = "5m"

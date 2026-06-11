@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gastown.dev/schemas/domain-handoff/events/gascity-work-requested.v1.schema.json",
+  "title": "GasCityWorkRequested v1",
+  "description": "Cross-city handoff: a domain runtime (or another city) requests agentic work in a hosted GasCity city. The receiving adapter creates one durable bead with gc.kind=event_handoff and gc.routed_to=payload.route. Route the bead to <binding>.work-dispatcher to have the domain-handoff handoff-work-dispatch order cook payload.metadata.formula_name as a molecule attached to the bead. Canonical in the domain-handoff pack. Contract version 1.1.",
+  "type": "object",
+  "required": [
+    "event_type",
+    "event_version",
+    "process_slug",
+    "city_pair_slug",
+    "source_city",
+    "source_city_role",
+    "target_city",
+    "target_city_role",
+    "correlation_id",
+    "idempotency_key",
+    "occurred_at",
+    "payload"
+  ],
+  "properties": {
+    "event_type": { "const": "GasCityWorkRequested.v1" },
+    "event_version": { "const": "v1" },
+    "process_slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "city_pair_slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "source_city": { "type": "string", "minLength": 1 },
+    "source_city_role": { "type": "string", "minLength": 1 },
+    "target_city": { "type": "string", "minLength": 1 },
+    "target_city_role": { "type": "string", "minLength": 1 },
+    "correlation_id": { "type": "string", "minLength": 1 },
+    "idempotency_key": { "type": "string", "minLength": 1 },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "payload": {
+      "type": "object",
+      "required": ["route", "title", "body"],
+      "properties": {
+        "route": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "body": { "type": "string", "minLength": 1 },
+        "bead_type": { "type": "string", "minLength": 1 },
+        "priority": { "type": "integer" },
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "execution_id": { "type": "string", "minLength": 1 },
+            "formula_name": { "type": "string", "minLength": 1 },
+            "formula_bundle_hash": { "type": "string", "minLength": 1 },
+            "artifact_manifest_required": { "type": "boolean" },
+            "terminal_detail_type": { "type": "string", "minLength": 1 },
+            "domain_command_detail_type": { "type": "string", "minLength": 1 },
+            "artifact_prefix": { "type": "string", "minLength": 1 },
+            "correlation": { "type": "object" },
+            "variables": { "type": "object" }
+          }
+        },
+        "labels": { "type": "array", "items": { "type": "string" } },
+        "context_artifact_uris": { "type": "array", "items": { "type": "string" } },
+        "evidence_uris": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

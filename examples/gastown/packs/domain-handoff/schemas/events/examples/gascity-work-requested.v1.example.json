@@ -1,0 +1,44 @@
+{
+  "event_type": "GasCityWorkRequested.v1",
+  "event_version": "v1",
+  "process_slug": "vehicle-graph",
+  "city_pair_slug": "vehicle-graph",
+  "source_city": "matchpoint-vehicle-graph-dev",
+  "source_city_role": "aws-domain-pipeline",
+  "target_city": "vehicle-graph-execution-monitoring-city-dev",
+  "target_city_role": "execution-monitoring-city",
+  "correlation_id": "gce-20260610-tractor-drawbar-001",
+  "idempotency_key": "vehicle.schema_exploration.v1:dev:tractor:drawbar:exp-001",
+  "occurred_at": "2026-06-10T12:00:00Z",
+  "payload": {
+    "route": "domain-handoff.work-dispatcher",
+    "title": "vehicle.schema_exploration.v1 drawbar",
+    "body": "Run vehicle.schema_exploration.v1 for tractor in dev.",
+    "bead_type": "vehicle.schema_exploration.v1",
+    "priority": 50,
+    "metadata": {
+      "execution_id": "gce-20260610-tractor-drawbar-001",
+      "job_id": "job-001",
+      "target_env": "dev",
+      "vehicle_type": "tractor",
+      "formula_name": "vehicle.schema_exploration.v1",
+      "formula_bundle_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "artifact_manifest_required": true,
+      "terminal_detail_type": "GasCityExecutionTerminal.v1",
+      "domain_command_detail_type": "GasCityDomainCommandRequested.v1",
+      "artifact_prefix": "s3://vehicle-graph-schema-generation-artifacts-317250221986-dev/gascity/executions/gce-20260610-tractor-drawbar-001",
+      "correlation": {
+        "job_id": "job-001",
+        "exploration_id": "exp-001",
+        "vehicle_type": "tractor",
+        "category": "drawbar"
+      },
+      "variables": {
+        "vehicle_type": "tractor",
+        "category": "drawbar",
+        "sample_size": 25
+      }
+    },
+    "labels": ["vehicle-data", "schema-exploration"]
+  }
+}

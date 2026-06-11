@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# Fake `gc` CLI for domain-handoff order tests.
+#
+# Bead state lives in the JSON array file named by GC_FAKE_STATE. Supports the
+# exact subset of the gc surface the handoff order scripts use. Every mutation
+# is written back to the state file so assertions can inspect it.
+set -euo pipefail
+
+: "${GC_FAKE_STATE:?GC_FAKE_STATE must point at the bead state JSON file}"
+
+die() { printf 'fake-gc: %s\n' "$*" >&2; exit 1; }
+
+state() { cat "$GC_FAKE_STATE"; }
+write_state() { cat > "$GC_FAKE_STATE.tmp" && mv "$GC_FAKE_STATE.tmp" "$GC_FAKE_STATE"; }
+
+cmd="${1:-}"; shift || true
+
+case "$cmd" in
+  bd)
+    sub="${1:-}"; shift || true
+    case "$sub" in
+      list)
+        ALL=0; STATUS=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --all) ALL=1; shift ;;
+            --status=*) STATUS="${1#--status=}"; shift ;;
+            --json|--limit=0) shift ;;
+            *) shift ;;
+          esac
+        done
+        if [ "$ALL" -eq 1 ]; then
+          state
+        elif [ -n "$STATUS" ]; then
+          state | jq --arg s "$STATUS" '[.[] | select(.status == $s)]'
+        else
+          state | jq '[.[] | select(.status != "closed")]'
+        fi
+        ;;
+      update)
+        ID="${1:?bead id required}"; shift
+        UPDATES='{}'; NOTES=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --set-metadata)
+              KV="$2"; shift 2
+              KEY="${KV%%=*}"; VALUE="${KV#*=}"
+              UPDATES=$(jq -nc --argjson u "$UPDATES" --arg k "$KEY" --arg v "$VALUE" '$u + {($k): $v}')
+              ;;
+            --notes) NOTES="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        state | jq --arg id "$ID" --argjson u "$UPDATES" --arg notes "$NOTES" '
+          map(if .id == $id
+              then .metadata = ((.metadata // {}) + $u)
+                   | (if $notes != "" then .notes = ((.notes // []) + [$notes]) else . end)
+              else . end)
+        ' | write_state
+        ;;
+      close)
+        ID="${1:?bead id required}"; shift
+        REASON=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --reason) REASON="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        state | jq --arg id "$ID" --arg r "$REASON" '
+          map(if .id == $id then .status = "closed" | .close_reason = $r else . end)
+        ' | write_state
+        ;;
+      *) die "unsupported bd subcommand: $sub" ;;
+    esac
+    ;;
+  formula)
+    sub="${1:-}"; shift || true
+    [ "$sub" = "cook" ] || die "unsupported formula subcommand: $sub"
+    NAME="${1:?formula name required}"; shift
+    ATTACH=""
+    VARS='{}'
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --attach) ATTACH="$2"; shift 2 ;;
+        --var)
+          KV="$2"; shift 2
+          KEY="${KV%%=*}"; VALUE="${KV#*=}"
+          VARS=$(jq -nc --argjson v "$VARS" --arg k "$KEY" --arg val "$VALUE" '$v + {($k): $val}')
+          ;;
+        --json) shift ;;
+        *) shift ;;
+      esac
+    done
+    [ -n "$ATTACH" ] || die "fake cook requires --attach"
+    if [ "$NAME" = "vehicle.unknown_formula.v1" ]; then
+      echo "compile: formula \"$NAME\" not found in any formula layer" >&2
+      exit 1
+    fi
+    ROOT="${ATTACH}-mol"
+    state | jq --arg root "$ROOT" --arg attach "$ATTACH" --arg formula "$NAME" --argjson vars "$VARS" '
+      . + [{id: $root, title: ("molecule " + $formula), status: "open", type: "molecule",
+            metadata: {"gc.root_bead_id": $attach, "cook.vars": ($vars | tojson)}}]
+    ' | write_state
+    jq -nc --arg root "$ROOT" --arg attach "$ATTACH" --arg formula "$NAME" \
+      '{schema_version: "1", ok: true, formula: $formula, mode: "attach",
+        attach_bead_id: $attach, root_id: $root, workflow_root_id: $attach, created: 1}'
+    ;;
+  *) die "unsupported command: $cmd" ;;
+esac

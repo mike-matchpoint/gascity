@@ -1,0 +1,22 @@
+# Publish GasCityDomainCommandRequested.v1 for open domain_command_request
+# beads.
+#
+# City agents request deterministic domain actions by creating a
+# domain_command_request bead carrying the flat command payload in
+# metadata.payload and wiring it as a blocker of the step the result
+# unblocks. This order validates, injects the standard reply block
+# (this city + the command-terminal-reconciler route) when absent, publishes
+# through publish-cross-city-event.sh, and stamps
+# handoff.command_published_at. The bead stays OPEN as the durable waiter
+# until domain-command-reconcile applies the command terminal.
+#
+# Publication is 100% mechanical (no LLM). Idempotent: published waiters are
+# filtered out by the stamp; the publish dedupe key is the command_id and the
+# domain router dedupes by idempotency_key.
+[order]
+description = "Publish domain command requests from open domain_command_request waiter beads"
+exec = "bash $PACK_DIR/assets/scripts/domain-command-publish.sh"
+trigger = "cooldown"
+scope = "city"
+interval = "60s"
+timeout = "5m"

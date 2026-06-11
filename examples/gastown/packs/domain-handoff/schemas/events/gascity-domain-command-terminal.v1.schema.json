@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gastown.dev/schemas/domain-handoff/events/gascity-domain-command-terminal.v1.schema.json",
+  "title": "GasCityDomainCommandTerminal v1",
+  "description": "Result of a GasCityDomainCommandRequested.v1 command, published by the domain bridge back to the requesting city as a cross-city ENVELOPE event (payload = this object) with payload.route set from the request's reply.route, normally <binding>.command-terminal-reconciler. The receiving adapter creates a routed bead; the domain-handoff domain-command-reconcile order stamps the result onto the waiting domain_command_request bead and its origin bead, then closes the waiter, unblocking downstream molecule steps. This schema validates the PAYLOAD object; the envelope is validated by common-envelope.v1. Contract version 1.1.",
+  "type": "object",
+  "required": ["command_id", "execution_id", "command", "status"],
+  "properties": {
+    "command_id": { "type": "string", "minLength": 1 },
+    "execution_id": { "type": "string", "minLength": 1 },
+    "command": { "type": "string", "minLength": 1 },
+    "status": { "type": "string", "enum": ["SUCCEEDED", "FAILED", "REJECTED"] },
+    "terminal_reason": { "type": "string" },
+    "result_s3_uri": { "type": "string", "pattern": "^s3://" },
+    "target_env": { "type": "string", "minLength": 1 },
+    "error_code": { "type": "string" },
+    "error_message": { "type": "string" },
+    "completed_at": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}

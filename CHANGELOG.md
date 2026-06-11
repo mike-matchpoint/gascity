@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- New bundled `domain-handoff` pack: the deterministic handoff lifecycle
+  between an external domain runtime (for example an AWS EventBridge
+  pipeline) and a hosted execution city. Four exec orders own the machine
+  ends — `handoff-work-dispatch` cooks an inbound `GasCityWorkRequested.v1`
+  bead's requested formula as an attached molecule, `domain-command-publish`
+  publishes `domain_command_request` waiter beads as
+  `GasCityDomainCommandRequested.v1`, `domain-command-reconcile` applies
+  returned command terminals and unblocks dependent steps, and
+  `handoff-terminal-sweep` publishes `GasCityExecutionTerminal.v1` when the
+  molecule terminates. The pack defines no agents; all judgment stays in the
+  importing city's pools, which claim the molecule's gc.kind-stamped steps.
+  Canonical event schemas ship under the pack's `schemas/events/`, the agent
+  contract under `template-fragments/handoff-execution-contract.template.md`,
+  and a fake-gc/fake-aws test suite under `tests/` (`make test-packs`).
+- `execution-city-operations`'s `publish-cross-city-event.sh` now supports
+  flat domain-addressed events (payload published as the raw EventBridge
+  detail with `GASCITY_DOMAIN_EVENT_SOURCE`, default `GasCity`) alongside
+  envelope events, derives the class from the schema, and accepts
+  `--schema-file` plus `--target-city-role` so other packs can register event
+  types without modifying the script. Repo handoff events keep their exact
+  prior behavior, including codegen ownership resolution.
 - Claude Opus 4.8 is now listed in built-in Claude model choices and default
   pricing. The `opus` model choice targets `claude-opus-4-8`; `opus-4-7`
   remains available for cities that need the prior Opus target. Anthropic's

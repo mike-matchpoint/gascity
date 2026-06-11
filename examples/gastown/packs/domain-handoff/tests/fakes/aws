@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Fake `aws` CLI for domain-handoff order tests. Captures
+# events put-events entries to AWS_FAKE_CAPTURE (JSONL of entry arrays) and
+# returns a successful PutEvents response.
+set -euo pipefail
+
+: "${AWS_FAKE_CAPTURE:?AWS_FAKE_CAPTURE must point at the capture file}"
+
+if [ "${1:-}" = "events" ] && [ "${2:-}" = "put-events" ]; then
+  shift 2
+  ENTRIES=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --entries) ENTRIES="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  [ -n "$ENTRIES" ] || { echo "fake-aws: --entries required" >&2; exit 1; }
+  printf '%s\n' "$ENTRIES" | jq -c . >> "$AWS_FAKE_CAPTURE"
+  jq -nc '{FailedEntryCount: 0, Entries: [{EventId: "evt-fake-0001"}]}'
+  exit 0
+fi
+
+echo "fake-aws: unsupported invocation: $*" >&2
+exit 1

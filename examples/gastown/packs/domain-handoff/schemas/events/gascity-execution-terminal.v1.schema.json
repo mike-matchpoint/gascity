@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gastown.dev/schemas/domain-handoff/events/gascity-execution-terminal.v1.schema.json",
+  "title": "GasCityExecutionTerminal v1",
+  "description": "Domain-addressed completion notification for a GasCityWorkRequested.v1 execution. FLAT detail (no cross-city envelope): the consumer is a deterministic domain runtime, not another city, so the event is published with the domain event source (GASCITY_DOMAIN_EVENT_SOURCE, default GasCity) and this object as the EventBridge detail. Domain bridges match on detail-type plus detail.target_env and may enforce a stricter process-specific schema on top of this generic shape; fields echoed from the originating work request (correlation, formula_bundle_hash, job_id) must be echoed verbatim. Published only by the domain-handoff handoff-terminal-sweep order via publish-cross-city-event.sh. Contract version 1.1.",
+  "type": "object",
+  "required": [
+    "execution_id",
+    "gascity_city",
+    "gascity_molecule_id",
+    "status",
+    "terminal_reason",
+    "formula_name",
+    "target_env",
+    "started_at",
+    "completed_at",
+    "correlation"
+  ],
+  "properties": {
+    "execution_id": { "type": "string", "minLength": 1 },
+    "job_id": { "type": "string", "minLength": 1 },
+    "gascity_city": { "type": "string", "minLength": 1 },
+    "gascity_molecule_id": { "type": "string", "minLength": 1 },
+    "gascity_convoy_id": { "type": "string", "minLength": 1 },
+    "status": {
+      "type": "string",
+      "enum": ["SUCCEEDED", "FAILED", "REJECTED", "CANCELLED", "TIMED_OUT"]
+    },
+    "terminal_reason": { "type": "string", "minLength": 1 },
+    "formula_name": { "type": "string", "minLength": 1 },
+    "formula_bundle_hash": { "type": "string", "minLength": 1 },
+    "target_env": { "type": "string", "minLength": 1 },
+    "artifact_manifest_s3_uri": { "type": "string", "pattern": "^s3://" },
+    "started_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": "string", "format": "date-time" },
+    "correlation": { "type": "object" }
+  },
+  "additionalProperties": true
+}

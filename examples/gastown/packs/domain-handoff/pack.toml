@@ -1,0 +1,20 @@
+[pack]
+name = "domain-handoff"
+schema = 2
+
+# Deterministic handoff lifecycle between an external domain runtime (for
+# example an AWS EventBridge pipeline) and a hosted execution city.
+#
+# This pack is intentionally separate from execution-city-operations: that
+# pack keeps a city functioning (mayor, deacon, patrols, incident and codegen
+# filing roles); this pack carries the reusable, business-process-agnostic
+# machinery for executing domain-requested work — inbound work dispatch,
+# domain command waiters, command terminal reconciliation, and execution
+# terminal publication. It defines NO agents: every order here is a
+# deterministic exec script, and all judgment stays in the importing city's
+# own agent pools, which claim the gc.kind-stamped molecule steps the
+# dispatcher materializes.
+#
+# Cross-city/domain publishes go through the execution-city-operations pack's
+# publish-cross-city-event.sh (the single approved event-bus emitter), with
+# this pack's schemas passed via --schema-file. Cities import both packs.
