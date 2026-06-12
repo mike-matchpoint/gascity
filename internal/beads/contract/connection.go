@@ -201,6 +201,14 @@ func ValidateCanonicalConfigState(fs fsys.FS, cityRoot, scopeRoot string, cfg Co
 				return fmt.Errorf("inherited rig under managed city must not track dolt.host, dolt.port, or dolt.user")
 			}
 		case EndpointOriginCityCanonical:
+			if strings.TrimSpace(cfg.DoltHost) == "" && strings.TrimSpace(cfg.DoltPort) == "" {
+				// Pre-normalization committed form (a rig joining an
+				// already-canonical city). Connections resolve from the
+				// city endpoint regardless (resolveInheritedCityConnectionTarget),
+				// and normalization mirrors it into the rig config. Only a
+				// present-but-mismatched endpoint is an error.
+				return nil
+			}
 			if strings.TrimSpace(cfg.DoltHost) == "" || strings.TrimSpace(cfg.DoltPort) == "" {
 				return fmt.Errorf("canonical inherited rig config requires both dolt.host and dolt.port")
 			}
