@@ -505,26 +505,33 @@ wait_for_bd_runtime_schema() {
 #   2. sync.remote persisted to config.yaml before init completed — bd's
 #      init-safety reads a configured sync.remote as "remote has Dolt
 #      history" and refuses --force re-init.
-# Recovery is gated on the database having no committed history beyond
-# Dolt's auto-generated init commit (dolt_log <= 1). A scope with real
-# committed bead data never matches the gate; those still fail loudly so a
-# human decides. Multi-rig cities walk init for many minutes, so this gate
-# is what makes the walk safely resumable after any interruption.
+# We are only called when the scope's bd schema is not live (no readable
+# config table), which can only be true before the first successful init —
+# bd refuses every bead operation without its schema, so no real bead data
+# can exist behind a schema-less database. Belt and braces: any database
+# that somehow contains issue rows is refused and left for a human.
+# Multi-rig cities walk init for many minutes, so this recovery is what
+# makes the walk safely resumable after any interruption.
 recover_failed_first_init() {
     local dir="$1" db="$2"
-    local host commits
+    local host issues
     valid_sql_name "$db" || return 0
     host=$(connect_host)
-    commits=$(dolt --host "$host" --port "$DOLT_PORT" --user "$DOLT_USER" --password "${DOLT_PASSWORD:-}" --no-tls \
-        sql -q "SELECT COUNT(*) FROM \`$db\`.dolt_log" -r csv 2>/dev/null | tail -n 1)
-    case "$commits" in
-        ''|*[!0-9]*) return 0 ;;  # unknown state: leave for bd's own guards
+    issues=$(dolt --host "$host" --port "$DOLT_PORT" --user "$DOLT_USER" --password "${DOLT_PASSWORD:-}" --no-tls \
+        sql -q "SELECT COUNT(*) FROM \`$db\`.issues" -r csv 2>/dev/null | tail -n 1)
+    case "$issues" in
+        ''|*[!0-9]*|0) ;;  # table missing/unreadable/empty: pre-init debris
+        *)
+            echo "warning: database '$db' lacks a live bd schema but contains $issues issue rows; refusing automatic reset" >&2
+            return 0
+            ;;
     esac
-    if [ "$commits" -gt 1 ]; then
-        return 0
-    fi
-    echo "warning: database '$db' has no committed history; dropping failed-first-init debris before re-init" >&2
+    echo "warning: database '$db' has no live bd schema; resetting failed-first-init debris before re-init" >&2
     server_sql_retry "DROP DATABASE IF EXISTS \`$db\`" >/dev/null || return 0
+    # Dolt preserves dropped databases, and CREATE DATABASE with the same
+    # name RESTORES the dropped copy — which would resurrect the debris on
+    # the very next step. Purge so the re-create is truly fresh.
+    server_sql "CALL dolt_purge_dropped_databases()" >/dev/null 2>&1 || true
     ensure_database_registered "$db" || die "failed to recreate Dolt database '$db' after dropping failed-first-init debris"
     if [ -f "$dir/.beads/config.yaml" ] && grep -q '^sync\.remote:' "$dir/.beads/config.yaml"; then
         echo "warning: removing sync.remote persisted by interrupted init from $dir/.beads/config.yaml (bd re-persists it on successful init)" >&2
