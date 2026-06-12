@@ -497,6 +497,42 @@ wait_for_bd_runtime_schema() {
     return 1
 }
 
+# recover_failed_first_init resets debris left by an interrupted first
+# `bd init` of a scope (supervisor restart, reload, or pod kill mid-walk).
+# An interrupted init strands two artifacts that make every retry fail:
+#   1. bd tables created but never dolt-committed — bd's schema migration
+#      refuses: "pending schema migrations alter pre-existing dirty tables";
+#   2. sync.remote persisted to config.yaml before init completed — bd's
+#      init-safety reads a configured sync.remote as "remote has Dolt
+#      history" and refuses --force re-init.
+# Recovery is gated on the database having no committed history beyond
+# Dolt's auto-generated init commit (dolt_log <= 1). A scope with real
+# committed bead data never matches the gate; those still fail loudly so a
+# human decides. Multi-rig cities walk init for many minutes, so this gate
+# is what makes the walk safely resumable after any interruption.
+recover_failed_first_init() {
+    local dir="$1" db="$2"
+    local host commits
+    valid_sql_name "$db" || return 0
+    host=$(connect_host)
+    commits=$(dolt --host "$host" --port "$DOLT_PORT" --user "$DOLT_USER" --password "${DOLT_PASSWORD:-}" --no-tls \
+        sql -q "SELECT COUNT(*) FROM \`$db\`.dolt_log" -r csv 2>/dev/null | tail -n 1)
+    case "$commits" in
+        ''|*[!0-9]*) return 0 ;;  # unknown state: leave for bd's own guards
+    esac
+    if [ "$commits" -gt 1 ]; then
+        return 0
+    fi
+    echo "warning: database '$db' has no committed history; dropping failed-first-init debris before re-init" >&2
+    server_sql_retry "DROP DATABASE IF EXISTS \`$db\`" >/dev/null || return 0
+    ensure_database_registered "$db" || die "failed to recreate Dolt database '$db' after dropping failed-first-init debris"
+    if [ -f "$dir/.beads/config.yaml" ] && grep -q '^sync\.remote:' "$dir/.beads/config.yaml"; then
+        echo "warning: removing sync.remote persisted by interrupted init from $dir/.beads/config.yaml (bd re-persists it on successful init)" >&2
+        sed '/^sync\.remote:/d' "$dir/.beads/config.yaml" > "$dir/.beads/config.yaml.tmp" \
+            && mv "$dir/.beads/config.yaml.tmp" "$dir/.beads/config.yaml"
+    fi
+}
+
 # ensure_types_custom_in_yaml writes types.custom to .beads/config.yaml.
 # bd reads this YAML key as a fallback when the database config table is
 # unset (see beads internal/config: GetCustomTypesFromYAML), so writing
@@ -2176,6 +2212,7 @@ op_init() {
                 exit 0
             fi
             echo "warning: database '$dolt_database' missing bd schema; re-initializing" >&2
+            recover_failed_first_init "$dir" "$dolt_database"
             bd_init_force="--force"
         else
             echo "warning: database '$dolt_database' not registered; re-initializing" >&2
