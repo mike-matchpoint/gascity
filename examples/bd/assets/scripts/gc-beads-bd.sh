@@ -531,6 +531,12 @@ recover_failed_first_init() {
         sed '/^sync\.remote:/d' "$dir/.beads/config.yaml" > "$dir/.beads/config.yaml.tmp" \
             && mv "$dir/.beads/config.yaml.tmp" "$dir/.beads/config.yaml"
     fi
+    # An interrupted init can also leave a local dolt remote cache; bd's
+    # init-safety reads it as remote history. Server mode never needs it.
+    if [ -d "$dir/.beads/dolt" ]; then
+        echo "warning: removing stale local dolt cache at $dir/.beads/dolt" >&2
+        rm -rf "$dir/.beads/dolt"
+    fi
 }
 
 # ensure_types_custom_in_yaml writes types.custom to .beads/config.yaml.
