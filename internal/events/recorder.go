@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -68,6 +69,16 @@ type FileRecorder struct {
 	archiveRetainAge      time.Duration
 	recordCount           uint64
 	lastSizeCheck         time.Time
+
+	// lastWriteEnd is the active file's size immediately after this
+	// recorder's last append, or -1 when unknown. When the file size at
+	// the next append (read under the flock, which forces NFS cache
+	// revalidation) still equals lastWriteEnd, no other writer has
+	// appended and the per-Record tail re-read for seq recovery is
+	// skipped. On NFS-backed workspaces that tail re-read (open +
+	// fstat + 64 KiB read + close, every Record, every writer) was a
+	// dominant metadata-op generator.
+	lastWriteEnd int64
 }
 
 // FileRecorderOption customizes a FileRecorder at construction time.
@@ -185,6 +196,7 @@ func NewFileRecorder(path string, stderr io.Writer, opts ...FileRecorderOption) 
 		rotationCheckRecords:  defaultRotationCheckRecords,
 		rotationCheckInterval: defaultRotationCheckInterval,
 		lastSizeCheck:         time.Now(),
+		lastWriteEnd:          -1,
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -247,10 +259,21 @@ func (r *FileRecorder) Record(e Event) {
 // flock. Returns an error on marshal or write failure; the caller
 // decides whether to log to stderr or surface it.
 func (r *FileRecorder) writeRecordLocked(e *Event) error {
-	if latest, err := readLatestActiveSeq(r.path); err == nil && latest > r.seq {
-		r.seq = latest
-	} else if err != nil {
-		return fmt.Errorf("latest seq: %w", err)
+	// Seq recovery is only needed when another writer appended since our
+	// last write. The caller holds the file flock, so the size observed
+	// here cannot change before our append; an unchanged size means our
+	// in-memory seq is still the latest and the tail re-read is skipped.
+	size := int64(-1)
+	if info, err := r.file.Stat(); err == nil {
+		size = info.Size()
+	}
+	if size < 0 || r.lastWriteEnd < 0 || size != r.lastWriteEnd {
+		if latest, err := readLatestActiveSeq(r.path); err == nil && latest > r.seq {
+			r.seq = latest
+		} else if err != nil {
+			r.lastWriteEnd = -1
+			return fmt.Errorf("latest seq: %w", err)
+		}
 	}
 	r.seq++
 	e.Seq = r.seq
@@ -263,7 +286,13 @@ func (r *FileRecorder) writeRecordLocked(e *Event) error {
 	}
 	data = append(data, '\n')
 	if _, err := r.file.Write(data); err != nil {
+		r.lastWriteEnd = -1
 		return fmt.Errorf("write: %w", err)
+	}
+	if size >= 0 {
+		r.lastWriteEnd = size + int64(len(data))
+	} else {
+		r.lastWriteEnd = -1
 	}
 	r.recordCount++
 	return nil
@@ -362,6 +391,7 @@ func (r *FileRecorder) rotateLocked() (RotationResult, error) {
 		// maybeAutoRotateLocked.
 		if newF, openErr := os.OpenFile(r.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); openErr == nil {
 			r.file = newF
+			r.lastWriteEnd = -1
 		} else {
 			r.closed = true
 		}
@@ -375,6 +405,7 @@ func (r *FileRecorder) rotateLocked() (RotationResult, error) {
 	r.file = newFile
 	r.recordCount = 0
 	r.lastSizeCheck = time.Now()
+	r.lastWriteEnd = -1
 
 	payload := RotatedPayload{
 		PriorArchive:  archiveBase,
@@ -467,11 +498,24 @@ func (r *FileRecorder) Watch(ctx context.Context, afterSeq uint64) (Watcher, err
 		path:     r.path,
 		afterSeq: afterSeq,
 		ctx:      ctx,
-		poll:     250 * time.Millisecond,
+		poll:     watcherPollInterval(),
 		offset:   offset,
 		inode:    inode,
 		done:     make(chan struct{}),
 	}, nil
+}
+
+// watcherPollInterval returns the file-watcher poll cadence.
+// GC_EVENTS_POLL_INTERVAL overrides the 250ms default; hosted (NFS)
+// substrates set it higher because every poll is a network round trip
+// and fsnotify cannot see remote appends.
+func watcherPollInterval() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("GC_EVENTS_POLL_INTERVAL")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 250 * time.Millisecond
 }
 
 // Close closes the underlying file. It is safe to call multiple times;
@@ -552,13 +596,29 @@ func (w *fileWatcher) Next() (Event, error) {
 		// the events.rotated anchor; resetting offset to 0 lets the
 		// watcher rescan the new active file from the top while
 		// afterSeq prevents re-yielding already-seen events.
+		unchanged := false
 		if info, err := os.Stat(w.path); err == nil {
 			if curr := inodeOf(info); curr != 0 {
 				if w.inode != 0 && curr != w.inode {
 					w.offset = 0
+				} else if info.Size() == w.offset {
+					// Same file, nothing appended — skip the
+					// open/read/close entirely. One stat per idle
+					// poll instead of five ops matters on NFS.
+					unchanged = true
 				}
 				w.inode = curr
 			}
+		}
+		if unchanged {
+			select {
+			case <-w.ctx.Done():
+				return Event{}, w.ctx.Err()
+			case <-w.done:
+				return Event{}, fmt.Errorf("watcher closed")
+			case <-time.After(w.poll):
+			}
+			continue
 		}
 
 		// Poll for new events.

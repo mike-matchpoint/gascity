@@ -269,18 +269,20 @@ func TestCloseMoleculeWithReasonTrimsWhitespace(t *testing.T) {
 }
 
 // TestCloseHookScriptIncludesMoleculeAutoclose asserts the bd close
-// hook script wired by gc forwards bead closes to `gc molecule
-// autoclose` alongside the existing convoy and wisp autoclose calls.
-// Without this wiring the new code is unreachable in production.
+// hook script wired by gc reaches molecule autoclose. The close steps
+// (bead.closed emit + convoy/wisp/molecule autoclose) run inside one
+// consolidated `gc beads on-close` invocation; without that wiring the
+// autoclose code is unreachable in production.
 func TestCloseHookScriptIncludesMoleculeAutoclose(t *testing.T) {
 	script := closeHookScript()
-	if !strings.Contains(script, "molecule autoclose") {
-		t.Fatalf("close hook script missing 'molecule autoclose' dispatch:\n%s", script)
+	if !strings.Contains(script, `"$GC_BIN" beads on-close "$1"`) {
+		t.Fatalf("close hook script missing consolidated 'beads on-close' dispatch:\n%s", script)
 	}
-	// Sanity: the existing siblings are still present.
-	for _, sib := range []string{"convoy autoclose", "wisp autoclose", "bead.closed"} {
-		if !strings.Contains(script, sib) {
-			t.Errorf("close hook script missing %q (regression in sibling wiring):\n%s", sib, script)
+	// The diagnostic line names every step the invocation covers so
+	// operators grepping hooks.log can still find them.
+	for _, step := range []string{"bead.closed", "convoy", "wisp", "molecule"} {
+		if !strings.Contains(script, step) {
+			t.Errorf("close hook script diagnostic missing %q:\n%s", step, script)
 		}
 	}
 }

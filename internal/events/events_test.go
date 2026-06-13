@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -262,6 +263,49 @@ func TestFileRecorderCoordinatesSeqAcrossStaleRecorders(t *testing.T) {
 		if event.Seq != want {
 			t.Fatalf("events[%d].Seq = %d, want %d; events=%+v", i, event.Seq, want, events)
 		}
+	}
+}
+
+// TestFileRecorderInterleavedWritersKeepSeqMonotonic interleaves two
+// recorders on the same file (A, B, A, B, A). The per-Record tail
+// re-read is skipped when the file size is unchanged since a
+// recorder's own last write, so this asserts the size check detects
+// every interleaved append and seq stays strictly monotonic.
+func TestFileRecorderInterleavedWritersKeepSeqMonotonic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "events.jsonl")
+	var stderr bytes.Buffer
+
+	rec1, err := NewFileRecorder(path, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rec1.Close() //nolint:errcheck // test cleanup
+	rec2, err := NewFileRecorder(path, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rec2.Close() //nolint:errcheck // test cleanup
+
+	for i, rec := range []*FileRecorder{rec1, rec2, rec1, rec2, rec1} {
+		rec.Record(Event{Type: BeadUpdated, Actor: "writer", Message: "write-" + strconv.Itoa(i)})
+	}
+
+	events, err := ReadAll(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 5 {
+		t.Fatalf("got %d events, want 5", len(events))
+	}
+	for i, event := range events {
+		want := uint64(i + 1)
+		if event.Seq != want {
+			t.Fatalf("events[%d].Seq = %d, want %d; events=%+v", i, event.Seq, want, events)
+		}
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("unexpected recorder stderr: %s", stderr.String())
 	}
 }
 

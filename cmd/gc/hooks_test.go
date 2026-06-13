@@ -193,18 +193,30 @@ func TestInstallBeadHooksCreatesScripts(t *testing.T) {
 			if !strings.Contains(content, tc.eventType) {
 				t.Errorf("hook %s missing event type %q:\n%s", tc.filename, tc.eventType, content)
 			}
-			// Contains gc event emit.
 			if !strings.Contains(content, `GC_BIN="${GC_BIN:-gc}"`) {
 				t.Errorf("hook %s missing GC_BIN fallback:\n%s", tc.filename, content)
 			}
-			if !strings.Contains(content, `"$GC_BIN" event emit`) {
-				t.Errorf("hook %s missing '\"$GC_BIN\" event emit':\n%s", tc.filename, content)
-			}
-			if !strings.Contains(content, `PAYLOAD=$(printf '{"bead":%s}' "$DATA")`) {
-				t.Errorf("hook %s does not wrap bd JSON as BeadEventPayload:\n%s", tc.filename, content)
-			}
-			if !strings.Contains(content, `--payload "$PAYLOAD"`) {
-				t.Errorf("hook %s emits raw DATA instead of wrapped PAYLOAD:\n%s", tc.filename, content)
+			if tc.filename == "on_close" {
+				// on_close runs every close step through one
+				// consolidated invocation (emit + autoclosers) so a
+				// bead close costs one gc startup instead of four.
+				if !strings.Contains(content, `"$GC_BIN" beads on-close "$1"`) {
+					t.Errorf("on_close hook missing '\"$GC_BIN\" beads on-close':\n%s", content)
+				}
+				if !strings.Contains(content, `printf '%s' "$DATA" |`) {
+					t.Errorf("on_close hook does not pipe issue JSON to gc beads on-close:\n%s", content)
+				}
+			} else {
+				// Contains gc event emit.
+				if !strings.Contains(content, `"$GC_BIN" event emit`) {
+					t.Errorf("hook %s missing '\"$GC_BIN\" event emit':\n%s", tc.filename, content)
+				}
+				if !strings.Contains(content, `PAYLOAD=$(printf '{"bead":%s}' "$DATA")`) {
+					t.Errorf("hook %s does not wrap bd JSON as BeadEventPayload:\n%s", tc.filename, content)
+				}
+				if !strings.Contains(content, `--payload "$PAYLOAD"`) {
+					t.Errorf("hook %s emits raw DATA instead of wrapped PAYLOAD:\n%s", tc.filename, content)
+				}
 			}
 			// Best-effort: stderr redirected, || true.
 			if !strings.Contains(content, "|| true") {
@@ -224,15 +236,9 @@ func TestInstallBeadHooksCreatesScripts(t *testing.T) {
 			if !strings.Contains(content, `>>"$HOOK_LOG" 2>/dev/null`) {
 				t.Errorf("hook %s missing failure-diagnostic echo into HOOK_LOG:\n%s", tc.filename, content)
 			}
-			// on_close hook must also trigger convoy autoclose and wisp autoclose.
-			if tc.filename == "on_close" {
-				if !strings.Contains(content, `"$GC_BIN" convoy autoclose`) {
-					t.Errorf("on_close hook missing '\"$GC_BIN\" convoy autoclose':\n%s", content)
-				}
-				if !strings.Contains(content, `"$GC_BIN" wisp autoclose`) {
-					t.Errorf("on_close hook missing '\"$GC_BIN\" wisp autoclose':\n%s", content)
-				}
-			}
+			// on_close's convoy/wisp/molecule autoclose steps run inside
+			// the consolidated `gc beads on-close` invocation — covered
+			// by TestDoBeadsOnCloseAutoclosersClosesMoleculeRoot.
 		})
 	}
 }
@@ -397,11 +403,7 @@ func TestCloseHookLogsFailureDiagnostic(t *testing.T) {
 		data, err := os.ReadFile(logPath)
 		if err == nil && len(data) > 0 {
 			content = string(data)
-			// Wait until all three failure markers have been emitted, since
-			// the three gc calls run sequentially.
-			if strings.Contains(content, "gc event emit") &&
-				strings.Contains(content, "gc convoy autoclose") &&
-				strings.Contains(content, "gc wisp autoclose") {
+			if strings.Contains(content, "gc beads on-close failed") {
 				break
 			}
 		}
@@ -413,9 +415,7 @@ func TestCloseHookLogsFailureDiagnostic(t *testing.T) {
 	for _, want := range []string{
 		"test-bead-id",
 		"/nonexistent/gc-bin-for-test",
-		"gc event emit bead.closed failed",
-		"gc convoy autoclose failed",
-		"gc wisp autoclose failed",
+		"gc beads on-close failed",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("hooks.log missing %q:\n%s", want, content)

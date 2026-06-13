@@ -73,42 +73,29 @@ func hookNameFromEventType(eventType string) string {
 	return "hook"
 }
 
-// closeHookScript returns the on_close hook script. It forwards the
-// bead.closed event, triggers convoy autoclose for the closed bead's
-// parent convoy (if any), and auto-closes any open molecule/wisp
-// children attached to the closed bead. Workflow-control watches the city
-// event stream directly, so the close hook no longer sends a separate poke.
+// closeHookScript returns the on_close hook script. It runs all close
+// steps — bead.closed event, convoy autoclose, wisp autoclose, molecule
+// autoclose — through one consolidated `gc beads on-close` invocation so
+// a bead close costs one gc startup instead of four. Workflow-control
+// watches the city event stream directly, so the close hook no longer
+// sends a separate poke.
 //
-// Failures of any of the three gc invocations are logged with a dated
-// diagnostic line to ${BEADS_DIR}/hooks.log. Without this, missing gc
-// or a store-resolution error here leaves no record at all and the
+// Failures are logged with a dated diagnostic line to
+// ${BEADS_DIR}/hooks.log. Without this, missing gc or a
+// store-resolution error here leaves no record at all and the
 // cascade-close of sling scaffolding fails invisibly.
 func closeHookScript() string {
 	return fmt.Sprintf(`#!/bin/sh
 %s
 # Installed by gc — forwards bd close events, auto-closes completed convoys,
-# and auto-closes orphaned wisps.
+# and auto-closes orphaned wisps/molecules in one gc invocation.
 # Args: $1=issue_id  $2=event_type  stdin=issue JSON
 GC_BIN="${GC_BIN:-gc}"
 HOOK_LOG="${BEADS_DIR:-.beads}/hooks.log"
 DATA=$(cat)
-PAYLOAD=$(printf '{"bead":%%s}' "$DATA")
-title=$(echo "$DATA" | grep -o '"title":"[^"]*"' | head -1 | cut -d'"' -f4)
 (
-  "$GC_BIN" event emit bead.closed --subject "$1" --message "$title" --payload "$PAYLOAD" 2>>"$HOOK_LOG" \
-    || echo "[$(date -u +%%FT%%TZ)] on_close $1: gc event emit bead.closed failed (gc=$GC_BIN)" >>"$HOOK_LOG" 2>/dev/null \
-    || true
-  # Auto-close parent convoy if all siblings are now closed.
-  "$GC_BIN" convoy autoclose "$1" 2>>"$HOOK_LOG" \
-    || echo "[$(date -u +%%FT%%TZ)] on_close $1: gc convoy autoclose failed (gc=$GC_BIN)" >>"$HOOK_LOG" 2>/dev/null \
-    || true
-  # Auto-close open molecule/wisp children so they don't outlive the parent.
-  "$GC_BIN" wisp autoclose "$1" 2>>"$HOOK_LOG" \
-    || echo "[$(date -u +%%FT%%TZ)] on_close $1: gc wisp autoclose failed (gc=$GC_BIN)" >>"$HOOK_LOG" 2>/dev/null \
-    || true
-  # Auto-close parent molecule when all step children are terminal (#1039).
-  "$GC_BIN" molecule autoclose "$1" 2>>"$HOOK_LOG" \
-    || echo "[$(date -u +%%FT%%TZ)] on_close $1: gc molecule autoclose failed (gc=$GC_BIN)" >>"$HOOK_LOG" 2>/dev/null \
+  printf '%%s' "$DATA" | "$GC_BIN" beads on-close "$1" 2>>"$HOOK_LOG" \
+    || echo "[$(date -u +%%FT%%TZ)] on_close $1: gc beads on-close failed (bead.closed emit + convoy/wisp/molecule autoclose; gc=$GC_BIN)" >>"$HOOK_LOG" 2>/dev/null \
     || true
 ) </dev/null >/dev/null 2>&1 &
 `, hookStampLine())
