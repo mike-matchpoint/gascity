@@ -162,8 +162,9 @@ func (f *fakeMutatorState) SetOrderOverrideEnabled(name, rig string, enabled *bo
 func (f *fakeMutatorState) SuspendRig(name string) error {
 	cfg := f.Config()
 	found := false
-	for _, r := range cfg.Rigs {
-		if r.Name == name {
+	for i := range cfg.Rigs {
+		if cfg.Rigs[i].Name == name {
+			cfg.Rigs[i].Suspended = true
 			found = true
 			break
 		}
@@ -188,8 +189,9 @@ func (f *fakeMutatorState) SuspendRig(name string) error {
 func (f *fakeMutatorState) ResumeRig(name string) error {
 	cfg := f.Config()
 	found := false
-	for _, r := range cfg.Rigs {
-		if r.Name == name {
+	for i := range cfg.Rigs {
+		if cfg.Rigs[i].Name == name {
+			cfg.Rigs[i].Suspended = false
 			found = true
 			break
 		}

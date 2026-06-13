@@ -101,6 +101,36 @@ func TestRigEnrichment(t *testing.T) {
 	}
 }
 
+func TestRigListUsesRuntimeInventoryWithoutPerAgentProbes(t *testing.T) {
+	state := newFakeState(t)
+	state.cfg.Agents = []config.Agent{
+		{Name: "worker", Dir: "myrig", MaxActiveSessions: intPtr(1)},
+		{Name: "coder", Dir: "myrig", MaxActiveSessions: intPtr(1)},
+	}
+	if err := state.sp.Start(context.Background(), "myrig--worker", runtime.Config{}); err != nil {
+		t.Fatalf("Start existing session: %v", err)
+	}
+	state.sp.Calls = nil
+	h := newTestCityHandler(t, state)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", cityURL(state, "/rigs"), nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var resp struct {
+		Items []rigResponse `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 1 || resp.Items[0].RunningCount != 1 {
+		t.Fatalf("items = %+v, want one rig with one running agent", resp.Items)
+	}
+	assertOnlyRuntimeInventoryProbe(t, state.sp.Calls)
+}
+
 type falseNegativeSessionProvider struct {
 	*runtime.Fake
 }
@@ -222,6 +252,22 @@ func TestRigSuspendResume(t *testing.T) {
 	}
 	if rig.Suspended {
 		t.Fatal("rig should not be suspended after resume action")
+	}
+}
+
+func assertOnlyRuntimeInventoryProbe(t *testing.T, calls []runtime.Call) {
+	t.Helper()
+	inventoryCalls := 0
+	for _, call := range calls {
+		switch call.Method {
+		case "Inventory":
+			inventoryCalls++
+		case "IsRunning", "ProcessAlive", "GetMeta", "GetLastActivity":
+			t.Fatalf("unexpected per-agent runtime probe after inventory: %#v; all calls=%#v", call, calls)
+		}
+	}
+	if inventoryCalls != 1 {
+		t.Fatalf("Inventory calls = %d, want 1; all calls=%#v", inventoryCalls, calls)
 	}
 }
 

@@ -504,11 +504,13 @@ func (f *Fake) Inventory(_ context.Context, prefix string) (Inventory, error) {
 			continue
 		}
 		obs := InventoryObservation{
-			SessionName:   name,
-			Running:       true,
-			Attached:      f.Attached[name],
-			AttachedKnown: true,
-			Source:        "fake",
+			SessionName:    name,
+			Running:        true,
+			Suspended:      strings.TrimSpace(f.meta[name]["suspended"]) == "true",
+			SuspendedKnown: true,
+			Attached:       f.Attached[name],
+			AttachedKnown:  true,
+			Source:         "fake",
 		}
 		if t := f.Activity[name]; !t.IsZero() {
 			obs.LastActivity = t

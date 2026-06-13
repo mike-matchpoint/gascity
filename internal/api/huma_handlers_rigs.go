@@ -24,10 +24,11 @@ func (s *Server) humaHandleRigList(ctx context.Context, input *RigListInput) (*L
 		return nil, err
 	}
 	wantGit := input.Git
+	inventory, hasInventory, _ := s.sessionInventory(ctx)
 
 	rigs := make([]rigResponse, 0, len(cfg.Rigs))
 	for _, rig := range cfg.Rigs {
-		resp := s.buildRigResponse(cfg, rig, sp, cityName, s.state.CityPath())
+		resp := s.buildRigResponse(cfg, rig, sp, cityName, s.state.CityPath(), inventory, hasInventory)
 		if wantGit {
 			resp.Git = fetchGitStatus(rig.Path)
 		}
@@ -41,15 +42,16 @@ func (s *Server) humaHandleRigList(ctx context.Context, input *RigListInput) (*L
 }
 
 // humaHandleRigGet is the Huma-typed handler for GET /v0/rig/{name}.
-func (s *Server) humaHandleRigGet(_ context.Context, input *RigGetInput) (*IndexOutput[rigResponse], error) {
+func (s *Server) humaHandleRigGet(ctx context.Context, input *RigGetInput) (*IndexOutput[rigResponse], error) {
 	name := input.Name
 	cfg := s.state.Config()
 	sp := s.state.SessionProvider()
 	wantGit := input.Git
+	inventory, hasInventory, _ := s.sessionInventory(ctx)
 
 	for _, rig := range cfg.Rigs {
 		if rig.Name == name {
-			resp := s.buildRigResponse(cfg, rig, sp, s.state.CityName(), s.state.CityPath())
+			resp := s.buildRigResponse(cfg, rig, sp, s.state.CityName(), s.state.CityPath(), inventory, hasInventory)
 			if wantGit {
 				resp.Git = fetchGitStatus(rig.Path)
 			}

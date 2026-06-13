@@ -11,6 +11,7 @@ import (
 	gitpkg "github.com/gastownhall/gascity/internal/git"
 	"github.com/gastownhall/gascity/internal/runtime"
 	workdirutil "github.com/gastownhall/gascity/internal/workdir"
+	"github.com/gastownhall/gascity/internal/worker"
 )
 
 type rigResponse struct {
@@ -34,23 +35,29 @@ type gitStatus struct {
 }
 
 // buildRigResponse creates a rigResponse with agent counts and last activity.
-func (s *Server) buildRigResponse(cfg *config.City, rig config.Rig, sp runtime.Provider, cityName, cityPath string) rigResponse {
+func (s *Server) buildRigResponse(cfg *config.City, rig config.Rig, sp runtime.Provider, cityName, cityPath string, inventory runtime.Inventory, hasInventory bool) rigResponse {
 	tmpl := cfg.Workspace.SessionTemplate
-	var agentCount, runningCount int
+	var agentCount, runningCount, suspendedCount int
 	var maxActivity time.Time
 
 	for _, a := range cfg.Agents {
 		if workdirutil.ConfiguredRigName(cityPath, a, cfg.Rigs) != rig.Name {
 			continue
 		}
-		processNames := config.AgentProcessNames(cfg, a, exec.LookPath)
+		var processNames []string
+		if !hasInventory {
+			processNames = config.AgentProcessNames(cfg, a, exec.LookPath)
+		}
 		expanded := expandAgent(a, cityName, tmpl, sp)
 		for _, ea := range expanded {
 			agentCount++
 			sessionName := agent.SessionNameFor(cityName, ea.qualifiedName, tmpl)
-			obs := observeProviderSession(sp, sessionName, processNames)
+			obs := observeRigProviderSession(sp, sessionName, processNames, inventory, hasInventory)
 			if obs.Running {
 				runningCount++
+			}
+			if a.Suspended || ea.suspended || obs.Suspended {
+				suspendedCount++
 			}
 			if obs.LastActivity != nil && obs.LastActivity.After(maxActivity) {
 				maxActivity = *obs.LastActivity
@@ -61,7 +68,7 @@ func (s *Server) buildRigResponse(cfg *config.City, rig config.Rig, sp runtime.P
 	resp := rigResponse{
 		Name:          rig.Name,
 		Path:          rig.Path,
-		Suspended:     s.rigSuspended(cfg, rig, sp, cityName, cityPath),
+		Suspended:     rig.Suspended || (agentCount > 0 && suspendedCount == agentCount),
 		Prefix:        rig.Prefix,
 		DefaultBranch: rig.DefaultBranch,
 		AgentCount:    agentCount,
@@ -73,31 +80,25 @@ func (s *Server) buildRigResponse(cfg *config.City, rig config.Rig, sp runtime.P
 	return resp
 }
 
-// rigSuspended computes effective suspended state for a rig by merging config
-// and runtime session metadata. A rig is suspended if the config says so, or
-// if all its agents are runtime-suspended via session metadata.
-func (s *Server) rigSuspended(cfg *config.City, rig config.Rig, sp runtime.Provider, cityName, cityPath string) bool {
-	if rig.Suspended {
-		return true
-	}
-	tmpl := cfg.Workspace.SessionTemplate
-	var agentCount, suspendedCount int
-	for _, a := range cfg.Agents {
-		if workdirutil.ConfiguredRigName(cityPath, a, cfg.Rigs) != rig.Name {
-			continue
+func observeRigProviderSession(sp runtime.Provider, sessionName string, processNames []string, inventory runtime.Inventory, hasInventory bool) worker.LiveObservation {
+	if hasInventory {
+		obs, known := inventory.Observe(sessionName)
+		if !known {
+			return worker.LiveObservation{SessionName: sessionName}
 		}
-		processNames := config.AgentProcessNames(cfg, a, exec.LookPath)
-		expanded := expandAgent(a, cityName, tmpl, sp)
-		for _, ea := range expanded {
-			agentCount++
-			sessionName := agent.SessionNameFor(cityName, ea.qualifiedName, tmpl)
-			obs := observeProviderSession(sp, sessionName, processNames)
-			if obs.Suspended {
-				suspendedCount++
-			}
+		out := worker.LiveObservation{
+			SessionName: sessionName,
+			Running:     obs.Running,
+			Alive:       obs.Alive,
+			Suspended:   obs.SuspendedKnown && obs.Suspended,
 		}
+		if obs.LastActivityKnown {
+			last := obs.LastActivity
+			out.LastActivity = &last
+		}
+		return out
 	}
-	return agentCount > 0 && suspendedCount == agentCount
+	return observeProviderSession(sp, sessionName, processNames)
 }
 
 // gitStatusTimeout bounds how long git operations can take per rig.

@@ -14,6 +14,8 @@ type InventoryObservation struct {
 	Running           bool
 	Alive             bool
 	AliveKnown        bool
+	Suspended         bool
+	SuspendedKnown    bool
 	Attached          bool
 	AttachedKnown     bool
 	LastActivity      time.Time

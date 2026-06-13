@@ -87,6 +87,31 @@ func TestHandleStatusEnriched(t *testing.T) {
 	}
 }
 
+func TestHandleStatusUsesRuntimeInventoryWithoutPerAgentRunningProbes(t *testing.T) {
+	state := newFakeState(t)
+	if err := state.sp.Start(context.Background(), "myrig--worker", runtime.Config{}); err != nil {
+		t.Fatalf("Start existing session: %v", err)
+	}
+	state.sp.Calls = nil
+	h := newTestCityHandler(t, state)
+
+	req := httptest.NewRequest("GET", cityURL(state, "/status"), nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp statusResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Running != 1 {
+		t.Fatalf("Running = %d, want 1", resp.Running)
+	}
+	assertOnlyRuntimeInventoryProbe(t, state.sp.Calls)
+}
+
 func TestHandleStatusExpectedRunningCountsResidentSingleton(t *testing.T) {
 	state := newFakeState(t)
 	h := newTestCityHandler(t, state)

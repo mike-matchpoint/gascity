@@ -10,6 +10,7 @@ import (
 	"github.com/gastownhall/gascity/internal/agent"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/session"
 	workdirutil "github.com/gastownhall/gascity/internal/workdir"
 )
@@ -55,14 +56,14 @@ func (s *Server) humaHandleStatus(ctx context.Context, input *StatusInput) (*Ind
 		return &IndexOutput[StatusBody]{Index: index, CacheAgeS: cacheAgeSeconds(store), Body: body}, nil
 	}
 
-	resp := s.buildStatusBody()
+	resp := s.buildStatusBody(ctx)
 	s.storeResponse(cacheKey, index, resp)
 
 	return &IndexOutput[StatusBody]{Index: index, CacheAgeS: cacheAgeSeconds(store), Body: resp}, nil
 }
 
 // buildStatusBody constructs the status response body.
-func (s *Server) buildStatusBody() StatusBody {
+func (s *Server) buildStatusBody(ctx context.Context) StatusBody {
 	cfg := s.state.Config()
 	sp := s.state.SessionProvider()
 	store := s.state.CityBeadStore()
@@ -70,6 +71,8 @@ func (s *Server) buildStatusBody() StatusBody {
 	sessTmpl := cfg.Workspace.SessionTemplate
 	sessionSnapshot := s.statusSessionSnapshot()
 	partialErrors := append([]string(nil), sessionSnapshot.partialErrors...)
+	runtimeInventory, hasRuntimeInventory, inventoryErrors := s.sessionInventory(ctx)
+	partialErrors = append(partialErrors, inventoryErrors...)
 
 	// Count agents by state and collect per-agent detail rows in a single
 	// pass. Pool expansion emits one detail row per instance with a
@@ -110,7 +113,7 @@ func (s *Server) buildStatusBody() StatusBody {
 			}
 			sessName := agentSessionName(cityName, ea.qualifiedName, sessTmpl)
 			info, hasInfo := sessionSnapshot.bySessionName[sessName]
-			running := statusProviderRunning(sp, sessName)
+			running := statusProviderRunningWithInventory(sp, sessName, runtimeInventory, hasRuntimeInventory)
 			if running {
 				rawRunning++
 			}
@@ -501,6 +504,21 @@ func statusProviderRunning(sp interface{ IsRunning(string) bool }, sessionName s
 		return false
 	}
 	return sp.IsRunning(sessionName)
+}
+
+func statusProviderRunningWithInventory(sp interface{ IsRunning(string) bool }, sessionName string, inventory runtime.Inventory, hasInventory bool) bool {
+	sessionName = strings.TrimSpace(sessionName)
+	if sessionName == "" {
+		return false
+	}
+	if hasInventory {
+		running, known := inventory.RunningKnown(sessionName)
+		if known {
+			return running
+		}
+		return false
+	}
+	return statusProviderRunning(sp, sessionName)
 }
 
 // HealthInput is the Huma input for GET /v0/city/{cityName}/health.

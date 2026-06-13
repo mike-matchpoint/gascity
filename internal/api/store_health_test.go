@@ -269,7 +269,7 @@ func TestBuildStatusBodyIncludesStoreHealth(t *testing.T) {
 	state := newFakeState(t)
 	s := &Server{state: state}
 
-	body := s.buildStatusBody()
+	body := s.buildStatusBody(context.Background())
 	if body.StoreHealth == nil {
 		t.Fatal("StoreHealth = nil, want populated")
 	}
@@ -294,7 +294,7 @@ func TestBuildStatusBodyIncludesRuntimeWrite(t *testing.T) {
 	}
 	s := &Server{state: state}
 
-	body := s.buildStatusBody()
+	body := s.buildStatusBody(context.Background())
 	if body.RuntimeWrite == nil {
 		t.Fatal("RuntimeWrite = nil, want populated")
 	}
