@@ -940,6 +940,41 @@ func TestDoRigListJSONShowsDefaultBranch(t *testing.T) {
 	t.Fatalf("rig my-frontend not found in JSON:\n%s", stdout.String())
 }
 
+func TestDoRigListJSONDoesNotStatBeadsMetadata(t *testing.T) {
+	f := fsys.NewFake()
+	f.Files["/city/city.toml"] = []byte(`[workspace]
+name = "test-city"
+
+[[rigs]]
+name = "alpha"
+path = "/projects/alpha"
+
+[[rigs]]
+name = "beta"
+path = "/projects/beta"
+`)
+
+	var stdout, stderr bytes.Buffer
+	code := doRigList(f, "/city", true, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("doRigList --json = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	var result RigListJSON
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("decode rig list JSON: %v\n%s", err, stdout.String())
+	}
+	for _, rig := range result.Rigs {
+		if rig.Beads != rigListJSONBeadsStatusNotChecked {
+			t.Fatalf("rig %q beads = %q, want %q; output=%s", rig.Name, rig.Beads, rigListJSONBeadsStatusNotChecked, stdout.String())
+		}
+	}
+	for _, call := range f.Calls {
+		if call.Method == "Stat" && strings.HasSuffix(call.Path, filepath.Join(".beads", "metadata.json")) {
+			t.Fatalf("JSON rig list statted beads metadata at %s; calls=%#v", call.Path, f.Calls)
+		}
+	}
+}
+
 func TestDoRigList_Empty(t *testing.T) {
 	cityPath := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(cityPath, ".gc"), 0o755); err != nil {

@@ -917,7 +917,7 @@ func renderRigListFromAPI(fs fsys.FS, cityPath string, cr api.CachedRead[[]api.R
 				Prefix:  hqPrefix,
 				HQ:      true,
 				Running: true,
-				Beads:   rigBeadsStatus(fs, cityPath),
+				Beads:   rigListJSONBeadsStatusNotChecked,
 			}},
 		}
 		for _, rig := range cr.Body {
@@ -939,7 +939,7 @@ func renderRigListFromAPI(fs fsys.FS, cityPath string, cr api.CachedRead[[]api.R
 				Suspended:          rig.Suspended,
 				Running:            rig.RunningCount > 0,
 				DefaultSlingTarget: defaultSlingTarget,
-				Beads:              rigBeadsStatus(fs, path),
+				Beads:              rigListJSONBeadsStatusNotChecked,
 			})
 		}
 		result.Summary.Total = len(result.Rigs)
@@ -1069,26 +1069,22 @@ func doRigList(fs fsys.FS, cityPath string, jsonOutput bool, stdout, stderr io.W
 			CityPath:      cityPath,
 			CityName:      cityName,
 		}
-		hqRunning := controllerAlive(cityPath) != 0
 		result.Rigs = append(result.Rigs, RigListItem{
-			Name:    cityName,
-			Path:    cityPath,
-			Prefix:  hqPrefix,
-			HQ:      true,
-			Running: hqRunning,
-			Beads:   rigBeadsStatus(fs, cityPath),
+			Name:   cityName,
+			Path:   cityPath,
+			Prefix: hqPrefix,
+			HQ:     true,
+			Beads:  rigListJSONBeadsStatusNotChecked,
 		})
 		for i := range cfg.Rigs {
-			running := rigHasRunningAgent(cfg, cfg.Rigs[i].Name)
 			result.Rigs = append(result.Rigs, RigListItem{
 				Name:               cfg.Rigs[i].Name,
 				Path:               cfg.Rigs[i].Path,
 				Prefix:             cfg.Rigs[i].EffectivePrefix(),
 				DefaultBranch:      cfg.Rigs[i].EffectiveDefaultBranch(),
 				Suspended:          cfg.Rigs[i].Suspended,
-				Running:            running,
 				DefaultSlingTarget: cfg.Rigs[i].DefaultSlingTarget,
-				Beads:              rigBeadsStatus(fs, cfg.Rigs[i].Path),
+				Beads:              rigListJSONBeadsStatusNotChecked,
 			})
 		}
 		result.Summary.Total = len(result.Rigs)
@@ -1139,32 +1135,10 @@ func doRigList(fs fsys.FS, cityPath string, jsonOutput bool, stdout, stderr io.W
 	return 0
 }
 
-func rigHasRunningAgent(cfg *config.City, rigName string) bool {
-	if cfg == nil || rigName == "" {
-		return false
-	}
-	cityName := cfg.EffectiveCityName()
-	sp := newSessionProvider()
-	for i := range cfg.Agents {
-		a := cfg.Agents[i]
-		if a.Dir != rigName {
-			continue
-		}
-		sp0 := scaleParamsFor(&a)
-		if isMultiSessionCfgAgent(&a) {
-			for _, qualifiedInstance := range discoverPoolInstances(a.Name, a.Dir, sp0, &a, cityName, cfg.Workspace.SessionTemplate, sp) {
-				if sp.IsRunning(sessionName(nil, cityName, qualifiedInstance, cfg.Workspace.SessionTemplate)) {
-					return true
-				}
-			}
-			continue
-		}
-		if sp.IsRunning(sessionName(nil, cityName, a.QualifiedName(), cfg.Workspace.SessionTemplate)) {
-			return true
-		}
-	}
-	return false
-}
+// JSON rig-list output is a high-frequency machine-readable routing primitive.
+// Keep it to city.toml/API data only; probing every rig's .beads metadata over
+// hosted EFS turns deploy/source-sync planning into an N-rig metadata storm.
+const rigListJSONBeadsStatusNotChecked = "not checked"
 
 // rigBeadsStatus returns a human-readable beads status for a directory.
 // It reports only fully initialized stores; the rig-add guard below uses a
