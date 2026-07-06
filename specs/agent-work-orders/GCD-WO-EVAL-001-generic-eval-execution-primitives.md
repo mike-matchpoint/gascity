@@ -1,5 +1,9 @@
 # Work Order: GCD-WO-EVAL-001 — generic eval-execution primitives in the `execution-city-operations` pack lineage
 
+NOTE: this WO is long — read the FULL file at
+`specs/agent-work-orders/GCD-WO-EVAL-001-generic-eval-execution-primitives.md` in your
+worktree before implementing; tail amendments are BINDING.
+
 Execution classification: Dev-only (pack content + embed wiring + repo-native tests; no AWS,
 no deploy surface). Master cutover contribution: **None (platform repo, no AWS)** — see the
 section below.
@@ -50,6 +54,15 @@ bindings, rubrics, and prompt content live in city custom packs per OR-1):
    documented in the pack.
 6. **Embed/ship wiring** per the repo's own bundled-pack pattern + structural tests per the
    repo's test conventions.
+7. **City-binding convention doc (AUDIT-FOLD 2026-07-06):** THIS WO is the SOLE AUTHOR of
+   the convention by which an importing city binds the generic formulas to its domain —
+   documented in the pack README + the eval-run contract fragment (deliverable 4): the
+   invocation mechanism (how a city-side binding formula supplies `surface_kind`,
+   `grader_cmd`, `cohort_ref`/`fixture_ref`, and thresholds to the generic formulas) and
+   the binding-formula naming convention **`<domain>.eval_run_cohort.v1`** /
+   `<domain>.eval_replay_step.v1` (e.g. a city named `x` binds as
+   `x.eval_run_cohort.v1`; no domain name ever appears in THIS pack). The consumer city
+   packs (PEC1/VGC1) CITE this convention — they never invent their own.
 
 ## Dependencies
 
@@ -237,7 +250,11 @@ All paths repo-relative; inspect READ-first, then extend:
    threshold + gate outcome, grader command identity + version/hash, timestamps. The
    fragment documents — in prose — the field-convention alignment to MatchPoint
    `EvalStepFixture@v1` / eval-run rows (which field maps to which), and states the pack
-   is standalone: alignment is convention, not import.
+   is standalone: alignment is convention, not import. AUDIT-FOLD 2026-07-06: this
+   fragment + the pack README also carry the **city-binding convention** (Goal
+   deliverable 7): the binding-formula invocation mechanism and the
+   `<domain>.eval_run_cohort.v1` / `<domain>.eval_replay_step.v1` naming rule — sole
+   authorship here; PEC1/VGC1 cite it.
 5. **Producer→triage wiring:** on threshold-gate failure or replay regression, the
    finalize path files ONE triage bead per failure class routed
    (`gc.routed_to`) to the city-qualified `prompt-eval-classifier`, whose body/metadata
@@ -256,7 +273,12 @@ All paths repo-relative; inspect READ-first, then extend:
      that both formulas parse and stamp `gc.kind` from `surface_kind`, that the grade steps
      exec `grader_cmd` (fake grader script) rather than any agent path, that a failing gate
      files a classifier-routed bead whose fields cover the evidence-packet list, and that a
-     sample manifest validates against `eval-run-manifest.v1.schema.json`.
+     sample manifest validates against `eval-run-manifest.v1.schema.json`. AUDIT-FOLD
+     2026-07-06: the suite ALSO asserts the triage consumers are prompts-UNCHANGED — a
+     diff assertion that `agents/prompt-eval-classifier/`, `agents/prompt-eval-judge/`,
+     and `agents/prompt-eval-evidence-gatherer/` are byte-identical to their pre-WO state
+     (`git diff --quiet <base> -- 'examples/gastown/packs/execution-city-operations/agents/prompt-eval-'*` —
+     this WO gives them a producer, never an edit).
    - `Makefile`: append the new suite to `test-packs`.
    - Run the generic-ness grep gate (Validation) before requesting review.
 
@@ -307,13 +329,16 @@ the importing city packs (PEC1/VGC1) at city un-pause, under their own gates.
 ## Acceptance Criteria
 
 - Both formulas, the eval-runner agent(s) + propulsion define, the eval-run contract
-  fragment + `eval-run-manifest.v1` schema/example, and the producer→triage routing
-  documentation landed inside `examples/gastown/packs/execution-city-operations/`.
+  fragment + `eval-run-manifest.v1` schema/example, the producer→triage routing
+  documentation, and the city-binding convention doc (invocation mechanism +
+  `<domain>.eval_run_cohort.v1` naming — deliverable 7) landed inside
+  `examples/gastown/packs/execution-city-operations/`.
 - The pack ships: `formulas` embedded via `embed.go`; bundled-pack materialization tests
   green; the composed city exposes the new qualified agent name(s).
 - Producer→triage evidence packets cover every field named by
   `execution-prompt-eval-contract`; the classifier/judge/evidence-gatherer prompts are
-  UNCHANGED (they are consumers — this WO gives them a producer, not an edit).
+  UNCHANGED (they are consumers — this WO gives them a producer, not an edit;
+  mechanically enforced by the run-tests.sh prompts-UNCHANGED diff assertion).
 - Zero domain literals in the pack runtime surface (grep gate); agents never grade
   (deterministic `grader_cmd` seam proven by the fake-grader test).
 - All repo gates green: `make build && make check`, `make test-packs`, targeted `go test`
@@ -347,7 +372,7 @@ the importing city packs (PEC1/VGC1) at city un-pause, under their own gates.
 - [ ] All work on `wo/ssf-eval-band` (authoring) or `wo/<stem>` / `polecat/$BEAD_ID` (loop
       execution), merged to `origin/main` on `mike-matchpoint/gascity` via PR; nothing
       committed directly to `main`.
-- [ ] Deliverables 1–6 landed inside the pack; embed + structural tests shipped.
+- [ ] Deliverables 1–7 landed inside the pack; embed + structural tests shipped.
 - [ ] Pack-script + Go structural + docs tiers green; none skipped without an N/A reason.
 - [ ] Generic-ness grep gate green on the runtime surface.
 - [ ] Triage consumers untouched; producer wiring documented in-pack.
