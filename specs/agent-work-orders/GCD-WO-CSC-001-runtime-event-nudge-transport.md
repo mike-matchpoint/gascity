@@ -77,8 +77,11 @@ non-k8s cities and the upstream (`gastownhall/gascity`) behavior are untouched.
     shared-file event/nudge dependency.
   - `aws-GasCity::AGC-WO-CSC-002-mirror-and-ephemeral-workspaces` (wave 24) — renders the
     hosted wiring: controller Service (if not provider-ensured), NetworkPolicy manifests
-    per the posture pinned here, mayor small-EBS PVC for `.gc` single-writer state, and the
-    agent-pod env contract.
+    per the posture pinned here, mayor small-EBS PVC for `.gc` single-writer state, the
+    agent-pod env contract, AND the site-level `[api]` values (`bind` non-localhost +
+    `allow_mutation_classes = ["events_emit", "nudges"]`) into each city's `.gc/site.toml`
+    derivation (kit A2.6) — this WO guarantees that config surface exists (Step 5b);
+    AGC-WO-CSC-002 renders the values.
 - **Repo gates:** `CONTRIBUTING.md` (fork/branch workflow, `make setup`, `make build &&
   make check`), `TESTING.md` (tier boundaries + sharded runners — read before writing any
   test), `engdocs/architecture/api-control-plane.md` + `engdocs/contributors/huma-usage.md`
@@ -366,6 +369,18 @@ unchanged) from `cmd/gc/cmd_nudge.go`:
 | `listQueuedNudges` / `listQueuedNudgesForTarget` core loops (1273-1341) | `ListForAgent(cityPath string, store beads.Store, agentMatch func(string) bool, now time.Time) (pending, inFlight, dead []Item, err error)` |
 | prune/recover/exists/sort helpers (1610-1714) | unexported siblings (`pruneExpired`, `recoverExpiredInFlight`, `pruneDead`, …) |
 
+**Signature note (deliberate extension — evaluators must NOT flag this as drift):** the
+real `claimDueQueuedNudgesMatching(cityPath string, now time.Time, match func(queuedNudge)
+bool)` (`cmd_nudge.go:1238`) has NO store parameter — it opens its own store internally
+via `openNudgeBeadStore(cityPath)`. The relocated `ClaimDueMatching` signature above ADDS
+the explicit `store beads.Store` parameter by design (same for the other ops the table
+threads `store` into: ack/1436, release/1484, failure/1527, list/1273 all open their own
+store today), so the API handlers (Step 4c) can pass the server's store instead of opening
+a second one. "Relocate VERBATIM" binds the queue SEMANTICS and function bodies; the
+store-threading parameter is this WO's pinned interface change, and the `cmd/gc`
+delegating wrappers keep their original signatures, opening the store exactly where the
+old code did.
+
 New file `internal/nudgequeue/beads.go` — relocate the bead-shadow layer from
 `cmd/gc/nudge_beads.go`: `ensureQueuedNudgeBead` (127) → `EnsureShadowBead`,
 `markQueuedNudgeTerminal` (201) → `MarkShadowTerminal`, plus their runtime helpers and the
@@ -580,6 +595,24 @@ Mirror field on `internal/supervisor/config.go` next to `AllowMutations` (38). C
 validation (wherever `APIConfig` is validated at load — locate via existing validation of
 `[api]`; if none exists, validate at server construction) rejects unknown literals with the
 exact message `api.allow_mutation_classes: unknown class %q (valid: events_emit, nudges)`.
+
+**Site-level `[api]` override surface (kit A2.6 erratum — REQUIRED, this WO).** The k8s
+render must be able to set `[api] bind` to a non-localhost address AND
+`allow_mutation_classes = ["events_emit", "nudges"]` **per city via the `.gc/site.toml`
+derivation**, without editing `city.toml` (AGC-WO-CSC-002 renders those values at
+deploy time — see Dependencies). Today `SiteBinding`
+(`internal/config/site_binding.go:154-158`) carries only workspace identity + rig
+bindings; extend it with an optional `[api]` block limited to exactly these two fields
+(`bind`, `allow_mutation_classes` — NOT `port`, NOT `allow_mutations`; the narrow surface
+is deliberate) and apply it onto `cfg.API` in `applySiteBindings`
+(`site_binding.go:187-199`), site value winning over `city.toml`. Note the defaults this
+overlay overrides: `Bind` defaults to `"127.0.0.1"` (`internal/config/config.go:1716-1717`,
+`BindOrDefault`), so hosted cities MUST get a site-rendered non-localhost bind for agent
+pods to reach the controller Service at all. Named test:
+`internal/config/site_binding_api_test.go` — site `[api]` block sets `Bind` +
+`AllowMutationClasses` on the effective config (precedence over `city.toml` values);
+absent block leaves both untouched; unknown class literal in the site file fails with the
+same pinned validation message.
 
 **5c. Enforcement.** `internal/api/huma_handlers_supervisor.go`: change signatures —
 
@@ -866,7 +899,9 @@ harness that finds no events/nudges must FAIL.
   prove it).
 - Contracts this WO authors are now importable authority: `api:` scheme grammar,
   `EventEmitRequest` v2, nudge wire types + endpoints, `GC_NUDGES`/`NudgesConfig`,
-  mutation-class vocabulary, `GC_K8S_CONTROLLER_*` env contract, NetworkPolicy posture —
+  mutation-class vocabulary, the site-level `[api]` override surface
+  (`bind` + `allow_mutation_classes` via `.gc/site.toml` — A2.6),
+  `GC_K8S_CONTROLLER_*` env contract, NetworkPolicy posture —
   GCD-WO-CSC-002 and AGC-WO-CSC-002 cite these; nothing re-declares them.
 - Docs updated: `engdocs/architecture/api-control-plane.md` (payload exception, genclient
   consumer, hosted-exposure note), `internal/api/genclient/doc.go`.

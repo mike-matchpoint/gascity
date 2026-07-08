@@ -161,11 +161,14 @@ Bounded-context REJECT rules (kit K2, GasCity-Dev row) restated, plus WO-specifi
   stands; the builder script builds JSON only, the emitter publishes.
 - **NO business-domain VALUES in the pack**: bus names, event sources
   (`matchpoint.<domain-slug>`), domains, ARNs, log groups arrive via injected
-  `GASCITY_ERROR_*` env (R3), exactly like `GASCITY_EVENT_BUS` today. The ONE sanctioned
-  literal exception: the mirrored contract schema's `$id`
+  `GASCITY_ERROR_*` env (R3), exactly like `GASCITY_EVENT_BUS` today. The sanctioned
+  literal exceptions (exactly two files): the mirrored contract schema's `$id`
   (`https://contracts.matchpointintelligence.com/...`) — a verbatim mirror per the pack's
-  own mirror doctrine; Step 6 registers it as an explicit, justified exemption in the
-  generic-ness grep gate (GCD-WO-EVAL-001) rather than weakening the gate.
+  own mirror doctrine — and its full-envelope example
+  (`schemas/events/examples/component-error-raised.v1.example.json`, whose canonical
+  fixture values are required by the fixture-realism full-envelope rule); Step 6
+  registers BOTH as explicit, justified per-file exemptions in the generic-ness grep
+  gate (GCD-WO-EVAL-001) rather than weakening the gate.
 - **NO new closure/lifecycle event emission** from exec cities (CodeReleaseDeployed /
   RepoChange* lifecycle families are AGC-WO-CSC-001/006B producers; the ledger listener is
   AGC-WO-CSC-004).
@@ -268,12 +271,22 @@ naming the missing var. Provisioning duty: aws-GasCity exec-city pod/env render 
 as a program seam item — Risks).
 
 **R4 — signature-slug rule (normalization-stable producer input).** The builder takes
-`--signature <slug>` and ENFORCES grammar `^[a-z][a-z ._-]{0,255}$` **with no digit
-runs** (reject otherwise). Rationale (cited): PAR-WO-CSC-001 Step 4's normalization
+`--signature <slug>`, **COLLAPSES whitespace FIRST** (runs of whitespace → one space,
+leading/trailing trimmed — done PRE-validation because the library normalization
+collapses whitespace, so an uncollapsed slug is not a fixed point), then ENFORCES the
+validation regex `^[a-z][a-z._-]*( [a-z][a-z._-]*)*$` (max total length 256) — note the
+regex admits **single spaces only** (no leading/trailing/consecutive spaces can pass; the
+charset admits no digits, so digit runs are rejected by construction) — AND additionally
+rejects any space-delimited word matching `^[a-f]{8,}$` (**bare-hex leak guard**, kit
+A2.14: 8+ consecutive hex-letter chars is a hex-id fragment; the library normalization
+maps hex runs to placeholders, so such a word is NOT a fixed point and shell/library
+fingerprints would diverge). Die on any violation after the collapse. Rationale (cited):
+PAR-WO-CSC-001 Step 4's normalization
 NFKC-lowercases, collapses whitespace, strips volatile tokens (uuid/ts/arn/url/hex/digit
-runs → placeholders) and truncates at 256 — a slug in this grammar is a FIXED POINT of
-that function, so shell-side fingerprints equal library-side fingerprints for the same
-inputs without reimplementing `normalize_signature` (which remains Python-only authority).
+runs → placeholders) and truncates at 256 — a slug passing the rules above is a FIXED
+POINT of that function, so shell-side fingerprints equal library-side fingerprints for
+the same inputs without reimplementing `normalize_signature` (which remains Python-only
+authority).
 Slug construction (deterministic, pinned): `<incident_class>` + `" "` + `<component>`,
 lowercased, characters outside the grammar mapped to `-`, digit runs mapped to `-`,
 whitespace collapsed, truncated to 256. Example:
@@ -358,7 +371,8 @@ build-component-error-envelope.sh \
 
 Behavior (each rule cites its R2 authority):
 1. Validate enum args against the R2 literal sets (die on any other value — closed
-   enums); validate `--signature` per R4 (die on digit runs / bad chars).
+   enums); validate `--signature` per R4: collapse whitespace FIRST, then die on bad
+   chars / digit runs / residual non-single spacing / any bare-hex word (`^[a-f]{8,}$`).
 2. `event_id` = uuid (reuse the emitter's `gen_uuid` shape); `occurred_at` =
    `date -u +%Y-%m-%dT%H:%M:%SZ` (RFC3339 UTC, seconds precision — schema `format:
    date-time` satisfied); `environment`/`domain` from R3 env (die when unset);
@@ -506,7 +520,11 @@ capture-file idiom) and add it to `Makefile` `test-packs`. Cases (each is a name
    message/evidence URIs + fixture env) → output validates against the mirrored schema;
    all 22 keys present; fingerprint equals the pinned sha256 (precomputed in the fixture
    — regression pin); `correlation_id` echoes a supplied `--correlation-id`.
-5. *builder: guards* (planted-RED battery) — digit-run signature → reject; bad
+5. *builder: guards* (planted-RED battery) — digit-run signature → reject; bare-hex-word
+   signature (a word of 8+ `a-f` letters, e.g. `deadbeef`-class fragments) → reject;
+   multi-space signature → ACCEPTED with whitespace collapsed to single spaces in the
+   built envelope (collapse-before-validate proven); leading/trailing-space signature →
+   accepted post-collapse (trimmed); bad
    enum → reject; https evidence URI → reject; 26 evidence URIs → 25 kept + warning;
    >2KB message → truncated, ends with `...[truncated]`, ≤2048 bytes, still valid UTF-8
    (multi-byte boundary fixture); `password=hunter2` in message → `<redacted>`; missing
@@ -525,12 +543,16 @@ capture-file idiom) and add it to `Makefile` `test-packs`. Cases (each is a name
 - **Generic-ness gate reconciliation:** run the merged gate
   (`grep -riE "matchpoint|enrichment|vehicle"` over the pack runtime surface, per
   GCD-WO-EVAL-001). Expected hits after this WO: ONLY the mirrored schema's `$id`/
-  `description` lines (+ pre-existing sanctioned test/example content, e.g. the
-  repo-bug-reported example's fixture values). Extend the gate's exclusion to exactly
-  `schemas/events/component-error-raised.v1.schema.json` with a one-line justification
-  comment ("verbatim downstream mirror of the Platform C1 contract; mirror doctrine,
-  GCD-WO-CSC-008") — never a blanket exclusion. Record before/after gate output in the
-  PR.
+  `description` lines and the NEW example file's canonical fixture values (+
+  pre-existing sanctioned test/example content, e.g. the repo-bug-reported example's
+  fixture values). Extend the gate's exclusion to exactly TWO files —
+  `schemas/events/component-error-raised.v1.schema.json` AND
+  `schemas/events/examples/component-error-raised.v1.example.json` — each with a
+  one-line justification comment (schema: "verbatim downstream mirror of the Platform C1
+  contract; mirror doctrine, GCD-WO-CSC-008"; example: "full-envelope canonical example
+  of the mirrored C1 contract; same mirror doctrine + fixture-realism full-envelope
+  rule, GCD-WO-CSC-008") — never a blanket exclusion. Record before/after gate output
+  in the PR.
 - **Cross-pack edit (the ONE domain-handoff change):**
   `examples/gastown/packs/domain-handoff/tests/run-tests.sh:178-192` ("publish: repo
   events still require the codegen ownership index") currently drives the emitter with
@@ -578,7 +600,8 @@ expectation; the suite's summary asserts the expected case COUNT).
   execution-city-operations/ | grep -v publish-cross-city-event.sh` → empty (single
   emitter); `grep -rn "RepoBugReported" examples/gastown/packs/execution-city-operations/
   agents/` → only received-contract/rejection prose, zero publish instructions;
-  generic-ness gate output with ONLY the sanctioned mirror exemption.
+  generic-ness gate output with ONLY the two sanctioned mirror exemptions (schema +
+  example — Step 6).
 - **Cities-PAUSED clause:** all GasCity-in-AWS remains paused (zero-replica / suspended);
   this WO performed no cluster/AWS/city interaction (fake-CLI harnesses only; no `gc`
   daemon started); no live drill claimed. The first live C1 emission from an exec city is
@@ -603,8 +626,8 @@ expectation; the suite's summary asserts the expected case COUNT).
    classifier + taxonomy + handoff-contract fragments match; no prompt instructs a direct
    RepoBugReported publish — case 7.
 6. RepoBugReported schema/example untouched; receiving-lane prose intact — case 8.
-7. Generic-ness gate green with exactly the one justified mirror exemption — Step-6
-   gate record.
+7. Generic-ness gate green with exactly the two justified mirror exemptions (schema +
+   example) — Step-6 gate record.
 8. Cross-pack domain-handoff suite green via the intent-preserving swap — cross-pack tier.
 9. Full repo battery green; no city started; no AWS call outside fakes (cities PAUSED) —
    Validation record.
@@ -646,7 +669,8 @@ expectation; the suite's summary asserts the expected case COUNT).
 - [ ] Schema mirror + example + README provenance landed; sha parity proven.
 - [ ] Filer/classifier prompts + both fragments re-pointed; marker duty implemented.
 - [ ] ECO pack suite (new/extended) + domain-handoff swap + packlint + repo battery all
-      green; generic-ness gate green with the single justified exemption.
+      green; generic-ness gate green with the two justified exemptions (schema +
+      example).
 - [ ] Merged to `origin/main` on `mike-matchpoint/gascity` via PR from a `wo/`-class
       branch; nothing committed directly to `main`.
 - [ ] No city started; live emission proof deferred to AGC-WO-CSC-005's T3 gate; both

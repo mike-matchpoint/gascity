@@ -110,7 +110,8 @@ pack content with safe defaults.
 ## Dependencies
 
 - **Blocked by `GasCity-Dev::GCD-WO-EVAL-001-generic-eval-execution-primitives`** (wave
-  18, MERGED on this repo's `origin/main` @ `c85d92cf` — verify at execution). This WO
+  18 — merges before this WO dispatches; NOT yet merged at the authoring SHA `c85d92cf`.
+  Verify its merged content at execution — Step 0(b) is the gate). This WO
   does NOT touch its pack (`execution-city-operations`); it imports its BINDING
   conventions: (a) zero business-domain literals in any pack runtime surface (grep gate
   restated in Validation); (b) Zero Framework Cognition — no new Go role logic, pack
@@ -295,7 +296,7 @@ model = "opus"`.
 | Agent scope | `rig` — **binding statement for cities: bind via `[[rigs.patches]]`, like polecat** (GCD-WO-CSC-006 R1a expects exactly this) |
 | Routing selector values | `gc.kind` = `"eval_request"` (evaluator), `"judge_request"` (judge) |
 | Default pools | evaluator `max_active_sessions = 4`, judge `max_active_sessions = 2`, both `min_active_sessions = 0` |
-| Models | `provider = "claude"`; `[option_defaults] model = "opus"`, `effort = "high"` (both agents; cities re-point provider only) |
+| Models | `provider = "claude"`; `[option_defaults] model = "opus"`, `effort = "high"` (both agents; cities re-point provider — and may restate model/effort/pools per C11) |
 | Formula names | `mol-evaluate-task`, `mol-judge-task` (files `formulas/mol-evaluate-task.formula.toml`, `formulas/mol-judge-task.formula.toml`; `formula = "<name>"`, `version = 1`, `contract = "graph.v2"`) |
 | Seam fragment names | `city-architecture-standards`, `city-evidence-doctrine`, `city-invariants` (files `template-fragments/<name>.template.md`) |
 | Verdict keys | `eval_verdict`, `eval_evidence`, `eval_reject_count`, `judge_verdict`, `rejection_reason`, `decision_state`, `overseer_issue_id` |

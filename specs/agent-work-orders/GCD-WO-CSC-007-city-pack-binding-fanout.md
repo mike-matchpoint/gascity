@@ -248,7 +248,14 @@ divergence is a defect — fix the fan-out copy, never the pilot.
 punch-list items (per city: k8s Secrets `claude-evaluator` + `claude-judge`, key
 `CLAUDE_CODE_OAUTH_TOKEN`, owner supplies values, operator applies via the aws-GasCity
 city-secret process) + the two P6 capacity re-derivation flags (compat-orch,
-client-platform).
+client-platform) + the FIVE **evidence-vars un-pause items (A2.10)** — one per fan-out
+city: at un-pause, wire `evidence_publish_cmd` / `evidence_fetch_cmd` into every rig's
+`[rigs.formula_vars]` from AGC-WO-CSC-003's spec-18 grammar (the durable-URI S3 evidence
+lane). Without them, no-PVC cities dead-end every evaluated bead to `mayor_action`:
+local evidence dies with the pod, the judge fails CLOSED on unreachable evidence, and
+the shared `eval_reject_count` budget burns straight to escalation. Each city's cloned
+credentials runbook (T6) carries the same line, mirroring the pilot's runbook. These are
+un-pause actions, never a paused-state acceptance criterion.
 
 ## Git Workflow
 
@@ -308,8 +315,9 @@ Set-level: the Step-6 consistency sweep transcript.
    `tests/csc-doctrine-content.sh` + the Step-6 sweep.
 3. Every `append_fragments` name resolves; planted-RED self-check demonstrated per city —
    `tests/csc-binding-fragments-resolve.sh`.
-4. Credentials runbook per city; 10 punch-list items + 2 capacity flags in the PR;
-   acceptance independent of secret existence.
+4. Credentials runbook per city; 10 punch-list items + 2 capacity flags + 5
+   evidence-vars un-pause items (A2.10) in the PR; acceptance independent of secret
+   existence and of the evidence vars being wired (both are un-pause actions).
 5. `gc config show --validate` + `gc lint .` clean × 5 (post-wave-24 binary).
 6. Dead-stub grep clean; exec-mon cities and `vehicle-graph-city` have zero commits from
    this WO.
@@ -345,7 +353,8 @@ Set-level: the Step-6 consistency sweep transcript.
 - [ ] All per-city test suites + config validate + lint green; planted-RED shown per city.
 - [ ] Step-6 cross-city consistency sweep clean; transcript in evidence.
 - [ ] Dead-stub grep clean; pilot + exec-mon repos untouched.
-- [ ] 10 punch-list items + 2 capacity flags surfaced in the PR.
+- [ ] 10 punch-list items + 2 capacity flags + 5 evidence-vars un-pause items surfaced
+      in the PR.
 - [ ] 6-repo CoordinatedMerge via the harness; no direct-to-main commits; no secrets.
 - [ ] No city started; no AWS interaction; live fleet validation left as the named
       un-pause follow-up.
@@ -354,5 +363,5 @@ Set-level: the Step-6 consistency sweep transcript.
 
 None — city source-config repos, no AWS resources created or renamed. Runtime exposure
 arrives only via source-sync at un-pause under the AGC-WO-CSC deploy WOs' gates. The 10
-credential punch-list items + 2 capacity re-derivation flags ride the CSC program punch
-list, not the cutover.
+credential punch-list items + 2 capacity re-derivation flags + 5 evidence-vars
+un-pause items (A2.10) ride the CSC program punch list, not the cutover.

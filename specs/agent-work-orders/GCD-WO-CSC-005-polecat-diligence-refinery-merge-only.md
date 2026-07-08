@@ -490,7 +490,14 @@ standard git-trailer position; the full line must match
 `^Overseer-Issue: [A-Za-z0-9_.:-]+$` (the marker-grammar authority is cited in this
 WO's provenance — the fragment states the grammar generically, no estate paths);
 (2) your done-sequence notes carry the same line (the submit sequence above does this
-automatically — verify, don't duplicate). Purpose (generic phrasing): downstream
+automatically — verify, don't duplicate); (3) **set the bead's merge strategy to the PR
+lane** (A2.10 RULING): `gc bd update "$BEAD_ID" --set-metadata merge_strategy=mr` — any
+bead with a non-empty `overseer_issue_id` MUST merge via a pull request. Rationale
+(state it in the fragment, generically): `metadata.merge_strategy` defaults to
+`"direct"` (`mol-refinery-patrol.toml:380`), and a direct merge produces NO PR body — the
+marker and the downstream merge-event correlation die with it, so the originating
+issue's ledger never advances; `mr` routes the merge through the PR body the marker
+reader scans. Purpose (generic phrasing): downstream
 tracking scans pull-request bodies first, then the head-commit message, for this
 marker to correlate merged work back to the originating issue — the notes line covers
 the PR body (the refinery builds PR bodies from bead notes), the commit trailer covers
@@ -574,12 +581,22 @@ fi
 
 **Step 8 — `refinery-wisp-pour-vars-override.template.md` update** (codegen-support;
 per the fragment's own "append matching `--var key=value` lines here" instruction).
-Insert BEFORE the canonical pour command: a 3-line effective-gate lookup (`EVALUATOR_GATED`
-via the same imported block — the fragment already runs in bash context), then add to
-the canonical command: `--var evaluator_gated="${EVALUATOR_GATED:-false}"`. Extend the
+Insert BEFORE the canonical pour command: the imported R4 `effective_rig_var` lookup
+block (city-root resolution + function, copied VERBATIM from the merged
+`mol-evaluate-task.formula.toml` — the FULL block, it is not 3 lines) plus ONE call
+line — `EVALUATOR_GATED=$(effective_rig_var evaluator_gated "" "false")` — both must be
+present in the fragment (it already runs in bash context); then add to the canonical
+command: `--var evaluator_gated="${EVALUATOR_GATED:-false}"`. Extend the
 "Verification" jq example to also surface `evaluator_gated`. Update the fragment's
 explanatory paragraph: `integration_branch_auto_land` AND `evaluator_gated` are the two
-vars whose effective values differ from formula defaults in bound cities. NO other
+vars whose effective values differ from formula defaults in bound cities. ALSO correct
+the fragment's now-false tail sentence — "The set of variables passed at pour time IS
+the set the wisp will use; no city-config fallback applies." stops being true once this
+WO merges: formula steps wired through `effective_rig_var` (R4) DO consult
+`[rigs.formula_vars]` at run time. Replace that sentence with: "The set of variables
+passed at pour time is what the wisp renders; for vars wired through the run-time
+`effective_rig_var` lookup (e.g. `evaluator_gated`), `[rigs.formula_vars]` is consulted
+at run time as the fallback — explicit pour-time `--var` values still win." NO other
 change to the fragment.
 
 **Step 9 — packlint tests.**
@@ -601,7 +618,8 @@ change to the fragment.
   `polecat-autonomy-and-blockers` contains the structured-blocker field list (decision/
   options/recommendation/blast radius) + "LAST resort"; `polecat-overseer-issue-marker`
   contains the exact literal `Overseer-Issue: `, `overseer_issue_id`, the id-grammar
-  charset (`[A-Za-z0-9_.:-]+`), and the inert-when-absent rule. **Cadence-boundary
+  charset (`[A-Za-z0-9_.:-]+`), the `merge_strategy=mr` instruction (A2.10 ruling), and
+  the inert-when-absent rule. **Cadence-boundary
   absence battery (Non-Goals pin):** across ALL six new fragment files, the strings
   `force-with-lease` and `after EVERY commit` do NOT appear (push cadence is
   GCD-WO-CSC-002's `wip-push-cadence` territory); `polecat-evidence-contract` DOES
@@ -609,6 +627,9 @@ change to the fragment.
 - **(b) `test/packlint/csc_refinery_gating_test.go`**: `mol-refinery-patrol.toml`
   contains `[vars.evaluator_gated]` + `default = "false"`; `version = 5`; the gate
   predicate strings (`judge_verdict`, `integration/*` case-glob, `GATED_SMOKE`); the
+  session-restart re-derive line from 7b (assert the literal
+  `.[0].metadata.branch // empty` appears in the `run-tests` gate block, so
+  `case "$BRANCH" in integration/*)` never reads an undefined value); the
   gated-smoke command pair (setup+build only) and the retained full-battery text; the
   verdict-clear args in the gated rejection; the gated no-branch-delete pin (the gated
   clause contains "do NOT delete the branch" / omits `git push origin --delete` — assert
@@ -693,8 +714,10 @@ Each criterion names its backing test:
    pushback-is-correct + additive-repair rule; evidence/rebase/autonomy fragments carry
    their pinned load-bearing lines — same test.
 4. Overseer marker fragment: exact `Overseer-Issue: <issue-id>` trailer duty on final
-   commit + notes, conditional on `overseer_issue_id`, inert when absent —
-   same test (A1 §2 discharged for the polecat side).
+   commit + notes, PLUS the `merge_strategy=mr` write for overseer-routed beads (A2.10
+   ruling — no direct merges, the marker needs a PR body), conditional on
+   `overseer_issue_id`, inert when absent — same test (A1 §2 discharged for the polecat
+   side).
 5. `mol-refinery-patrol` v5: `evaluator_gated` var (default `"false"`), run-time
    effective-gate resolution, gated smoke = setup+build only, gated `handle-failures`
    rejection clears stale verdicts AND preserves the branch (no gated

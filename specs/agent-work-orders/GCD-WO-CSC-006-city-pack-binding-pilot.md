@@ -201,8 +201,11 @@ In the HOME worktree (`GasCity-Dev`, post-wave-23 `origin/main`):
   `<name>.template.md` opening with `{{ define "<name>" }}` (precedent:
   `polecat-validate-before-commit.template.md:1`).
 - `examples/gastown/packs/codegen-support/formulas/` — `wo-router` formula (GCD-WO-CSC-004)
-  + `mol-evaluate-task` / `mol-judge-task` class formulas (GCD-WO-CSC-003) +
-  `mol-refinery-patrol` `evaluator_gated` branches (GCD-WO-CSC-005).
+  + `mol-evaluate-task` / `mol-judge-task` class formulas (GCD-WO-CSC-003).
+- `examples/gastown/packs/gastown/formulas/mol-refinery-patrol.toml` — the
+  `evaluator_gated` branches (GCD-WO-CSC-005). NOTE the home: this formula lives in the
+  GASTOWN pack, not codegen-support — the `evaluator_gated` var this WO sets in
+  `[rigs.formula_vars]` (Step 4) is consumed there.
 - `examples/gastown/packs/codegen-support/assets/scripts/spec-cartographer-watch.sh` +
   `orders/spec-cartographer-watch.toml` — the watch order (exec-based, cooldown trigger);
   GCD-WO-CSC-004 adds the formula-name var this WO sets.
@@ -305,8 +308,8 @@ evidence; each has a STOP-gate):**
 |---|---|---|---|---|
 | R1a | Evaluator/judge agent names + scope | `cat examples/gastown/packs/codegen-support/agents/evaluator/agent.toml agents/judge/agent.toml` | agents named `evaluator` / `judge`, rig-scope pool agents (patched per rig via `[[rigs.patches]]`, like polecat); selectors on `gc.kind = eval_request` / `judge_request`; default pools 4 / 2 | agents absent, or scope = city (then bind via `[[patches.agent]]` in `pack.toml` instead — mirror the scope the merged agent.toml declares, and say so in the PR) |
 | R1b | City-binding mechanism + seam fragment names | GCD-WO-CSC-003's pack README/binding doc + `grep -rn "city-architecture-standards\|city-evidence-doctrine\|city-invariants" examples/gastown/packs/codegen-support/` | append_fragments-based city content over empty-default upstream defines; seam names exactly the C11 three | seam names differ from C11 (bind the MERGED names; flag the kit drift in the PR) |
-| R1c | New polecat fragment names | `ls examples/gastown/packs/codegen-support/template-fragments/ \| grep -E 'polecat\|overseer'` then set-difference against the 6 pre-existing `polecat-*` names quoted in R0 | SIX new names total (kit C11: "the 5 new + overseer-marker"): the 5 D10 diligence fragments — code hygiene (incl. fabricated-evidence ban), evidence contract, final rebase+revalidate, autonomy-and-blockers, submit-to-evaluator done-sequence override — plus the overseer-issue-marker fragment (A1 §2); exact names as merged | fewer than the GCD-WO-CSC-005 deliverable set present, or the done-sequence override fails the Step-3 supersession gate |
-| R1d | Router formula name + watch var name | `ls examples/gastown/packs/codegen-support/formulas/ \| grep -i router` + `grep -n "formula" examples/gastown/packs/codegen-support/assets/scripts/spec-cartographer-watch.sh` | a `wo-router` formula; the watch script reads a per-rig formula-name var (name as GCD-WO-CSC-004 delivered it) with legacy `spec-cartographer` default | no var exists (STOP — the C10 seam is missing upstream) |
+| R1c | New polecat fragment names | `ls examples/gastown/packs/codegen-support/template-fragments/ \| grep polecat` (plain fixed-string pattern — ALL six new GCD-WO-CSC-005 names start with `polecat-`, including `polecat-overseer-issue-marker`; do NOT copy an escaped alternation into `grep -E` — an escaped pipe in ERE matches literally and finds nothing), then set-difference against the 6 pre-existing `polecat-*` names quoted in R0 | SIX new names total (kit C11: "the 5 new + overseer-marker"): the 5 D10 diligence fragments — code hygiene (incl. fabricated-evidence ban), evidence contract, final rebase+revalidate, autonomy-and-blockers, submit-to-evaluator done-sequence override — plus the overseer-issue-marker fragment (A1 §2); exact names as merged | fewer than the GCD-WO-CSC-005 deliverable set present, or the done-sequence override fails the Step-3 supersession gate |
+| R1d | Router formula name + watch var name | `ls examples/gastown/packs/codegen-support/formulas/ \| grep -i router` + `grep -n "formula" examples/gastown/packs/codegen-support/assets/scripts/spec-cartographer-watch.sh` | a `wo-router` formula; the watch script reads the per-rig `[rigs.formula_vars]` var **`wo_planning_formula`** (GCD-WO-CSC-004's pinned name — the discovery grep pattern `formula` matches it as a substring; verify the merged spelling, don't trust this file) with legacy `spec-cartographer` default | no var exists (STOP — the C10 seam is missing upstream) |
 | R1e | Verdict metadata keys (context for doctrine fragments + runbook, NOT re-declared) | kit C9 + GCD-WO-CSC-003 merged docs | `eval_verdict, eval_evidence, eval_reject_count, judge_verdict, rejection_reason, decision_state, overseer_issue_id` | — (import citation only) |
 
 **R2 — doctrine content sources** (for step 5; all at the estate code root, siblings of
@@ -452,8 +455,9 @@ evaluator_gated = "true"
 <WATCH_FORMULA_VAR> = "<ROUTER_FORMULA_NAME>"
 ```
 
-`<WATCH_FORMULA_VAR>` / `<ROUTER_FORMULA_NAME>` = the Step-0-resolved names (C10; expected
-router formula `wo-router`). `evaluator_gated = "true"` flips the GCD-WO-CSC-005 refinery
+`<WATCH_FORMULA_VAR>` / `<ROUTER_FORMULA_NAME>` = the Step-0-resolved names (C10;
+expected: `wo_planning_formula` = `"wo-router"` per GCD-WO-CSC-004's pinned literals —
+R1d verifies the merged spelling). `evaluator_gated = "true"` flips the GCD-WO-CSC-005 refinery
 branches for this rig (C9; upstream default `"false"` keeps every non-CSC city unchanged).
 `spec-cartographer` remains available (legacy formula retained — C10); routing to the
 router is exactly this one var.
@@ -502,6 +506,15 @@ handling), this repo only declares projections; verification commands for the op
 this WO: cities paused, no cluster interaction); explicit note that pods fail credential
 materialization if the secrets are absent at un-pause (`optional = false` is deliberate —
 fail loud, never silently run evaluator/judge on borrowed credentials).
+
+The runbook ALSO carries the **evidence-vars un-pause punch item (A2.10)**: at un-pause,
+wire `evidence_publish_cmd` / `evidence_fetch_cmd` per city into the rig's
+`[rigs.formula_vars]` from AGC-WO-CSC-003's spec-18 grammar (the durable-URI S3 evidence
+lane) — **without them, no-PVC cities dead-end every evaluated bead to `mayor_action`**:
+local evidence dies with the pod, the judge fails CLOSED on unreachable evidence (C9
+fail-closed rule), and the repeated rejections burn the shared `eval_reject_count` budget
+straight to escalation. State this as an explicit punch-list line beside the secrets
+item; it is an un-pause action, not a paused-state acceptance criterion.
 
 **Step 7 — City tests (`tests/`, cartographer-*.sh pattern).** Five standalone scripts +
 the Step-0 names file. Common preamble per the existing pattern (`set -euo pipefail`,
@@ -572,10 +585,11 @@ source-sync at un-pause (no deploy action in this WO).
   patches + both new providers resolves clean; exit 0) and `gc lint .` over the city pack
   (fragment references check — `cmd/gc/cmd_lint.go:317` class diagnostics clean). Run from
   the city worktree root with the wave-23 `gc` built from the home worktree.
-- **No-regression tier:** the three pre-existing `tests/cartographer-*.sh` +
+- **No-regression tier:** ALL pre-existing `tests/*.sh` still pass unmodified — 7 on
+  disk at the pinned `71ee67ec`: the 5 `cartographer-*.sh` scripts +
   `tests/spec-cartographer-watch-busy-predicate.sh` + `tests/debugger-plan-lifecycle.sh`
-  still pass unmodified (the binding must not disturb legacy cartographer machinery —
-  C10 retains it).
+  (enumerate from the worktree at execution rather than trusting this count; run every
+  one). The binding must not disturb legacy cartographer machinery — C10 retains it.
 
 ## Validation
 
