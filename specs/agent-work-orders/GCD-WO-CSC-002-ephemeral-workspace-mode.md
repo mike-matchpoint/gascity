@@ -57,9 +57,14 @@ Three engine deliverables (C7-engine, all pinned):
    `GC_CITY_RUNTIME_DIR` at an emptyDir and get a quiet, small, durable `.gc`.
 2. **Rig-from-mirror provisioning.** Rigs gain a remote-source form (the same machinery
    packs already have: `internal/config/pack_fetch.go` clone/update +
-   `config.PackSource`-style fields) plus an idempotent `gc rig ensure` command, and the
-   k8s no-PVC pod staging provisions rig checkouts by CLONING from the rig source instead
-   of streaming whole trees from the controller.
+   `config.PackSource`-style fields), an **environment-resolved mirror contract**
+   (`GC_RIG_MIRROR_BASE` fetch base + `GC_RIG_MIRROR_PUSH_BASE` push base — site-injected,
+   never baked into git-tracked `city.toml`), and an idempotent `gc rig ensure` command;
+   the k8s no-PVC pod staging provisions rig checkouts by CLONING from the resolved rig
+   source instead of streaming whole trees from the controller. Fetch and push are SPLIT
+   on purpose: the in-cluster mirror is read-only (fetch accelerator); push-back stays
+   git-native to the canonical remote (living doc WS1 finding 5: "city→GitHub is already
+   git-native" — this WO must not break it).
 3. **WIP-push cadence support (D8)** as a **gastown pack fragment** (generic prompt
    content: push the worktree branch at every commit boundary) plus the
    `worktree-setup.sh` recovery half: when an evicted agent's branch already exists on
@@ -71,6 +76,20 @@ Event/nudge transport is **imported, not re-specified**: this WO consumes contra
 `GC_NUDGES` seam, `GC_K8S_CONTROLLER_*` projection). Nothing in this WO may re-declare or
 alter any C6 surface.
 
+**Pinned contract surface (what AGC-WO-CSC-002's STOP-gates resolve against — these names
+are AUTHORITY once merged):**
+
+| Pin | Value |
+|---|---|
+| Runtime-dir split env var | `GC_CITY_RUNTIME_DIR` (existing; this WO completes its coverage — the kit's "`GC_RUNTIME_DIR`" is shorthand for it) |
+| Rig-mirror fetch base env var | `GC_RIG_MIRROR_BASE` — absolute URL, no trailing slash, no path beyond the serving root (e.g. `git://<mirror-svc-dns>:9418`) |
+| Rig push base env var | `GC_RIG_MIRROR_PUSH_BASE` — absolute URL base of the canonical writable remote (e.g. `https://github.com/<org>`) |
+| Rig clone-URL grammar | `<GC_RIG_MIRROR_BASE>/<repo-name>.git`; push URL `<GC_RIG_MIRROR_PUSH_BASE>/<repo-name>.git`; `<repo-name>` = basename of `Rig.Source` (minus `.git`) when set, else the RIG NAME (deployed cities name rigs by repo — e.g. `vehicle-graph-city/city.toml:61` `name = "Matchpoint-Vehicle-Graph"`) |
+| Per-rig explicit override | `Rig.Source` / `Rig.SourceRef` (`city.toml`, optional — see Step 2a) |
+| Rig checkout landing path | `Rig.Path` when set (resolved against the city dir); else **`<cityRoot>/rigs/<rig-name>`** (matches the hosted layout and the `GC_RIG_ROOT` pod remap at `internal/runtime/k8s/pod.go:512`) |
+| Pod-side pre-provision verify-fetch hook env | **NONE in v1** — deliberately not exposed; AGC-WO-CSC-002's mayor-side `/heads` verify + hourly reconcile are the freshness backstop (its S6.3 fallback branch) |
+| No-PVC staging behavior | `GC_K8S_WORKSPACE_PVC` unset ⇒ per-pod `/workspace` via `gc init --from` (existing mode, `provider.go:59-60,309-311,1326-1343`) + rig-dir copy exclusion + in-pod `gc rig ensure` (Step 2d) |
+
 ## Dependencies
 
 - **Blocked by:** `GasCity-Dev::GCD-WO-CSC-001-runtime-event-nudge-transport` (same wave
@@ -81,11 +100,15 @@ alter any C6 surface.
 - **Consumed by:**
   - `aws-GasCity::AGC-WO-CSC-002-mirror-and-ephemeral-workspaces` (wave 24) — C7-infra:
     renders the per-city `gc-mirror` sidecar (bare repos, fetch-on-webhook), flips hosted
-    cities to no-PVC mode, sets rig `source` values to the in-cluster mirror URLs, owns the
-    **mirror URL + provisioning contract** (build plan §6) and the **dispatch-time
-    verify-fetch backstop**, and runs the ADR-024 git-reconstruction proof drills
-    (polecat resume/rejection + `metadata.work_dir` + eviction drill, vehicle-graph pilot,
-    re-suspend after). It cites this WO's `Rig.Source`/`gc rig ensure` seams verbatim.
+    cities to no-PVC mode, and **injects this WO's `GC_RIG_MIRROR_BASE` /
+    `GC_RIG_MIRROR_PUSH_BASE` env** (its S4.1: mayor `env_vars()` + agent-pod
+    `agent_env_defaults()` via `GC_K8S_AGENT_ENV_JSON`) with the URL VALUES it owns —
+    per K2 it may NOT edit city repos' `city.toml`, which is exactly why the mirror
+    contract is env-resolved, not per-rig config. It owns the **mirror URL + provisioning
+    contract values** (build plan §6) and the **dispatch-time verify-fetch backstop**, and
+    runs the ADR-024 git-reconstruction proof drills (polecat resume/rejection +
+    `metadata.work_dir` + eviction drill, vehicle-graph pilot, re-suspend after). It cites
+    this WO's pinned contract surface (table above) verbatim.
   - `aws-GasCity::AGC-WO-CSC-007-efs-retirement-cutover` (wave 24) — deletes the shared FS
     this WO makes unnecessary.
 - **Repo gates:** `CONTRIBUTING.md`, `TESTING.md` (read before writing any test; use the
@@ -110,9 +133,16 @@ cities untouched); new Go role logic for pack behavior (ZFC)**.
 Specifically out of scope here:
 
 - **NO transport work** — events/nudge `api:` provider, `GC_NUDGES`, mutation-class
-  allowlist, controller Service are **C6 / GCD-WO-CSC-001**; import-cite only. Editing
-  `internal/events/*`, `internal/nudgequeue/*`, or `internal/api/*` transport surfaces
-  here is a REJECT.
+  allowlist, typed nudge endpoints, controller Service are **C6 / GCD-WO-CSC-001**;
+  import-cite only. Editing `internal/events/*` or `internal/api/*`, or any nudge
+  queue-op/endpoint/provider surface, is a REJECT. The ONE sanctioned touch in
+  `internal/nudgequeue` is Step 1c's **path-derivation** edits (`WakeSocketPath` routing;
+  `StatePath`/`LockPath` explicitly NOT moved) — path derivation is this WO's C7 seam,
+  queue semantics are C6's.
+- **NO pod-side pre-provision verify-fetch hook** — deliberately not exposed in v1 (see
+  the pinned-contract table); freshness is AGC-WO-CSC-002's mayor-side + hourly lanes.
+  Do not add a mirror-control-API client to the engine (the engine treats rig sources as
+  opaque git URLs; the control API is an AGC-WO-CSC-002 contract).
 - **NO mirror serving** — the `gc-mirror` sidecar image/Deployment/Service, bare-repo
   layout, webhook-triggered fetch, and the mirror URL naming are AGC-WO-CSC-002 (which
   also owns `docker/gascity-mirror/` per kit A1 §5). The engine treats a rig source as an
@@ -265,11 +295,15 @@ runtime-dir-split.md"). Zero-item guard: the test asserts the collected set is N
 after `DefaultBranch`:
 
 ```go
-// Source is an optional remote git URL for this rig's repository (any URL
-// git clone accepts; hosted cities point it at the in-cluster mirror —
-// provisioning contract: AGC-WO-CSC-002). When set, `gc rig ensure` (and
-// k8s no-PVC pod staging) can materialize/refresh the checkout at Path.
-// Empty = current behavior everywhere (Path must already exist).
+// Source is an optional CANONICAL remote git URL for this rig's repository
+// (any URL git clone accepts). It is the explicit per-rig override for
+// provisioning: when GC_RIG_MIRROR_BASE is set the fetch still goes through
+// the mirror (repo name = Source's basename) and Source becomes the push
+// target; without a mirror base, Source is cloned/pushed directly. Hosted
+// cities normally leave it EMPTY — the site injects GC_RIG_MIRROR_BASE /
+// GC_RIG_MIRROR_PUSH_BASE and the repo name defaults to the rig name, so
+// city.toml stays environment-agnostic (never bake cluster DNS into git
+// truth). Empty + no mirror env = current behavior (Path must exist).
 Source string `toml:"source,omitempty"`
 // SourceRef is the git ref to check out when provisioning from Source
 // (branch, tag, or commit). Empty = the remote default branch
@@ -288,34 +322,75 @@ struct-field comparison Rig↔RigPatch modeled on `TestAgentFieldSync` — locat
 blacklist):
 
 ```go
-// EnsureRig materializes or refreshes a rig checkout from its remote Source.
-//   - missing Path (or Path exists but is not a git repo): clone.
-//     Clone shape (pinned): `git clone --filter=blob:none [--branch <ref>]
-//     <source> <path>` — full history, on-demand blobs (cheap against an
-//     in-cluster mirror; correct for worktree/merge-base operations, unlike
-//     the packs' depth-1 shallow clone).
+// RigEnsureOptions carries the site-injected mirror contract (CSC C7).
+// Callers populate it via RigEnsureOptionsFromEnv (GC_RIG_MIRROR_BASE /
+// GC_RIG_MIRROR_PUSH_BASE); tests pass values directly. Both values, when
+// set, must be absolute URLs without a trailing slash (validation error
+// otherwise — fail loudly, never guess).
+type RigEnsureOptions struct {
+	MirrorBase string
+	PushBase   string
+}
+
+func RigEnsureOptionsFromEnv() RigEnsureOptions
+
+// RigRepoName returns the repository basename used in the clone-URL
+// grammar: basename of rig.Source minus ".git" when Source is set, else
+// the rig name (deployed cities name rigs by repo).
+func RigRepoName(rig Rig) string
+
+// resolveRigProvisioningURLs pins the fetch/push resolution:
+//   fetch: MirrorBase set → "<MirrorBase>/<RigRepoName>.git";
+//          else rig.Source when set; else ok=false (no remote form —
+//          callers treat as ErrRigNoSource).
+//   push:  rig.Source set → rig.Source (the canonical remote);
+//          else PushBase set → "<PushBase>/<RigRepoName>.git";
+//          else "" — ONLY legal when fetch==rig.Source (clone default push
+//          is already canonical). A mirror-derived fetch with NO resolvable
+//          push target is a hard ERROR: the mirror is read-only and a rig
+//          that cannot push strands every agent's work (WIP-push cadence,
+//          done-sequence push, branch recovery all push to origin).
+func resolveRigProvisioningURLs(rig Rig, opts RigEnsureOptions) (fetch, push string, ok bool, err error)
+
+// EnsureRig materializes or refreshes a rig checkout from its resolved
+// remote source.
+//   - missing target (or exists but not a git repo): FULL clone
+//     (`git clone [--branch <ref>] <fetch> <target>`) — full history and
+//     blobs (correct for worktree/merge-base/rebase operations; cheap from
+//     an in-cluster mirror; deliberately NOT --depth 1 like packs, and NOT
+//     --filter=blob:none: git-daemon mirrors don't enable
+//     uploadpack.allowFilter, and lazy blobs would couple every later
+//     checkout to mirror availability). Then, when push != fetch:
+//     `git remote set-url --push origin <push>`.
 //   - existing repo: `git fetch --prune origin` then fast-forward the
 //     current branch ONLY when clean and behind (`merge --ff-only`);
-//     a dirty tree or diverged branch is LEFT UNTOUCHED (exit
-//     ErrRigDirty-wrapped) — provisioning must never destroy work.
-//   - rig.Source == "": ErrRigNoSource (callers decide whether that is an
-//     error or a skip).
+//     a dirty tree or diverged branch is LEFT UNTOUCHED (ErrRigDirty-
+//     wrapped) — provisioning must never destroy work. Re-assert the
+//     push URL (idempotent set-url) so drifted checkouts converge.
+//   - no resolvable remote form: ErrRigNoSource (callers decide whether
+//     that is an error or a skip).
 // Idempotent; safe to run at every pod start.
-func EnsureRig(rig Rig, cityRoot string) error
+func EnsureRig(rig Rig, cityRoot string, opts RigEnsureOptions) error
 ```
 
-Path resolution: `rig.Path` exactly as the rest of the config layer resolves it (relative →
-against the city directory; verify the existing resolution helper via
-`grep -rn "rig.Path" internal/config cmd/gc | grep -v test` and reuse it). Ref precedence:
-`SourceRef` → `DefaultBranch` → remote HEAD. Error paths: wrap with rig name
-(`fmt.Errorf("ensuring rig %q: %w", …)`); no partial clones left behind (clone into a
-`.tmp-<name>` sibling then `os.Rename`, matching the repo's atomic-write convention).
+Target-path resolution (pinned): `rig.Path` when set, resolved exactly as the rest of the
+config layer resolves it (relative → against the city directory; verify the existing
+helper via `grep -rn "resolveRigPaths" cmd/gc` — `beads_provider_lifecycle.go:632` — and
+mirror its semantics; note it SKIPS empty paths); **when `rig.Path` is empty — the
+deployed-city shape, e.g. `vehicle-graph-city/city.toml:60-64` has no `path` — the target
+is `<cityRoot>/rigs/<rig-name>`**, which is byte-consistent with the hosted layout and the
+`GC_RIG_ROOT` controller→pod remap (`pod.go:512`), so `worktree-setup.sh` finds the same
+`$RIG_ROOT` it does today. Ref precedence: `SourceRef` → `DefaultBranch` → remote HEAD.
+Error paths: wrap with rig name (`fmt.Errorf("ensuring rig %q: %w", …)`); no partial
+clones left behind (clone into a `.tmp-<name>` sibling then `os.Rename`, matching the
+repo's atomic-write convention).
 
 **2c. CLI.** New file `cmd/gc/cmd_rig_ensure.go`: `gc rig ensure [<name>...|--all]`
 (register beside the existing rig subcommands — locate the `rig` cobra parent via
 `grep -n "\"rig\"" cmd/gc/*.go`). Behavior: resolve city + config; for each named rig (or
-all with `--all`): `config.EnsureRig`; skip-with-notice on `ErrRigNoSource` (`rig %q: no
-source configured — skipped`); any other error → non-zero exit after attempting the rest
+all with `--all`): `config.EnsureRig(rig, cityRoot, config.RigEnsureOptionsFromEnv())`;
+skip-with-notice on `ErrRigNoSource` (`rig %q: no source resolvable (no source, no
+GC_RIG_MIRROR_BASE) — skipped`); any other error → non-zero exit after attempting the rest
 (aggregate, report each). `--json` summary flag following the repo's
 `writeCLIJSONLineOrErr` idiom (see `cmd_event_emit.go:63`). No timeout imposed by gc
 (no-timeouts-on-long-ops: clones may be big; the operator/pod controls the budget).
@@ -335,6 +410,14 @@ layouts, can contain multi-GB rig checkouts) into the pod. Change (pinned):
   (`GC_RIG_ROOT` remap already exists at `pod.go:512`; map the pod-visible rig root back to
   the rig name via the staged city config), else `gc rig ensure --all`. Failure = staging
   failure (pod start error) — a pod without its rig cannot work; don't-swallow-errors.
+- **Env plumbing (pinned):** the in-pod `gc rig ensure` inherits the container env, which
+  carries `GC_RIG_MIRROR_BASE`/`GC_RIG_MIRROR_PUSH_BASE` from `GC_K8S_AGENT_ENV_JSON`
+  (`appendAgentEnvDefaults`, `pod.go:572+`; AGC-WO-CSC-002 S4.1 injects the values). Do
+  NOT add either var to the `buildPodEnvForRoot` skip map (`pod.go:459-486`) — they are
+  agent-side values, not controller-local ones; Test 8 pins the pass-through. The
+  rig-exclusion + ensure behavior activates on the same predicate: non-empty
+  `GC_RIG_MIRROR_BASE` in the effective pod env (provider `agentEnv` merged with session
+  `cfg.Env`) — env absent ⇒ staging sequence byte-identical to today.
 - `GC_K8S_WORKSPACE_PVC` set (persistent mode): NO behavior change (exclusion + ensure are
   no-PVC-mode-only; `usesPersistentWorkspace` at 309-311 is the guard).
 
@@ -450,19 +533,30 @@ audit test fails on an empty scan; every list assertion requires expected non-ze
    sync (catches the new Source/SourceRef in both + `applyRigPatch` merge behavior for
    set/unset/override cases).
 6. **EnsureRig behavior:** `internal/config/rig_fetch_test.go` — against real bare-repo
-   fixtures: fresh clone (blob-filter arg asserted, ref precedence SourceRef →
-   DefaultBranch → HEAD), idempotent re-run (fetch+ff), behind-clean → fast-forwards,
-   dirty tree → `ErrRigDirty` and tree untouched (byte-compare), diverged → untouched +
-   error, no Source → `ErrRigNoSource`, missing-parent path → created, failed clone →
-   no partial dir left (atomic rename pin).
+   fixtures (a `file://` bare "mirror" plus a second bare "canonical" remote — real
+   commits, real SHAs): **URL-resolution table** (`resolveRigProvisioningURLs`: every
+   Source × MirrorBase × PushBase combination incl. repo-name-from-Source vs from-rig-name,
+   trailing-slash/relative-URL validation errors, and the pinned HARD ERROR for
+   mirror-derived fetch with no resolvable push target); fresh clone is a FULL clone (no
+   `--depth`, no `--filter` — args asserted) with ref precedence SourceRef →
+   DefaultBranch → HEAD; **push split proven end-to-end**: after EnsureRig, `git push
+   origin HEAD` from the checkout lands the ref on the CANONICAL bare remote, not the
+   mirror (zero-item guard: the pushed ref must exist there); empty `rig.Path` lands at
+   `<cityRoot>/rigs/<rig-name>`; idempotent re-run (fetch+ff, push-url re-asserted);
+   behind-clean → fast-forwards; dirty tree → `ErrRigDirty` and tree untouched
+   (byte-compare); diverged → untouched + error; no source resolvable → `ErrRigNoSource`;
+   missing-parent path → created; failed clone → no partial dir left (atomic rename pin).
 7. **CLI:** `cmd/gc/cmd_rig_ensure_test.go` — `--all` mixed outcomes aggregate correctly
    (one no-source skip + one success + one failure → exit non-zero, all three reported);
    `--json` schema-stable line.
 8. **k8s staging:** `internal/runtime/k8s/provider_rig_staging_test.go` (fake `k8sOps`) —
-   no-PVC staging: copy excludes in-city rig dirs (exec/copy invocations asserted against
-   the exclusion set), `gc rig ensure <rig>` exec'd with the session's rig (and `--all`
-   fallback), ensure failure fails `Start`; persistent-PVC mode: invocation sequence
-   byte-identical to pre-change golden (file-mode/persistent parity pin).
+   no-PVC staging with `GC_RIG_MIRROR_BASE` in agentEnv: copy excludes in-city rig dirs
+   (exec/copy invocations asserted against the exclusion set), `gc rig ensure <rig>`
+   exec'd with the session's rig (and `--all` fallback), ensure failure fails `Start`;
+   pod env contains `GC_RIG_MIRROR_BASE`/`GC_RIG_MIRROR_PUSH_BASE` (pass-through pin —
+   neither stripped by the skip map); mirror env ABSENT → staging invocation sequence
+   byte-identical to pre-change golden; persistent-PVC mode: byte-identical golden
+   regardless of env (file-mode/persistent parity pins).
 9. **Fragment + prompt render:** extend the pack render/structural tests (locate the
    existing prompt-render test harness via `grep -rn "prompt.template" internal/config
    cmd/gc --include=*_test.go`): gastown polecat rendered prompt CONTAINS the
@@ -512,8 +606,11 @@ audit test fails on an empty scan; every list assertion requires expected non-ze
    Test 3.
 4. `Rig.Source`/`Rig.SourceRef` exist with RigPatch parity and merge wiring; field sync is
    now test-enforced ← Test 5.
-5. `EnsureRig` provisions from a remote source idempotently, never destroys local work,
-   leaves no partial state ← Test 6.
+5. `EnsureRig` resolves fetch/push per the pinned grammar (`GC_RIG_MIRROR_BASE` /
+   `GC_RIG_MIRROR_PUSH_BASE` / `Rig.Source`, rig-name default, `rigs/<name>` landing,
+   fail-loud on unpushable mirror fetch), provisions idempotently with a full clone,
+   proves push-back to the canonical remote, never destroys local work, leaves no partial
+   state ← Test 6.
 6. `gc rig ensure` (names/`--all`/`--json`) behaves as pinned ← Test 7.
 7. k8s no-PVC staging clones rigs from source instead of streaming them from the
    controller; persistent mode untouched byte-for-byte ← Test 8.
@@ -534,11 +631,22 @@ audit test fails on an empty scan; every list assertion requires expected non-ze
   or `.gc/nudges/wake.sock` literally will need the runtime-dir-split doc; in-repo callers
   are covered by the audit test. Hosted-side path consumers are re-rendered by
   AGC-WO-CSC-002 (it imports the doc table).
-- **`--filter=blob:none` against exotic git servers**: partial clone requires server
-  support; the mirror (git-http-backend class) supports it, GitHub supports it. `EnsureRig`
-  must surface the git error verbatim on failure — no silent fallback to full clone
-  (predictability over magic); operators can unset the filter expectation only by code
-  change (deliberate).
+- **Read-only mirror + push split**: the in-cluster mirror serves fetch only (git daemon,
+  no receive-pack) — every push path (WIP cadence, done-sequence, recovery upstream) MUST
+  target the canonical remote. The resolveRigProvisioningURLs hard-error (mirror fetch
+  without push target) plus Test 6's end-to-end push assertion are the guards; a regression
+  here silently strands agent work on pods.
+- **Rig-name = repo-name default**: the clone-URL grammar's rig-name fallback matches the
+  deployed convention (verified: `vehicle-graph-city/city.toml:61`; the GCD-WO-CSC-007
+  fan-out table lists all cities' rigs by repo name). A future city whose rig name diverges
+  from its repo name must set `Rig.Source` — documented in the field comment and the
+  runtime-dir-split doc's companion section.
+- **Mayor-side runtime-dir adoption is infra's move**: this WO makes the split
+  engine-complete; AGC-WO-CSC-002's current text mounts the mayor-state PVC but does not
+  yet render a mayor emptyDir + `GC_CITY_RUNTIME_DIR` env. Defaults are safe either way
+  (everything lands under `.gc/runtime` on the PVC); the emptyDir adoption is a one-line
+  render change AGC/006B can take at execution (flagged to the seam round — not this WO's
+  blocker).
 - **Worktree-setup splice fragility**: the script has staging/restore trap logic around
   the creation block — the recovery branch must live INSIDE the existing error-handling
   structure (Test 10's regression cases guard the fast paths).
@@ -556,10 +664,12 @@ audit test fails on an empty scan; every list assertion requires expected non-ze
 ## Done Means
 
 - All Acceptance Criteria green on the rebased tree; evidence transcripts available.
-- The engine seams AGC-WO-CSC-002 imports are now merged authority: `Rig.Source`/
-  `SourceRef` + `EnsureRig` + `gc rig ensure`, `EphemeralPath` + the classification doc,
-  the no-PVC staging contract, the WIP-push fragment + recovery semantics. Nothing
-  downstream re-declares them.
+- The engine seams AGC-WO-CSC-002 imports are now merged authority (the pinned-contract
+  table in Goal): `GC_RIG_MIRROR_BASE` + `GC_RIG_MIRROR_PUSH_BASE` + the clone-URL grammar
+  and `rigs/<name>` landing rule, `Rig.Source`/`SourceRef` + `EnsureRig` + `gc rig ensure`,
+  `GC_CITY_RUNTIME_DIR` coverage (`EphemeralPath` + the classification doc), the no-PVC
+  staging contract, the WIP-push fragment + recovery semantics, and the explicit
+  NO-verify-hook-env ruling. Nothing downstream re-declares them.
 - Non-k8s cities and persistent-PVC mode provably unchanged.
 - `engdocs/architecture/runtime-dir-split.md` shipped and audit-linked.
 - Working tree clean, branch pushed.
