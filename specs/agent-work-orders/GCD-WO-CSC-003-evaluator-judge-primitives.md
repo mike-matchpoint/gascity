@@ -247,11 +247,12 @@ Bounded-context REJECT rules (kit K2, GasCity-Dev row) restated:
 All paths repo-relative; READ-first, then extend:
 
 - `examples/gastown/packs/codegen-support/` — the pack under extension: `pack.toml`
-  (schema 2, untouched), `embed.go` (globs — verify, don't edit), all four existing
-  agents (structure), all 24 existing template-fragments (naming + define conventions),
-  `formulas/` (the two `.formula.toml` files — note codegen-support formulas use the
-  `.formula.toml` suffix; gastown's use bare `.toml`; FOLLOW THE codegen-support
-  CONVENTION for the two new formulas).
+  (schema 2, untouched), `embed.go` (globs — verify, don't edit), all THREE existing
+  agents (cartographer, debugger, landing-arbiter — structure), all 25 existing
+  template-fragments (naming + define conventions), `formulas/` (the three existing
+  `.formula.toml` files — note codegen-support formulas use the `.formula.toml` suffix;
+  gastown's use bare `.toml`; FOLLOW THE codegen-support CONVENTION for the two new
+  formulas).
 - `examples/gastown/packs/gastown/formulas/mol-refinery-patrol.toml` — READ ONLY here
   (edited by GCD-WO-CSC-005): the rejection-route recipe
   (`--set-metadata gc.routed_to="${GC_RIG:+$GC_RIG/}{{binding_prefix}}polecat"`,
@@ -739,9 +740,9 @@ README), not here.
   Go change outside this WO; GCD-WO-CSC-006's whole binding depends on the answer).
   Record the outcome in the README (Step 8 item 9).
 - **(d) generic-ness grep gate test** (`test/packlint/csc_genericness_test.go` or fold
-  into (a)): case-insensitive `matchpoint|enrichment|vehicle` over the six new pack
-  files + README returns ZERO hits; also assert no `master/` path string and no
-  `sk-ant-` / token-looking string.
+  into (a)): case-insensitive `matchpoint|enrichment|vehicle` over all NINE new pack
+  files (4 agent files + 2 formulas + 3 seam fragments) + README returns ZERO hits; also
+  assert no `master/` path string and no `sk-ant-` / token-looking string.
 
 **Step 10 — full validation battery** (see Validation) + PR.
 

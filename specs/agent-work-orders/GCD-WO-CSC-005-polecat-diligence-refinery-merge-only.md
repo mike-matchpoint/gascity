@@ -39,7 +39,10 @@ six fragment names + sets `evaluator_gated="true"` per rig),
 > `^Overseer-Issue: (?P<issue_id>[A-Za-z0-9_.:-]+)$`, key case-sensitive; the reader
 > (the AGC-WO-CSC-001 webhook transformer) searches the PR body FIRST, then the
 > head-commit message, first match wins, filling `payload.overseer_issue_id` (`null`
-> when absent). This WO cites that grammar; it never redefines it.
+> when absent). Note (kit A3.2): the in-program reader implements the PR-body arm ONLY
+> (the head-commit arm needs a GitHub API surface — post-program); the commit trailer
+> written here future-proofs that head-commit lane.
+> This WO cites that grammar; it never redefines it.
 > Verified at authoring (2026-07-08): `GasCity-Dev` `origin/main` @
 > `a47df8f5adbc7b8e4243ae344360c2dbbf2c864f` (read-only `git log -1 --format=%H
 > origin/main`; the commits past `c85d92cf` are CSC spec-file-only — every pack-content
@@ -241,7 +244,7 @@ Bounded-context REJECT rules (kit K2, GasCity-Dev row) restated:
 
 All repo-relative; READ-first:
 
-- `examples/gastown/packs/codegen-support/template-fragments/` — all 24 existing
+- `examples/gastown/packs/codegen-support/template-fragments/` — all 25 existing
   fragments: the define-wrapper format (`{{ define "<name>" }} … {{ end }}`, kebab name
   = filename minus `.template.md`), the six existing `polecat-*` names (set-difference
   target for GCD-WO-CSC-006 R1c), the supersession-heading style.
@@ -283,8 +286,10 @@ notes; CLEAR `rejection_reason`, `eval_verdict`, `judge_verdict`; set
 **R2 — PINNED FRAGMENT NAMES (identity; files `template-fragments/<name>.template.md`):**
 `polecat-code-hygiene`, `polecat-evidence-contract`, `polecat-final-rebase-revalidate`,
 `polecat-autonomy-and-blockers`, `polecat-submit-to-evaluator`,
-`polecat-overseer-issue-marker`. All six match GCD-WO-CSC-006's R1c discovery grep
-(`polecat|overseer`) and are disjoint from the six pre-existing `polecat-*` names.
+`polecat-overseer-issue-marker`. All six match GCD-WO-CSC-006's R1c discovery — a plain
+`grep polecat` (all six names start `polecat-`, including
+`polecat-overseer-issue-marker`) — and are disjoint from the six pre-existing
+`polecat-*` names.
 Render-order contract: cities append these AFTER the existing six, so
 `polecat-submit-to-evaluator` renders LAST among done-sequence texts — its supersession
 language plus last position make it the single live done target.
@@ -501,7 +506,9 @@ reader scans. Purpose (generic phrasing): downstream
 tracking scans pull-request bodies first, then the head-commit message, for this
 marker to correlate merged work back to the originating issue — the notes line covers
 the PR body (the refinery builds PR bodies from bead notes), the commit trailer covers
-the head-commit lane; never invent an id and never copy one from another bead.
+the head-commit lane; never invent an id and never copy one from another bead. (Kit
+A3.2 note: the in-program reader is the PR-body arm only; the commit trailer
+future-proofs the head-commit lane.)
 
 **Step 7 — `mol-refinery-patrol.toml` `evaluator_gated` branches** (gastown pack; the
 formula is 982 lines — edit surgically, keep every existing recipe byte-identical except

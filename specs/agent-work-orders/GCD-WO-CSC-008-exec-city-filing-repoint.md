@@ -634,12 +634,12 @@ expectation; the suite's summary asserts the expected case COUNT).
 
 ## Risks
 
-- **Env injection has no aws-GasCity owner WO yet (SEAM FLAG):** R3 pins the
-  `GASCITY_ERROR_*` contract, but injecting it into hosted exec-city pods is an
-  aws-GasCity render duty not explicitly listed in AGC-WO-CSC-004's scope. Surfaced to
-  the CSC seam round with the recommendation: fold into AGC-WO-CSC-004 (which owns the
-  bus + its exports) or the un-pause punch list. Until injected, hosted filings fail
-  LOUD at the builder (by design — no silent fallback to the old lane).
+- **Env injection — DISCHARGED (kit A2.12):** R3 pins the `GASCITY_ERROR_*` contract;
+  the hosted render is OWNED by `AGC-WO-CSC-004` step 11 (§11b: injects the six R3 vars
+  into exec-mon city env_vars()/agent_env_defaults(), threads the bus-name outputs, +
+  render tests). This WO's R3 table remains the contract authority. Until that wave-24
+  WO executes, hosted filings fail LOUD at the builder (by design — no silent fallback
+  to the old lane).
 - **Marker-duty interpretation (SEAM FLAG):** A1 §2 assigns the `Overseer-Issue:` marker
   duty to this WO; exec-city filers write no PRs, so this WO implements it as
   correlation-id threading + marker lines in bead completion notes / follow-up items

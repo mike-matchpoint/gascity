@@ -147,7 +147,11 @@ pins:
 - PILOT (read-only clone source; NOT a co_repo): `vehicle-graph-city` at `origin/main`
   post-wave-24 — `template-fragments/city-*.template.md`, `tests/csc-*.sh`,
   `tests/csc-resolved-names.env`, `runbooks/claude-evaluator-judge-credentials.md`.
-  Fetch via the estate checkout at the code root (`../vehicle-graph-city`); pull first.
+  Locate the `vehicle-graph-city` checkout at the estate code root (a sibling of
+  `GasCity-Dev` — NOT a fixed relative path; from a rig worktree cwd the estate root is
+  several levels up, `../../../vehicle-graph-city`-class); verify you have the right
+  directory by its `pack.toml` name before reading; pull first. The as-built pilot
+  artifacts (fragments, tests, runbook, `csc-resolved-names.env`) live ONLY there.
 - The five co_repo worktrees — full `city.toml` + `pack.toml` per repo; the per-city
   delta table below is the authoring-time survey (re-verify each at execution).
 
@@ -209,9 +213,10 @@ PR description with evidence.
 parameters: T1 provider pair; T2/T3/T4 on the single `ds` rig; T5 clone
 `city-architecture-standards` + `city-evidence-doctrine` from the pilot (adapt the
 repo-conventions block to `Matchpoint-Demo-Sandbox`), author `city-invariants` from P5;
-T6 runbook clone (namespace = the demo-sandbox city namespace, per the repo's AGENTS.md
-naming); T7 clone the five `csc-*.sh` tests + commit this city's
-`tests/csc-resolved-names.env`; T8 validation battery.
+T6 runbook clone (namespace = the demo-sandbox city's k8s namespace as named by
+aws-GasCity's generated manifest — the `render_platform` PROCESS_SPECS city names are the
+authority; AGENTS.md files carry no namespace info); T7 clone the five `csc-*.sh` tests +
+commit this city's `tests/csc-resolved-names.env`; T8 validation battery.
 
 **Step 2 — product-enrichment-code-generation-city.** Same as Step 1 with row-2
 parameters (rig `pe`; invariants from P5 incl. the exec-mon-city-out-of-scope note in the

@@ -54,8 +54,11 @@ pack fork). Clean end state, all in the `vehicle-graph-city` co_repo:
    + owner punch list); the operator applies the secrets via aws-GasCity — no secret value
    ever appears in this repo (A1 §11).
 3. **Polecat diligence + overseer-marker fragments appended**: the polecat patch's
-   `append_fragments` gains the 5 new GCD-WO-CSC-005 diligence fragments plus the
-   overseer-issue-marker fragment (A1 §2), preserving the 6 existing fragment names.
+   `append_fragments` gains the GCD-WO-CSC-005 R2 six: `polecat-code-hygiene`,
+   `polecat-evidence-contract`, `polecat-final-rebase-revalidate`,
+   `polecat-autonomy-and-blockers`, `polecat-submit-to-evaluator`,
+   `polecat-overseer-issue-marker` (6 total: 5 diligence incl. the submit-to-evaluator
+   override, + the overseer marker; A1 §2), preserving the 6 existing fragment names.
 4. **Refinery gate flipped + router selected**: `[rigs.formula_vars]` gains
    `evaluator_gated = "true"` (C9; refinery becomes serialized merge fan-in — convoy
    autoland full battery retained upstream) and the GCD-WO-CSC-004 watch formula-name var
@@ -90,10 +93,13 @@ and routing. Vehicle-graph is the ratified pilot city (standing pilot-city polic
   - `GasCity-Dev::GCD-WO-CSC-004-wo-router-formula` — authors the 4-step `wo-router`
     formula + the `spec-cartographer-watch` formula-name var (C10). This WO only SETS the
     var per rig.
-  - `GasCity-Dev::GCD-WO-CSC-005-polecat-diligence-refinery-merge-only` — authors the 5
-    polecat diligence fragments, the submit-to-evaluator done-sequence override, the
-    overseer-issue-marker fragment (A1 §2), and the `evaluator_gated` refinery branches
-    (default `"false"` upstream). This WO only APPENDS the fragment names and sets the var.
+  - `GasCity-Dev::GCD-WO-CSC-005-polecat-diligence-refinery-merge-only` — authors the R2
+    six fragments `polecat-code-hygiene`, `polecat-evidence-contract`,
+    `polecat-final-rebase-revalidate`, `polecat-autonomy-and-blockers`,
+    `polecat-submit-to-evaluator`, `polecat-overseer-issue-marker` (6 total: 5 diligence
+    incl. the submit-to-evaluator override, + the overseer marker; A1 §2) and the
+    `evaluator_gated` refinery branches (default `"false"` upstream). This WO only
+    APPENDS the fragment names and sets the var.
 - **Consumed by:** `GasCity-Dev::GCD-WO-CSC-007-city-pack-binding-fanout` (wave 25) —
   applies the Binding template to the 5 remaining code-generation cities. Keep the template
   section mechanical: every step parameterized, no vehicle-graph-only reasoning buried in
@@ -196,7 +202,10 @@ In the HOME worktree (`GasCity-Dev`, post-wave-23 `origin/main`):
   `polecat-done-target-override`, `polecat-architectural-doc-sync`,
   `polecat-validate-before-commit`, `polecat-bug-filing`, `mayor-cartographer-protocol`,
   10 × `refinery-*`, 4 × `debugger-*`, 4 × `landing-arbiter-*`) PLUS the wave-23 additions
-  from GCD-WO-CSC-005 (5 diligence + submit-to-evaluator override + overseer marker) and
+  from GCD-WO-CSC-005 R2 — `polecat-code-hygiene`, `polecat-evidence-contract`,
+  `polecat-final-rebase-revalidate`, `polecat-autonomy-and-blockers`,
+  `polecat-submit-to-evaluator`, `polecat-overseer-issue-marker` (6 total: 5 diligence
+  incl. the submit-to-evaluator override, + the overseer marker) — and
   any empty-default city-seam defines from GCD-WO-CSC-003. Fragment file format:
   `<name>.template.md` opening with `{{ define "<name>" }}` (precedent:
   `polecat-validate-before-commit.template.md:1`).
@@ -423,12 +432,14 @@ shape precedent. State the deviation in the PR.)
 
 **Step 3 — Polecat fragment additions (`city.toml`).** Extend the EXISTING polecat patch's
 `append_fragments` array in place: keep the 6 existing names in order (R0), then append
-the Step-0-resolved new names (expected: the 5 GCD-WO-CSC-005 diligence fragments — code
-hygiene incl. the fabricated-evidence ban, evidence contract, final rebase+revalidate,
-autonomy-and-blockers, submit-to-evaluator done-sequence override — plus the
-overseer-issue-marker fragment carrying the `Overseer-Issue: <issue-id>` PR/commit marker
-duty, A1 §2). One line, one array — no second polecat patch block. Change NOTHING else in
-that patch (provider, `max_active_sessions = 20`, gpt-5.5/high stay byte-identical).
+the Step-0-resolved new names (expected: the GCD-WO-CSC-005 R2 six —
+`polecat-code-hygiene`, `polecat-evidence-contract`, `polecat-final-rebase-revalidate`,
+`polecat-autonomy-and-blockers`, `polecat-submit-to-evaluator`,
+`polecat-overseer-issue-marker` (6 total: 5 diligence incl. the submit-to-evaluator
+override, + the overseer marker carrying the `Overseer-Issue: <issue-id>` PR/commit
+marker duty, A1 §2)). One line, one array — no second polecat patch block. Change NOTHING
+else in that patch (provider, `max_active_sessions = 20`, gpt-5.5/high stay
+byte-identical).
 
 **Done-routing supersession gate (REJECT-level).** The city's existing list already routes
 the polecat done sequence to the refinery: `polecat-handoff-override` renders "DONE
@@ -622,9 +633,13 @@ Each criterion names its backing test:
 2. Evaluator/judge patches bound per rig with claude-evaluator/claude-judge, opus/high,
    pools 4/2; existing cartographer/polecat/refinery patch fields undisturbed —
    `tests/csc-binding-patches.sh`.
-3. Polecat `append_fragments` = original 6 + all wave-23 additions (5 diligence +
-   overseer-marker per A1 §2), every name resolving to a real fragment —
-   `tests/csc-binding-patches.sh` + `tests/csc-binding-fragments-resolve.sh`.
+3. Polecat `append_fragments` = original 6 + the GCD-WO-CSC-005 R2 six
+   (`polecat-code-hygiene`, `polecat-evidence-contract`,
+   `polecat-final-rebase-revalidate`, `polecat-autonomy-and-blockers`,
+   `polecat-submit-to-evaluator`, `polecat-overseer-issue-marker` — 6 total: 5 diligence
+   incl. the submit-to-evaluator override, + the overseer marker per A1 §2), every name
+   resolving to a real fragment — `tests/csc-binding-patches.sh` +
+   `tests/csc-binding-fragments-resolve.sh`.
 4. `evaluator_gated = "true"` + router selection var set to the merged router formula
    name; router formula exists; watch script consumes the var —
    `tests/csc-binding-formula-vars.sh`.

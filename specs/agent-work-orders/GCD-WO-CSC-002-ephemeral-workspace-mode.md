@@ -234,6 +234,10 @@ extend only with additional verified rows found during the Step-1c audit):
 | `.gc/session-name-locks/` (`citylayout/runtime.go:86`) | session naming | **EPHEMERAL** | runtime dir |
 | `.gc/session-mcp/<id>.json` (`session/mcp_state.go:111`) | session layer | **EPHEMERAL** (session-scoped; dies with the session) | runtime dir |
 | `.gc/runtime/**` (traces, pack state, services — `citylayout/runtime.go`) | various | already runtime-dir routed | runtime dir (unchanged) |
+| `.gc/evidence/<rig>/<bead>/` (eval-attempt JSONL artifacts — GCD-WO-CSC-003's evidence local grammar) | evaluator agents (SHELL prompt-driven writes, not Go) | DURABLE-ish (must survive the workspace; the `evidence_publish_cmd`/`evidence_fetch_cmd` city vars wire it to S3 at un-pause per AGC-WO-CSC-003 spec-18) — NOT ephemeral | city `.gc` |
+
+Caveat (one line): the Step-1d audit test scans Go sources only — shell writers like the
+`.gc/evidence/` row will never be collected by it; that row is doc-authoritative.
 
 **1b. Routing helper.** `internal/citylayout/runtime.go` gains:
 
@@ -642,11 +646,10 @@ audit test fails on an empty scan; every list assertion requires expected non-ze
   from its repo name must set `Rig.Source` — documented in the field comment and the
   runtime-dir-split doc's companion section.
 - **Mayor-side runtime-dir adoption is infra's move**: this WO makes the split
-  engine-complete; AGC-WO-CSC-002's current text mounts the mayor-state PVC but does not
-  yet render a mayor emptyDir + `GC_CITY_RUNTIME_DIR` env. Defaults are safe either way
-  (everything lands under `.gc/runtime` on the PVC); the emptyDir adoption is a one-line
-  render change AGC/006B can take at execution (flagged to the seam round — not this WO's
-  blocker).
+  engine-complete; RESOLVED by kit A2.8 — AGC-WO-CSC-002 S4.2 delivers the mayor emptyDir
+  + `GC_CITY_RUNTIME_DIR` + `GC_CITY_PATH` anchor render (the anchor is required or the
+  override trust-check no-ops, kit A3.2); AGC-WO-CSC-006B carries nothing here. Defaults
+  are safe either way (everything lands under `.gc/runtime` on the PVC).
 - **Worktree-setup splice fragility**: the script has staging/restore trap logic around
   the creation block — the recovery branch must live INSIDE the existing error-handling
   structure (Test 10's regression cases guard the fast paths).

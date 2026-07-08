@@ -92,10 +92,11 @@ protects the bead store and the merge machinery, and deletes only LLM reasoning.
   (`spec-cartographer`, `mol-debugger-plan`) — `wo-router` conforms (WS2 risk K8 checked).
 - **Sibling wave-23 WOs (no edges):** `GCD-WO-CSC-003` (evaluator/judge) and
   `GCD-WO-CSC-005` (polecat/refinery fragments) edit DIFFERENT files in this pack
-  (`agents/evaluator|judge/`, `template-fragments/`, `formulas/mol-refinery-patrol` /
-  `mol-evaluate-task` / `mol-judge-task`). This WO touches none of those. The single
-  file-adjacency risk is `orders/`+`assets/scripts/spec-cartographer-watch.*` — owned
-  exclusively by THIS WO.
+  (`agents/evaluator|judge/`, `template-fragments/`, `formulas/mol-evaluate-task` /
+  `mol-judge-task`) plus, in the GASTOWN pack (not this one),
+  `examples/gastown/packs/gastown/formulas/mol-refinery-patrol.toml` (GCD-WO-CSC-005's
+  edit). This WO touches none of those. The single file-adjacency risk is
+  `orders/`+`assets/scripts/spec-cartographer-watch.*` — owned exclusively by THIS WO.
 - **Cities PAUSED (standing policy + kit K1):** this WO verifies all GasCity-in-AWS
   remains paused (zero-replica / suspended) before declaring success — concretely: no
   hosted interaction of any kind (no kubectl, no AWS API, no `gc` daemon/city/session
@@ -209,7 +210,7 @@ All READ-first, repo-relative:
   comment/description text only; `exec`/`trigger`/`interval`/`timeout` unchanged).
 - `internal/formula/` — formula compile/var contract (READ; the new formula must compile
   under the same loader; `gc formula show wo-router` is the smoke).
-- `test/packlint/` — all four existing suites; the two new test files join this package.
+- `test/packlint/` — all existing suites; the three new test files join this package.
 
 ## Required Inputs
 
@@ -580,6 +581,20 @@ No other agent.toml field changes (Non-Goals).
   (c) `config show` returning nothing → `spec-cartographer` (fallback, no crash);
   (d) busy via an open `wo-router` molecule (`--metadata-field formula=wo-router` arm
   returns one row) → no sling (formula-agnostic serialization).
+- `test/packlint/wo_router_emit_test.go` — ONE fake-CLI behavioral golden case for
+  `wo-router-emit.sh` (the emit-assembly jq is this WO's largest freehand surface — a
+  single golden-input case pins it), same fake-`gc` bash harness pattern
+  (`spec_cartographer_watch_test.go` precedent): real-shaped fixture `route_plan.json`
+  (one convoy, one HOLDING stub, two task nodes — fixture-realism doctrine) + sourced
+  state env in a temp `RUN_DIR`; fake `gc` arms record argv and return real-shaped JSON
+  (`config show`, `bd show --json` `.[0]` form, `bd create --graph` → mapping); fake
+  `git` records the integration-branch push. Assert the assembled
+  `$RUN_DIR/emit_plan.json` matches the golden (convoy `owned` label + metadata +
+  target; HOLDING nodes with the five labels and NO routing metadata; task
+  labels/metadata/parent linkage; the 3d edges), the shared preflight runs BEFORE the
+  branch push and `bd create`, and `emit_mapping.json`/`emitted.json` are written.
+  Planted RED: drop the convoy `owned` label from a mutated fixture and assert the
+  preflight fails the run.
 - Existing `spec_cartographer_watch_test.go` cases stay green: their fake `gc` gets the
   minimal `config show` no-op arm added (returns empty ⇒ legacy default path — behavior
   identical to today). Existing `spec_cartographer_formula_test.go` untouched and green.
@@ -607,8 +622,9 @@ Every acceptance criterion below names its backing test; kit K6 discipline verba
 pins its expected non-zero count; planted-RED cases included).
 
 - **Packlint tier** (`test/packlint/wo_router_formula_test.go`,
-  `wo_router_watch_test.go`): formula structure pins, watch selection matrix (4 cases),
-  busy-serialization case, fallback case, script env-guard negatives.
+  `wo_router_watch_test.go`, `wo_router_emit_test.go`): formula structure pins, watch
+  selection matrix (4 cases), busy-serialization case, fallback case, script env-guard
+  negatives, and the emit-assembly golden-input fake-CLI case (+ planted RED).
 - **Go structural tier:** `go test ./internal/builtinpacks` green (embedded tree
   round-trips with the new files — no Go edits, content hash is computed);
   `GC_FAST_UNIT=1 go test ./test/packlint` green including both existing cartographer
@@ -650,9 +666,9 @@ pins its expected non-zero count; planted-RED cases included).
    `integration/<wo-id>` on origin before `bd create --graph`, executes both transactions,
    and writes `emitted.json`; `wo-router-validate-store.sh` proves parent linkage,
    routing, dep resolvability, and HOLDING-close bookkeeping — script env-guard packlint
-   cases + formula-test invocation pins (full behavioral proof of the mutation path is
-   the un-pause pilot follow-up; the deterministic scripts are line-covered by the
-   harness cases).
+   cases + formula-test invocation pins + the `wo_router_emit_test.go` golden-input
+   fake-CLI case (pins the emit-assembly jq); full LIVE behavioral proof of the mutation
+   path remains the un-pause pilot follow-up.
 4. Watch script slings the per-rig selected formula with legacy default and
    formula-agnostic busy serialization; order TOML text updated; cartographer nudge names
    both formulas — `test/packlint/wo_router_watch_test.go` (4-case matrix + busy case)
@@ -692,7 +708,7 @@ pins its expected non-zero count; planted-RED cases included).
       landed in codegen-support; spec-cartographer untouched.
 - [ ] Watch script + order TOML + cartographer nudge updated; `wo_planning_formula`
       read with legacy default and dual-formula busy gate.
-- [ ] Both new packlint suites green; all pre-existing suites green unmodified;
+- [ ] All three new packlint suites green; all pre-existing suites green unmodified;
       R3 STOP-gate evidence in the PR.
 - [ ] `make build && make check` + `make test-packs` + `go test ./internal/builtinpacks`
       green.

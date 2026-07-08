@@ -76,7 +76,10 @@ non-k8s cities and the upstream (`gastownhall/gascity`) behavior are untouched.
     edge per kit A1 §4) — consumes the transport so per-pod ephemeral workspaces have no
     shared-file event/nudge dependency.
   - `aws-GasCity::AGC-WO-CSC-002-mirror-and-ephemeral-workspaces` (wave 24) — renders the
-    hosted wiring: controller Service (if not provider-ensured), NetworkPolicy manifests
+    hosted wiring: the controller Service `gc-controller` (RATIFIED lane, kit A2.6:
+    platform-rendered; `GC_K8S_CONTROLLER_SERVICE_SELECTOR_JSON` is never set — the
+    env-gated provider ensure stays an existing-but-unused engine capability),
+    NetworkPolicy manifests
     per the posture pinned here, mayor small-EBS PVC for `.gc` single-writer state, the
     agent-pod env contract, AND the site-level `[api]` values (`bind` non-localhost +
     `allow_mutation_classes = ["events_emit", "nudges"]`) into each city's `.gc/site.toml`
@@ -651,8 +654,10 @@ narrow class allowlist) — add a comment stating that class-allowlisted transpo
   * `GC_K8S_CONTROLLER_SERVICE` — Service NAME to ensure; default = first DNS label of
     `GC_K8S_CONTROLLER_HOST`.
   * `GC_K8S_CONTROLLER_SERVICE_SELECTOR_JSON` — JSON label map selecting the controller
-    pod. Empty = the provider does NOT manage the Service (platform renders it —
-    AGC-WO-CSC-002's choice).
+    pod. Empty = the provider does NOT manage the Service. RATIFIED lane (kit A2.6):
+    platform-rendered — AGC-WO-CSC-002 renders the Service and this var is NEVER set in
+    the hosted deployment; the ensure path ships as an env-gated engine capability that
+    stays unused.
 - **Projection** (follow `projectedPodDoltEnv`, pod.go:146-193 — projection at the adapter
   edge; controller-local values never leak): new `pod.go` func
 
@@ -884,9 +889,11 @@ harness that finds no events/nudges must FAIL.
 - **Self-DoS via Record timeout too tight in CI:** the 250 ms budget against localhost
   httptest is generous; if CI flakes, investigate server contention — the budget is
   C6-pinned, not tunable per-test.
-- **K8s Service ensure vs platform-rendered Service:** double management if AGC-WO-CSC-002
-  also renders one — the env gate (selector JSON unset → provider no-op) is the seam;
-  AGC-WO-CSC-002 picks exactly one lane (flagged in its blocked_by context).
+- **K8s Service ensure vs platform-rendered Service:** double management would arise only
+  if both lanes ran — the env gate (selector JSON unset → provider no-op) is the seam;
+  the platform-rendered lane is RATIFIED LAW (kit A2.6): AGC-WO-CSC-002 renders the
+  Service and never sets the selector JSON, so the provider ensure remains a documented,
+  env-gated, unused capability.
 - **Scope-size:** this WO is large but cohesive (one transport seam, two payloads). If a
   generation run cannot complete coherently, split commits by step order — steps 1-2,
   3-4, 5, 6, 7 are each independently green-able except 4e (needs 3+4d).
