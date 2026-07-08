@@ -34,9 +34,18 @@ six fragment names + sets `evaluator_gated="true"` per rig),
 > resume-and-fix retries; `regenerate_on_reject` reserved). Diligence source:
 > `matchpoint-loop-harness/mlh/prompts/implementer.md` (estate code root — generic blocks
 > only). Process: root `SKILL-work-order-audit-and-authoring.md` §1.1–1.5.
+> Marker-grammar authority (import citation, A1 §2): `Matchpoint-Platform/specs/agent-work-orders/PAR-WO-CSC-001-error-emission-package-and-envelope.md`
+> **Step 10** pins the `Overseer-Issue` marker line grammar — regex
+> `^Overseer-Issue: (?P<issue_id>[A-Za-z0-9_.:-]+)$`, key case-sensitive; the reader
+> (the AGC-WO-CSC-001 webhook transformer) searches the PR body FIRST, then the
+> head-commit message, first match wins, filling `payload.overseer_issue_id` (`null`
+> when absent). This WO cites that grammar; it never redefines it.
 > Verified at authoring (2026-07-08): `GasCity-Dev` `origin/main` @
-> `c85d92cf0cfd1215be1467628d6fd2e06db46aae`. Re-verify at execution time — GCD-WO-CSC-003
-> merges FIRST (same wave, serialized); bind against ITS merged literals.
+> `a47df8f5adbc7b8e4243ae344360c2dbbf2c864f` (read-only `git log -1 --format=%H
+> origin/main`; the commits past `c85d92cf` are CSC spec-file-only — every pack-content
+> file/line reference in this WO is byte-identical at both SHAs). Re-verify at
+> execution time — GCD-WO-CSC-003 merges FIRST (same wave, serialized); bind against
+> ITS merged literals.
 > Ledger stem: `GasCity-Dev::GCD-WO-CSC-005-polecat-diligence-refinery-merge-only`.
 
 ## Goal
@@ -74,7 +83,8 @@ state:
    byte-behaviorally unchanged). When the EFFECTIVE gate is `"true"` AND the work bead
    carries `judge_verdict=PASS` AND the merge source is not an `integration/*` landing:
    `run-tests` degrades to setup + build smoke; `handle-failures` handles only
-   smoke-failure rejection + merge mechanics (and clears stale verdicts on rejection).
+   smoke-failure rejection + merge mechanics (clearing stale verdicts on rejection and
+   PRESERVING the branch — resume-and-fix, never a gated branch delete).
    **FULL battery KEPT for `integration/*` → main convoy autolands** and for any bead
    without a fresh judge PASS (fail-safe: more testing, never less).
 3. **`refinery-wisp-pour-vars-override` fragment updated** (its own text instructs:
@@ -147,6 +157,17 @@ Bounded-context REJECT rules (kit K2, GasCity-Dev row) restated:
 - **NO `mol-polecat-work` edits** — the polecat's rejection-aware resume machinery
   already exists and is KEPT (WS2 finding: "stronger than the harness's
   regenerate-from-zero; keep it").
+- **NO WIP-push-cadence content (boundary vs `GCD-WO-CSC-002`, pinned).** The gastown
+  `wip-push-cadence` fragment (authored by `GCD-WO-CSC-002`, same wave, default-ON in
+  the gastown polecat prompt) is the SINGLE author of push discipline: push after every
+  commit, `--force-with-lease` after history rewrites, pushed-commits-are-the-durable-
+  copy rationale. The six fragments here MUST NOT restate any of it — they may
+  REFERENCE it by fragment name where adjacent (e.g. after the final rebase, "push per
+  the WIP-push cadence discipline rendered earlier in this prompt"), never duplicate
+  the rules. Concretely: the strings `force-with-lease` and "after EVERY commit" must
+  NOT appear in the six new fragments (packlint absence assertion, Step 9a). The
+  boundary: GCD-WO-CSC-002 owns push CADENCE (durability); this WO owns COMMIT
+  discipline, evidence production, and submission ROUTING.
 - **NO implementation of `regenerate_on_reject`** — RESERVED name, documented by 003's
   pack README; this WO only cross-references the reservation.
 - **NO new Go role logic (ZFC)** — Go edits limited to `test/packlint/*.go`.
@@ -345,7 +366,10 @@ counts as evidence; **branch discipline: commit early and often on your assigned
 WIP commits are fine and expected; NEVER park work in `git stash` and never leave
 completed work uncommitted — only commits on the pushed branch survive and only they are
 evaluated; you are NOT the one who merges** — after the evaluator and judge pass, the
-refinery merges; leave the branch clean and mergeable.
+refinery merges; leave the branch clean and mergeable. Close the fragment with the
+one-line cadence pointer: "Push cadence is governed by the WIP-push cadence discipline
+rendered earlier in this prompt — follow it." (Authoring rule: the pointer is the ONLY
+cadence content allowed here — the Non-Goals boundary bans restating its rules.)
 
 **Step 3 — `polecat-final-rebase-revalidate.template.md`** (define
 `polecat-final-rebase-revalidate`; ≤ ~45 lines). Content: START from the current target
@@ -459,13 +483,18 @@ to the mayor on its own; do not self-escalate a rejection you can fix.
 final commit, read `metadata.overseer_issue_id` from your work bead
 (`gc --rig "$GC_RIG" bd show "$BEAD_ID" --json | jq -r
 '.[0].metadata.overseer_issue_id // empty'`); if EMPTY this section is inert — do
-nothing; if present: (1) the FINAL commit message on your branch carries the trailer
-line `Overseer-Issue: <issue-id>` (exact literal spelling, own line, standard git
-trailer position); (2) your done-sequence notes carry the same line (the submit
-sequence above does this automatically — verify, don't duplicate). Purpose (generic
-phrasing): downstream tracking correlates merged work back to the originating issue via
-this marker in commits and pull-request bodies; never invent an id and never copy one
-from another bead.
+nothing; if present: (1) the FINAL commit message on your branch (the branch HEAD at
+submission) carries the trailer line `Overseer-Issue: <issue-id>` — exact key spelling
+(case-sensitive), one space after the colon, the id verbatim, on its own line in
+standard git-trailer position; the full line must match
+`^Overseer-Issue: [A-Za-z0-9_.:-]+$` (the marker-grammar authority is cited in this
+WO's provenance — the fragment states the grammar generically, no estate paths);
+(2) your done-sequence notes carry the same line (the submit sequence above does this
+automatically — verify, don't duplicate). Purpose (generic phrasing): downstream
+tracking scans pull-request bodies first, then the head-commit message, for this
+marker to correlate merged work back to the originating issue — the notes line covers
+the PR body (the refinery builds PR bodies from bead notes), the commit trailer covers
+the head-commit lane; never invent an id and never copy one from another bead.
 
 **Step 7 — `mol-refinery-patrol.toml` `evaluator_gated` branches** (gastown pack; the
 formula is 982 lines — edit surgically, keep every existing recipe byte-identical except
@@ -483,11 +512,18 @@ default = "false"
   Config lines), the gate block: the imported R4 `effective_rig_var` preamble, then:
 
 ```bash
+# Session-restart-safe: re-derive the work bead + branch if this step runs
+# in a fresh session (find-work/rebase context lost).
+if [ -z "${WORK:-}" ]; then
+  WORK=$(gc bd list --assignee=$GC_AGENT --status=open \
+    --exclude-type=epic --limit=1 --json | jq -r '.[0].id // empty')
+fi
+BRANCH=${BRANCH:-$(gc bd show $WORK --json | jq -r '.[0].metadata.branch // empty')}
 EVALUATOR_GATED="{{evaluator_gated}}"
 [ "$EVALUATOR_GATED" = "true" ] || EVALUATOR_GATED=$(effective_rig_var evaluator_gated "{{evaluator_gated}}" "false")
 JUDGE_VERDICT=$(gc bd show $WORK --json | jq -r '.[0].metadata.judge_verdict // empty')
 GATED_SMOKE="false"
-if [ "$EVALUATOR_GATED" = "true" ] && [ "$JUDGE_VERDICT" = "PASS" ]; then
+if [ "$EVALUATOR_GATED" = "true" ] && [ "$JUDGE_VERDICT" = "PASS" ] && [ -n "$BRANCH" ]; then
   case "$BRANCH" in integration/*) : ;; *) GATED_SMOKE="true" ;; esac
 fi
 ```
@@ -504,14 +540,24 @@ fi
 
 - **7c. `handle-failures` step** — keep the existing text intact; APPEND a gated clause
   to the branch-caused fork: when `GATED_SMOKE = "true"` and the smoke failed because of
-  the branch, use the SAME reject-to-pool recipe with two additions to the
-  `gc bd update` call — `--set-metadata eval_verdict= --set-metadata judge_verdict=`
-  (a rejected-by-refinery bead must never retain a stale judge PASS; the resubmission
-  re-earns both verdicts) — and prefix the reason:
-  `rejection_reason="gated smoke failed: <failure summary>"`. Re-derive
-  `EVALUATOR_GATED`/`GATED_SMOKE` at the top of this step if unset (sessions can restart
-  between steps; same guard block, idempotent). The pre-existing-on-target fork and the
-  "FORBIDDEN: Writing code" gate are UNCHANGED in both modes.
+  the branch, use the reject-to-pool recipe (workflow cleanup + `gc bd update` back to
+  the pool) with THREE deviations from the ungated recipe, each explicit in the formula
+  text:
+  1. add `--set-metadata eval_verdict= --set-metadata judge_verdict=` to the
+     `gc bd update` call (a rejected-by-refinery bead must never retain a stale judge
+     PASS; the resubmission re-earns both verdicts);
+  2. prefix the reason: `rejection_reason="gated smoke failed: <failure summary>"`;
+  3. **do NOT delete the branch** — the ungated recipe's
+     `git push origin --delete $BRANCH` line is OMITTED in the gated clause
+     (resume-and-fix, D10/C9: the returning polecat resumes on the INTACT pushed
+     branch; deleting it would silently convert resume-and-fix into
+     regenerate-from-zero). Local cleanup (`git checkout "$TARGET" && git branch -D
+     temp`) stays.
+  Re-derive `EVALUATOR_GATED`/`GATED_SMOKE` at the top of this step if unset (sessions
+  can restart between steps; same guard block, idempotent). The UNGATED branch-caused
+  fork keeps its existing branch-delete behavior byte-identically, and the
+  pre-existing-on-target fork and the "FORBIDDEN: Writing code" gate are UNCHANGED in
+  both modes.
 
 - **7d. Pour-site propagation** — every `gc bd mol wisp mol-refinery-patrol` invocation
   INSIDE the formula (all sites found in Step 0e; expected 6: check-inbox, rebase,
@@ -554,13 +600,20 @@ change to the fragment.
   the fetch/rebase-then-re-run-acceptance pair + "conflict-only" prevention line;
   `polecat-autonomy-and-blockers` contains the structured-blocker field list (decision/
   options/recommendation/blast radius) + "LAST resort"; `polecat-overseer-issue-marker`
-  contains the exact literal `Overseer-Issue: ` and `overseer_issue_id` and the
-  inert-when-absent rule.
+  contains the exact literal `Overseer-Issue: `, `overseer_issue_id`, the id-grammar
+  charset (`[A-Za-z0-9_.:-]+`), and the inert-when-absent rule. **Cadence-boundary
+  absence battery (Non-Goals pin):** across ALL six new fragment files, the strings
+  `force-with-lease` and `after EVERY commit` do NOT appear (push cadence is
+  GCD-WO-CSC-002's `wip-push-cadence` territory); `polecat-evidence-contract` DOES
+  contain the one-line cadence pointer ("Push cadence is governed by").
 - **(b) `test/packlint/csc_refinery_gating_test.go`**: `mol-refinery-patrol.toml`
   contains `[vars.evaluator_gated]` + `default = "false"`; `version = 5`; the gate
   predicate strings (`judge_verdict`, `integration/*` case-glob, `GATED_SMOKE`); the
   gated-smoke command pair (setup+build only) and the retained full-battery text; the
-  verdict-clear args in the gated rejection; the retained literal "FORBIDDEN: Writing
+  verdict-clear args in the gated rejection; the gated no-branch-delete pin (the gated
+  clause contains "do NOT delete the branch" / omits `git push origin --delete` — assert
+  the ungated fork still contains exactly its one pre-existing delete line, count
+  unchanged); the retained literal "FORBIDDEN: Writing
   code to fix failures"; `--var evaluator_gated=` occurrence count ≥ the Step-0e
   pour-site count; `effective_rig_var` present. `refinery-wisp-pour-vars-override`
   contains `--var evaluator_gated=` and the updated verification key.
@@ -644,9 +697,11 @@ Each criterion names its backing test:
    same test (A1 §2 discharged for the polecat side).
 5. `mol-refinery-patrol` v5: `evaluator_gated` var (default `"false"`), run-time
    effective-gate resolution, gated smoke = setup+build only, gated `handle-failures`
-   rejection clears stale verdicts, `integration/*` + missing-judge-PASS keep the FULL
-   battery, all in-formula pour sites propagate the var, ungated text byte-identical —
-   `test/packlint/csc_refinery_gating_test.go` + byte-preservation audit.
+   rejection clears stale verdicts AND preserves the branch (no gated
+   `git push origin --delete`; resume-and-fix), `integration/*` + missing-judge-PASS
+   keep the FULL battery, all in-formula pour sites propagate the var, ungated text
+   byte-identical — `test/packlint/csc_refinery_gating_test.go` + byte-preservation
+   audit.
 6. `refinery-wisp-pour-vars-override` canonical pour carries the `evaluator_gated` var +
    updated verification — same test.
 7. Zero domain literals; no embed/pack.toml/Go-non-test changes; predecessors

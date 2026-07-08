@@ -33,7 +33,10 @@ Consumed by (same-wave + downstream): `GasCity-Dev::GCD-WO-CSC-005-polecat-dilig
 > (zero domain literals upstream; Zero Framework Cognition — pack content only; agents
 > never grade themselves). Process: root `SKILL-work-order-audit-and-authoring.md` §1.1–1.5.
 > Verified at authoring (2026-07-08): `GasCity-Dev` `origin/main` @
-> `c85d92cf0cfd1215be1467628d6fd2e06db46aae`. Re-verify at execution time.
+> `a47df8f5adbc7b8e4243ae344360c2dbbf2c864f` (read-only `git log -1 --format=%H
+> origin/main`; the commits past `c85d92cf` are CSC spec-file-only — every pack-content
+> file/line reference in this WO is byte-identical at both SHAs). Re-verify at
+> execution time.
 > Ledger stem: `GasCity-Dev::GCD-WO-CSC-003-evaluator-judge-primitives`.
 
 ## Goal
@@ -259,9 +262,12 @@ All paths repo-relative; READ-first, then extend:
 - `test/packlint/` — `spec_cartographer_formula_test.go` (the string-contract test
   pattern: `repoRoot()` from `bd_show_jq_test.go:22`, read file, normalize whitespace,
   assert required literals), `spec_cartographer_watch_test.go`.
-- `cmd/gc/embed_builtin_packs_test.go` — the compose-test pattern
-  (`TestExecutionCityOperationsBuiltinPackComposesWithMaintenance` ~line 401: scratch
-  city, compose pack, assert qualified agent names).
+- `cmd/gc/embed_builtin_packs_test.go` — the compose-test pattern. PRIMARY precedent:
+  `TestCodegenSupportBuiltinPackComposesWithGastown` (~line 182 — composes THIS pack
+  with gastown at city + rig scope and asserts qualified names incl. the rig-scoped
+  `app/codegen-support.cartographer` / `app/codegen-support.landing-arbiter` forms the
+  new rig-scoped agents will mirror); secondary:
+  `TestExecutionCityOperationsBuiltinPackComposesWithMaintenance` (~line 401).
 - `cmd/gc/prompt.go:26-51` (`PromptContext` — what template data prompts may use; NOTE:
   no formula-vars accessor exists → R4), `cmd/gc/template_resolve.go:304-310` (fragment
   append order: per-agent, imported-pack defaults, city defaults).
@@ -713,9 +719,13 @@ README), not here.
   `regenerate_on_reject` does NOT appear in either formula (reserved ≠ declared).
 - **(c) compose + seam-precedence test** (extend `cmd/gc/embed_builtin_packs_test.go` or
   a sibling `csc_` test file in `cmd/gc`, following
-  `TestExecutionCityOperationsBuiltinPackComposesWithMaintenance`): compose a scratch
-  city importing `gastown` + `codegen-support`; assert the composed config exposes
-  qualified `codegen-support.evaluator` and `codegen-support.judge` agents; assert the
+  `TestCodegenSupportBuiltinPackComposesWithGastown` — extend its qualified-name
+  assertion list rather than duplicating its scaffolding where practical): compose a
+  scratch city importing `gastown` + `codegen-support`; assert the composed config
+  exposes qualified `codegen-support.evaluator` and `codegen-support.judge` agents
+  (rig-scoped: expect the rig-qualified `app/codegen-support.evaluator` /
+  `app/codegen-support.judge` forms alongside the existing asserted names, no
+  regression on those); assert the
   materialized `.gc/system/packs/codegen-support/` tree contains the two agent dirs, the
   two formulas, and the three seam fragments (this is the mirror-mechanism proof —
   Non-Goals). Then the **K1 shadowing/precedence probe**: give the scratch city's own
