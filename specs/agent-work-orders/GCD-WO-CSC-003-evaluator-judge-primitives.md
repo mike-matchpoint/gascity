@@ -526,6 +526,37 @@ artifact; confirm the deliverable exists in the branch diff; re-run the conflict
 merge check; you never resolve, fix, rebase, or edit anything; you do not over-claim —
 PASS approves exactly one bead's handoff to the refinery, nothing more.
 
+**REQUIRED section — "Code review via the code-review skill" (Mayor ruling D18, owner
+directive 18, 2026-07-09; folded pre-pickup):** when the transition under judgment
+includes CODE, the judge REVIEWS IT USING THE CODE-REVIEW SKILL as its procedure: review
+the diff against the repo's pattern docs, §6 usage contracts, and §4 failure / §5
+structured-logging standards via the skill's checklist; resolve WHICH patterns apply
+through the repo's own `specs/patterns/` consumer stubs; review at the CONSUMER'S
+`bound_version` (stub front matter), NEVER at hosting HEAD — sanctioned version lag is
+legal and is not a finding (the design-audit rule); and use the standardization ethos
+the skill links for the judgment calls it marks non-mechanical. The prompt section NAMES
+the skill and states its purpose (owner directive 19.2: a skill unnamed in its
+consumer's prompt does not exist operationally — this judge binding is that rule's first
+instance). **Generic-ness constraint (D10 placement principle; the pack's REJECT-level
+generic-ness gate stands):** the UPSTREAM prompt text refers to "the city-bound
+code-review skill and pattern-law surfaces named by the city seam fragments" —
+generically; the CONCRETE estate identity (the PS-WO-006 artifact
+`SKILL-pattern-code-review`, Platform-hosted, per-repo pointer-stub linked) is injected
+by the city SOURCE repos' fragment content via the GCD-WO-CSC-006/007 binding lane,
+never hardcoded in `codegen-support`.
+
+**Validation-criteria addition — END-TO-END PROCESS COHESION (Mayor ruling D21, owner
+directive 19, 2026-07-09; folded pre-pickup):** the judge's transition checks include
+end-to-end process cohesion, judged AWARE of how the estate uses `specs/`, skills, and
+GasCity as a whole: the diff updates the docs its change invalidates (specs/ADRs ride
+the diff, before acceptance); where the change adds or reshapes a skill, its
+skill-to-prompt bindings are present or explicitly punch-listed; the indexes the change
+touches (pattern-usage shard, README/overall index) are current. **A change that ships
+working code while ORPHANING its docs, bindings, or indexes is a REJECT, not a pass.**
+(Upstream text states the criterion generically — "the doc/binding/index surfaces the
+city's law fragments name"; concrete estate surfaces arrive via the same city seam
+fragments.)
+
 **Step 5 — the three empty-default seam fragments.** Three files under
 `template-fragments/`, each EXACTLY this shape (name substituted):
 
@@ -803,7 +834,13 @@ Each criterion names its backing test:
 2. Both prompts carry the ported diligence stance (assume-broken, act-don't-read,
    deliverable-in-diff, anti-fabrication taxonomy, band-aid rule, conflict-only
    merge-readiness, run-to-completion; judge = transition-only maker-checker with
-   spot-reproduction) — same test.
+   spot-reproduction) — same test. The judge prompt ADDITIONALLY carries the two
+   D18/D21 sections (Step 4): the REQUIRED code-review-skill review procedure
+   (skill named generically + purpose + review-at-`bound_version` rule) and the
+   END-TO-END PROCESS COHESION criterion (orphaned docs/bindings/indexes = REJECT) —
+   packlint literal assertions added to the same test; both sections generic
+   (no estate literals — the concrete skill identity rides the city seam fragments,
+   AC 7 unweakened).
 3. Both formulas present, graph.v2, with the R3 routing state machine as explicit
    chained `gc bd update` blocks, the shared `eval_reject_count` budget, the
    `max_eval_rejects` escalation to `decision_state=mayor_action` + mayor mail, and the
