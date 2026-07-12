@@ -1,4 +1,4 @@
-package executioncityoperations
+package executioncityoperations_test
 
 import (
 	"bytes"
@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/dispatch"
 	"github.com/gastownhall/gascity/internal/formula"
 	"github.com/gastownhall/gascity/internal/formulatest"
 	"github.com/gastownhall/gascity/internal/molecule"
@@ -33,6 +34,7 @@ func TestEvalFormulasCompileAndRouteDeterministicGrading(t *testing.T) {
 		"gc.bond": "eval-run-case",
 	})
 	assertRecipeDependency(t, cohort, "eval-run-cohort.aggregate", "eval-run-cohort.fan-out-cases")
+	assertCohortFanoutCreatesRoutedCase(t, cohort, formulaDir)
 
 	replay, err := formula.Compile(context.Background(), "eval-replay-step", []string{formulaDir}, map[string]string{
 		"fixture_ref": "fixtures/recorded-step.json", "fixture_id": "STEP#surface.execute#case-001",
@@ -75,6 +77,73 @@ func TestEvalFormulasCompileAndRouteDeterministicGrading(t *testing.T) {
 	assertRecipeMetadata(t, replay, "eval-replay-step.replay-case.execute-under-test", map[string]string{
 		"gc.check_path": ".gc/system/packs/execution-city-operations/assets/scripts/eval-grader-check.sh",
 	})
+}
+
+func assertCohortFanoutCreatesRoutedCase(t *testing.T, recipe *formula.Recipe, formulaDir string) {
+	t.Helper()
+	vars := map[string]string{
+		"cohort_ref": "fixtures/cohort.json", "surface_kind": "surface.execute",
+		"grader_cmd": "tools/grade --label 'quoted value'", "threshold": "0.80",
+		"run_id": "run-001", "eval_suite": "suite-001", "binding_prefix": "operations.",
+	}
+	store := beads.NewMemStore()
+	if _, err := molecule.Instantiate(context.Background(), store, recipe, molecule.Options{Vars: vars}); err != nil {
+		t.Fatalf("instantiate cohort formula: %v", err)
+	}
+	all, err := store.List(beads.ListQuery{AllowScan: true, IncludeClosed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan, fanout *beads.Bead
+	for i := range all {
+		switch {
+		case strings.HasSuffix(all[i].Ref, ".plan"):
+			plan = &all[i]
+		case strings.HasSuffix(all[i].Ref, ".fan-out-cases"):
+			fanout = &all[i]
+		}
+	}
+	if plan == nil || fanout == nil {
+		t.Fatalf("missing plan or fanout bead: %+v", all)
+	}
+	caseOutput, err := json.Marshal(map[string]any{"cases": []map[string]string{{
+		"case_id": "case-001", "fixture_id": "STEP#surface.execute#case-001",
+		"fixture_ref": "fixtures/recorded-step.json", "fixture_payload_b64": "ZXhhbXBsZQ==",
+		"surface_kind": vars["surface_kind"], "grader_cmd": vars["grader_cmd"],
+		"run_id": vars["run_id"], "eval_suite": vars["eval_suite"], "binding_prefix": vars["binding_prefix"],
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetMetadataBatch(plan.ID, map[string]string{"gc.output_json": string(caseOutput), "gc.outcome": "pass"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(plan.ID); err != nil {
+		t.Fatal(err)
+	}
+	result, err := dispatch.ProcessControl(store, *fanout, dispatch.ProcessOptions{FormulaSearchPaths: []string{formulaDir}})
+	if err != nil {
+		t.Fatalf("process cohort fanout: %v", err)
+	}
+	if result.Action != "fanout-spawn" || result.Created == 0 {
+		t.Fatalf("fanout result = %+v, want productive spawn", result)
+	}
+	all, err = store.List(beads.ListQuery{AllowScan: true, IncludeClosed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for i := range all {
+		if strings.Contains(all[i].Ref, "execute-under-test") && all[i].Metadata["gc.attempt"] == "1" {
+			found = true
+			if all[i].Metadata["gc.kind"] != vars["surface_kind"] || all[i].Metadata["eval.grader_cmd"] != vars["grader_cmd"] {
+				t.Fatalf("fanout execution metadata = %+v", all[i].Metadata)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("fanout produced no routed execution case: %+v", all)
+	}
 }
 
 func TestEvalManifestSchemaAcceptsExampleAndRejectsMissingGateOutcome(t *testing.T) {
