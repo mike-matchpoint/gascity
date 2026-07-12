@@ -1,0 +1,20 @@
+bash examples/gastown/packs/domain-handoff/tests/run-tests.sh
+  python3+jsonschema unavailable; skipped full example validation
+ok   schemas: every schema and example parses and validates
+ok   publish: flat event publishes raw detail with domain source
+ok   publish: envelope event wraps payload and requires target city
+ok   publish: repo events still require the codegen ownership index
+ok   dispatch: cooks formula onto handoff bead and is idempotent
+ok   dispatch: unknown formula publishes FAILED terminal and closes bead
+ok   sweep: open molecule means no terminal yet
+ok   sweep: completed molecule publishes SUCCEEDED with manifest and closes root
+ok   sweep: required manifest missing downgrades to FAILED
+ok   sweep: failed step and explicit terminal status are honored
+ok   command publish: publishes waiter payload with injected reply
+ok   command reconcile: applies terminal to waiter and unblocks origin
+ok   command reconcile: duplicates close, orphans stay open
+
+13 passed, 0 failed
+bash examples/gastown/packs/execution-city-operations/tests/run-tests.sh
+ok  	github.com/gastownhall/gascity/examples/gastown/packs/execution-city-operations	(cached)
+execution-city-operations eval tests: PASS
