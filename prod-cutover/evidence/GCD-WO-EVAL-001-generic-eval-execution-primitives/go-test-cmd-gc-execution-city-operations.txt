@@ -1,1 +1,1 @@
-ok  	github.com/gastownhall/gascity/cmd/gc	1.212s
+ok  	github.com/gastownhall/gascity/cmd/gc	1.139s

@@ -16,5 +16,5 @@ ok   command reconcile: duplicates close, orphans stay open
 
 13 passed, 0 failed
 bash examples/gastown/packs/execution-city-operations/tests/run-tests.sh
-ok  	github.com/gastownhall/gascity/examples/gastown/packs/execution-city-operations	(cached)
+ok  	github.com/gastownhall/gascity/examples/gastown/packs/execution-city-operations	0.235s
 execution-city-operations eval tests: PASS

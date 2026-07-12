@@ -1,29 +1,10 @@
-39291e68453a31d50d530065b3382542819c0053
+723ee13b7e0f4da1981f0ab3fdde9230243f6aa9
 fa961ff1b8942ccf56d4e5d78dbee5f9e9d1f4c7
-?? prod-cutover/
-M	Makefile
-M	cmd/gc/embed_builtin_packs_test.go
-A	examples/gastown/packs/execution-city-operations/README.md
-A	examples/gastown/packs/execution-city-operations/agents/eval-runner/agent.toml
-A	examples/gastown/packs/execution-city-operations/agents/eval-runner/prompt.template.md
-A	examples/gastown/packs/execution-city-operations/assets/scripts/eval-cohort-plan-check.sh
-A	examples/gastown/packs/execution-city-operations/assets/scripts/eval-file-triage.sh
-A	examples/gastown/packs/execution-city-operations/assets/scripts/eval-grader-check.sh
-A	examples/gastown/packs/execution-city-operations/assets/scripts/eval-threshold-check.sh
-M	examples/gastown/packs/execution-city-operations/assets/scripts/publish-cross-city-event.sh
-M	examples/gastown/packs/execution-city-operations/embed.go
-A	examples/gastown/packs/execution-city-operations/eval_test.go
-A	examples/gastown/packs/execution-city-operations/formulas/eval-replay-step.formula.toml
-A	examples/gastown/packs/execution-city-operations/formulas/eval-run-case.formula.toml
-A	examples/gastown/packs/execution-city-operations/formulas/eval-run-cohort.formula.toml
-M	examples/gastown/packs/execution-city-operations/pack.toml
-M	examples/gastown/packs/execution-city-operations/schemas/README.md
-A	examples/gastown/packs/execution-city-operations/schemas/eval/eval-run-manifest.v1.schema.json
-A	examples/gastown/packs/execution-city-operations/schemas/eval/examples/eval-run-manifest.v1.example.json
-M	examples/gastown/packs/execution-city-operations/schemas/events/examples/repo-bug-reported.v1.example.json
-M	examples/gastown/packs/execution-city-operations/schemas/events/examples/repo-change-requested.v1.example.json
-A	examples/gastown/packs/execution-city-operations/template-fragments/eval-run-contract.template.md
-M	examples/gastown/packs/execution-city-operations/template-fragments/propulsion.template.md
-A	examples/gastown/packs/execution-city-operations/tests/fakes/gc
-A	examples/gastown/packs/execution-city-operations/tests/fakes/grader
-A	examples/gastown/packs/execution-city-operations/tests/run-tests.sh
+ M prod-cutover/evidence/GCD-WO-EVAL-001-generic-eval-execution-primitives/go-test-cmd-gc-execution-city-operations.txt
+ M prod-cutover/evidence/GCD-WO-EVAL-001-generic-eval-execution-primitives/go-test-internal-builtinpacks.txt
+ M prod-cutover/evidence/GCD-WO-EVAL-001-generic-eval-execution-primitives/landing-state.txt
+ M prod-cutover/evidence/GCD-WO-EVAL-001-generic-eval-execution-primitives/make-build.txt
+ M prod-cutover/evidence/GCD-WO-EVAL-001-generic-eval-execution-primitives/make-test-packs.txt
+?? prod-cutover/evidence/GCD-WO-EVAL-001-generic-eval-execution-primitives/go-test-execution-city-operations.txt
+?? prod-cutover/evidence/GCD-WO-EVAL-001-generic-eval-execution-primitives/make-check-docs.txt
+53c39ad585139b9e436e8aa4b7b136916b996195
