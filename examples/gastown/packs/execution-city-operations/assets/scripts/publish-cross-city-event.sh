@@ -32,7 +32,7 @@
 #     --event-type RepoBugReported.v1 \
 #     --payload-file /path/to/payload.json \
 #     [--schema-file /path/to/event.schema.json] \
-#     [--target-city vehicle-graph-code-generation-city-dev] \
+#     [--target-city sample-code-generation-city-dev] \
 #     [--target-city-role execution-monitoring-city] \
 #     [--correlation-id UUID] [--idempotency-key KEY | --dedupe-key STR] \
 #     [--process-slug SLUG] [--city-pair-slug SLUG] [--dry-run]
@@ -40,7 +40,7 @@
 # Required env (injected by the harness; overridable by flags):
 #   GASCITY_EVENT_BUS     EventBridge bus name (e.g. gascity-handoff-dev)
 #   AWS_REGION            AWS region
-#   GASCITY_SOURCE_CITY   this city's name (e.g. vehicle-graph-execution-monitoring-city-dev)
+#   GASCITY_SOURCE_CITY   this city's configured name
 # Optional env:
 #   GASCITY_SOURCE_CITY_ROLE (default: execution-monitoring-city)
 #   GASCITY_PROCESS_SLUG, GASCITY_CITY_PAIR_SLUG, GASCITY_EVENT_SOURCE
@@ -92,9 +92,6 @@ jq -e . "$PAYLOAD_FILE" >/dev/null 2>&1 || die "payload file is not valid JSON: 
 SOURCE_CITY="${GASCITY_SOURCE_CITY:-}"
 [ -n "$SOURCE_CITY" ] || die "GASCITY_SOURCE_CITY env (or harness injection) is required"
 SOURCE_CITY_ROLE="${GASCITY_SOURCE_CITY_ROLE:-execution-monitoring-city}"
-PROCESS_SLUG="${PROCESS_SLUG:-vehicle-graph}"
-CITY_PAIR_SLUG="${CITY_PAIR_SLUG:-${PROCESS_SLUG}-exec-codegen}"
-
 # Event type -> schema file. This pack registers the repo handoff events;
 # any other event type must supply --schema-file from its owning pack. The
 # envelope-vs-flat class is read from the schema, not hardcoded here.
@@ -116,6 +113,13 @@ fi
 EVENT_CLASS="flat"
 if jq -e '(.required // []) | index("process_slug")' "$SCHEMA_FILE" >/dev/null; then
   EVENT_CLASS="envelope"
+fi
+if [ "$EVENT_CLASS" = "envelope" ]; then
+  [ -n "$PROCESS_SLUG" ] || die "--process-slug or GASCITY_PROCESS_SLUG is required for envelope events"
+  CITY_PAIR_SLUG="${CITY_PAIR_SLUG:-${PROCESS_SLUG}-exec-codegen}"
+else
+  PROCESS_SLUG="${PROCESS_SLUG:-domain-runtime}"
+  CITY_PAIR_SLUG="${CITY_PAIR_SLUG:-domain-runtime}"
 fi
 
 resolve_codegen_owner() {

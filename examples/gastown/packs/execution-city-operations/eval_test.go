@@ -36,8 +36,8 @@ func TestEvalFormulasCompileAndRouteDeterministicGrading(t *testing.T) {
 
 	replay, err := formula.Compile(context.Background(), "eval-replay-step", []string{formulaDir}, map[string]string{
 		"fixture_ref": "fixtures/recorded-step.json", "fixture_id": "STEP#surface.execute#case-001",
-		"fixture_json": `{"fixture_id":"STEP#surface.execute#case-001"}`,
-		"surface_kind": "surface.execute", "grader_cmd": "tools/grade --format json",
+		"fixture_payload_b64": "eyJmaXh0dXJlX2lkIjoiU1RFUCNzdXJmYWNlLmV4ZWN1dGUjY2FzZS0wMDEifQ==",
+		"surface_kind":        "surface.execute", "grader_cmd": "tools/grade --format json",
 		"run_id": "run-002", "eval_suite": "suite-001", "binding_prefix": "operations.",
 	})
 	if err != nil {
@@ -46,8 +46,8 @@ func TestEvalFormulasCompileAndRouteDeterministicGrading(t *testing.T) {
 	store := beads.NewMemStore()
 	if _, err := molecule.Instantiate(context.Background(), store, replay, molecule.Options{Vars: map[string]string{
 		"fixture_ref": "fixtures/recorded-step.json", "fixture_id": "STEP#surface.execute#case-001",
-		"fixture_json": `{"fixture_id":"STEP#surface.execute#case-001"}`,
-		"surface_kind": "surface.execute", "grader_cmd": "tools/grade --format json",
+		"fixture_payload_b64": "eyJmaXh0dXJlX2lkIjoiU1RFUCNzdXJmYWNlLmV4ZWN1dGUjY2FzZS0wMDEifQ==",
+		"surface_kind":        "surface.execute", "grader_cmd": "tools/grade --format json",
 		"run_id": "run-002", "eval_suite": "suite-001", "binding_prefix": "operations.",
 	}}); err != nil {
 		t.Fatalf("instantiate replay formula: %v", err)

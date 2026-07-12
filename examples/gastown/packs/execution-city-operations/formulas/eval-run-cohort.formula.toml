@@ -1,0 +1,105 @@
+description = """
+Implements eval.run_cohort.v1. A planning agent emits a non-empty recorded-case
+array, the controller fans each case into the private eval-run-case fragment,
+and aggregation cannot start until the fan-out control closes. Deterministic
+tool checks grade cases and evaluate the threshold; agents never grade.
+"""
+formula = "eval-run-cohort"
+version = 1
+contract = "graph.v2"
+
+[vars]
+[vars.cohort_ref]
+description = "Path or URI of the complete cohort fixture bundle"
+required = true
+[vars.surface_kind]
+description = "gc.kind claimed by the bound surface-under-test pool"
+required = true
+[vars.grader_cmd]
+description = "City-provided deterministic grader command, including arguments"
+required = true
+[vars.threshold]
+description = "Inclusive numeric minimum for the selected gate metric"
+required = true
+[vars.gate_metric]
+description = "Aggregate score axis compared by the deterministic gate"
+default = "overall"
+[vars.run_id]
+description = "Stable eval run identifier"
+required = true
+[vars.eval_suite]
+description = "Stable eval suite identifier"
+required = true
+[vars.binding_prefix]
+description = "Qualified pack prefix, including the trailing dot, for generic eval agents"
+default = "execution-city-operations."
+
+[[steps]]
+id = "plan"
+title = "Plan eval cohort {{run_id}}"
+description = """
+Load `{{cohort_ref}}`, validate every complete recorded-step fixture, and emit
+`gc.output_json` as `{"cases":[...]}`. Every item must contain non-empty
+`case_id`, canonical `fixture_id`, `fixture_ref`, `fixture_payload_b64`, and
+exact copies of the surface, grader, run, suite, and binding values stamped on
+this bead. This makes the fan-out binding valid JSON for every command string.
+Reject an empty cases array. Preserve fixture bytes exactly; do not grade.
+"""
+metadata = { "gc.routed_to" = "{{binding_prefix}}eval-runner", "gc.output_json_required" = "true", "eval.contract" = "eval.run_cohort.v1", "eval.cohort_ref" = "{{cohort_ref}}", "eval.surface_kind" = "{{surface_kind}}", "eval.grader_cmd" = "{{grader_cmd}}", "eval.run_id" = "{{run_id}}", "eval.eval_suite" = "{{eval_suite}}", "eval.binding_prefix" = "{{binding_prefix}}" }
+
+[steps.check]
+max_attempts = 1
+
+[steps.check.check]
+mode = "exec"
+path = ".gc/system/packs/execution-city-operations/assets/scripts/eval-cohort-plan-check.sh"
+timeout = "1m"
+
+[[steps]]
+id = "fan-out-cases"
+title = "Fan out eval cohort {{run_id}}"
+needs = ["plan"]
+description = "Controller-owned per-case expansion over the validated plan output."
+metadata = { "gc.kind" = "fanout", "gc.control_for" = "plan", "gc.for_each" = "output.cases", "gc.bond" = "eval-run-case", "gc.fanout_mode" = "parallel", "gc.bond_vars" = '{"case_id":"{item.case_id}","fixture_id":"{item.fixture_id}","fixture_ref":"{item.fixture_ref}","fixture_payload_b64":"{item.fixture_payload_b64}","surface_kind":"{item.surface_kind}","grader_cmd":"{item.grader_cmd}","run_id":"{item.run_id}","eval_suite":"{item.eval_suite}","binding_prefix":"{item.binding_prefix}"}' }
+
+[[steps]]
+id = "aggregate"
+title = "Aggregate eval cohort {{run_id}}"
+needs = ["fan-out-cases"]
+description = """
+Fold every non-empty deterministic case result into aggregate score axes and
+write a draft eval-run manifest. Preserve case rows and grader provenance.
+Do not create scores, grade traces, or change threshold inputs.
+"""
+metadata = { "gc.routed_to" = "{{binding_prefix}}eval-runner", "gc.output_json_required" = "true", "eval.contract" = "eval.run_cohort.v1", "eval.run_id" = "{{run_id}}", "eval.eval_suite" = "{{eval_suite}}" }
+
+[[steps]]
+id = "threshold-gate"
+title = "Evaluate cohort threshold {{run_id}}"
+needs = ["aggregate"]
+description = """
+Expose the aggregate result without modifying it. The controller executes the
+pack-owned threshold checker, which compares `{{gate_metric}}` to
+`{{threshold}}`. Do not perform or reinterpret the comparison yourself.
+"""
+metadata = { "gc.routed_to" = "{{binding_prefix}}eval-runner", "eval.aggregate_step_ref" = "aggregate", "eval.gate_metric" = "{{gate_metric}}", "eval.threshold" = "{{threshold}}", "eval.run_id" = "{{run_id}}" }
+
+[steps.check]
+max_attempts = 1
+
+[steps.check.check]
+mode = "exec"
+path = ".gc/system/packs/execution-city-operations/assets/scripts/eval-threshold-check.sh"
+timeout = "1m"
+
+[[steps]]
+id = "finalize"
+title = "Finalize eval cohort {{run_id}}"
+needs = ["threshold-gate"]
+description = """
+Write one schema-valid eval.run_cohort.v1 manifest from the immutable case,
+aggregate, threshold-check, and grader artifacts. For a failed gate, invoke
+`eval-file-triage.sh` once for each distinct failure class in the manifest.
+Close only after the manifest and every required triage bead are durable.
+"""
+metadata = { "gc.routed_to" = "{{binding_prefix}}eval-runner", "eval.contract" = "eval.run_cohort.v1", "eval.manifest_schema" = "eval-run-manifest.v1", "eval.classifier_route" = "{{binding_prefix}}prompt-eval-classifier", "eval.run_id" = "{{run_id}}", "eval.eval_suite" = "{{eval_suite}}" }

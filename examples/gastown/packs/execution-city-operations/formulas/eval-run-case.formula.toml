@@ -1,0 +1,83 @@
+description = """
+Private graph fragment used by eval-run-cohort and eval-replay-step. It
+materializes one recorded fixture, routes exactly one execution bead through
+the importing city's gc.kind selector, and grades the resulting trace through
+the deterministic grader wrapper. It is not a city binding entry point.
+"""
+formula = "eval-run-case"
+type = "expansion"
+version = 1
+contract = "graph.v2"
+
+[vars]
+[vars.case_id]
+description = "Stable case identifier"
+required = true
+[vars.fixture_id]
+description = "Canonical recorded-step fixture identifier"
+required = true
+[vars.fixture_ref]
+description = "Path or URI of the complete recorded-step fixture"
+required = true
+[vars.fixture_payload_b64]
+description = "Optional base64 encoding of the complete fixture for cohort injection"
+default = ""
+[vars.surface_kind]
+description = "gc.kind claimed by the bound surface-under-test pool"
+required = true
+[vars.grader_cmd]
+description = "City-provided deterministic grader command, including arguments"
+required = true
+[vars.run_id]
+description = "Stable eval run identifier"
+required = true
+[vars.eval_suite]
+description = "Stable eval suite identifier"
+required = true
+[vars.binding_prefix]
+description = "Qualified pack prefix, including the trailing dot, for generic eval agents"
+default = "execution-city-operations."
+
+[[template]]
+id = "{target}.materialize-fixture"
+title = "Materialize eval fixture {case_id}"
+description = """
+Claim the complete fixture `{fixture_ref}` with canonical ID `{fixture_id}`.
+If `{fixture_payload_b64}` is non-empty, decode it exactly once and verify that
+the decoded fixture ID matches before materializing its workspace refs. Reject
+empty or malformed fixtures and record the materialized workspace artifact.
+Do not grade, alter the fixture, or invent missing workspace content.
+"""
+metadata = { "gc.routed_to" = "{binding_prefix}eval-runner", "eval.case_id" = "{case_id}", "eval.fixture_id" = "{fixture_id}", "eval.fixture_ref" = "{fixture_ref}", "eval.fixture_payload_b64" = "{fixture_payload_b64}", "eval.run_id" = "{run_id}", "eval.eval_suite" = "{eval_suite}" }
+
+[[template]]
+id = "{target}.execute-under-test"
+title = "Execute eval case {case_id}"
+needs = ["{target}.materialize-fixture"]
+description = """
+Execute the recorded input and materialized workspace for `{fixture_id}`.
+Persist the actual terminal status, ordered command trace, manifest.json and
+output.json artifact refs, and optional event excerpt as structured
+`gc.output_json`. Do not grade the trace. The controller invokes the injected
+deterministic grader command after this execution bead closes.
+"""
+metadata = { "gc.kind" = "{surface_kind}", "eval.case_id" = "{case_id}", "eval.fixture_id" = "{fixture_id}", "eval.fixture_ref" = "{fixture_ref}", "eval.grader_cmd" = "{grader_cmd}", "eval.run_id" = "{run_id}", "eval.eval_suite" = "{eval_suite}", "gc.output_json_required" = "true" }
+
+[template.check]
+max_attempts = 1
+
+[template.check.check]
+mode = "exec"
+path = ".gc/system/packs/execution-city-operations/assets/scripts/eval-grader-check.sh"
+timeout = "5m"
+
+[[template]]
+id = "{target}.finalize-case"
+title = "Finalize eval case {case_id}"
+needs = ["{target}.execute-under-test"]
+description = """
+Collect the immutable fixture, execution trace, and deterministic grading
+result for `{case_id}` into one structured case result. Preserve all scorer
+fields and artifact hashes. Do not calculate or revise any score.
+"""
+metadata = { "gc.routed_to" = "{binding_prefix}eval-runner", "eval.case_id" = "{case_id}", "eval.fixture_id" = "{fixture_id}", "eval.fixture_ref" = "{fixture_ref}", "eval.run_id" = "{run_id}", "eval.eval_suite" = "{eval_suite}", "gc.output_json_required" = "true" }

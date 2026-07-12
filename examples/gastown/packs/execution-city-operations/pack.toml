@@ -6,6 +6,9 @@ schema = 2
 # These roles supervise nondeterministic process health and evidence quality.
 # They do not replace deterministic dispatchers, bridge command runners, or
 # domain state writers.
+# Eval finalizers file complete evidence packets through the city-qualified
+# prompt-eval-classifier. That existing consumer routes to its judge or
+# evidence gatherer and, for proven deterministic defects, the work filer.
 
 [[named_session]]
 template = "mayor"

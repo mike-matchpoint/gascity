@@ -8,6 +8,13 @@ mirror and must track these files; a parity test should fail if they drift.
 
 Contract version: **1.1**
 
+## Eval artifacts
+
+- `eval/eval-run-manifest.v1.schema.json` — standalone manifest for the
+  `eval.run_cohort.v1` and `eval.replay_step.v1` formula contracts.
+- `eval/examples/eval-run-manifest.v1.example.json` — non-empty failed-gate
+  example with a complete classifier evidence packet.
+
 ## Events
 
 Two event classes share the publisher. *Envelope* events are city-to-city and

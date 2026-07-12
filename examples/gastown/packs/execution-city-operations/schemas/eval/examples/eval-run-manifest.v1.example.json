@@ -1,0 +1,41 @@
+{
+  "contract": "eval.run_cohort.v1",
+  "run_id": "run-20260712-001",
+  "eval_suite": "surface-behavior-v1",
+  "cohort_ref": "fixtures/cohort-v1.json",
+  "case_results": [{
+    "case_id": "case-001",
+    "fixture_id": "STEP#surface.execute#case-001",
+    "fixture_ref": "fixtures/recorded-step.json",
+    "terminal_status": "COMPLETED",
+    "domain_commands": ["surface.read", "surface.write"],
+    "artifact_refs": [
+      {"artifact_name": "manifest.json", "uri": "artifact://run-20260712-001/case-001/manifest.json", "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      {"artifact_name": "output.json", "uri": "artifact://run-20260712-001/case-001/output.json", "content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+    ],
+    "score": 0.72,
+    "rubric_scores": [{"axis": "correctness", "score": 0.72, "evidence_ref": "artifact://run-20260712-001/case-001/output.json"}],
+    "grading_result_ref": "artifact://run-20260712-001/case-001/grading-result.json"
+  }],
+  "aggregate_scores": {"axes": {"overall": 0.72, "correctness": 0.72}, "case_count": 1},
+  "threshold": {"metric": "overall", "minimum": 0.8},
+  "gate_outcome": "failed",
+  "failing_axes": ["overall"],
+  "grader": {"command": "tools/grade-case --format json", "version": "1.0.0", "content_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+  "timestamps": {"started_at": "2026-07-12T12:00:00Z", "completed_at": "2026-07-12T12:02:00Z"},
+  "triage_packets": [{
+    "eval_suite": "surface-behavior-v1", "case_id": "case-001",
+    "prompt_name": "surface-worker", "prompt_version": "v7",
+    "model": "model-a", "provider": "provider-a", "run_id": "run-20260712-001",
+    "expected_outcome": "COMPLETED", "actual_outcome": "COMPLETED",
+    "score": 0.72, "threshold": 0.8, "failure_label": "rubric_regression",
+    "prompt_input": {"request": "execute recorded step"},
+    "redacted_output_excerpt": "output omitted", "trace_excerpt": "surface.read -> surface.write",
+    "scorer_rationale": "correctness axis is below the configured minimum",
+    "eval_artifact_refs": ["fixtures/recorded-step.json", "artifact://run-20260712-001/case-001/grading-result.json"],
+    "related_execution": "execution-001", "prior_passing_run": "run-20260711-004",
+    "regression_window": "2026-07-11T10:00:00Z/2026-07-12T12:00:00Z",
+    "changed_dependency": null, "evaluator_limitations": [],
+    "nondeterministic_variance": null, "missing_artifacts": []
+  }]
+}

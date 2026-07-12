@@ -5,5 +5,5 @@ import "embed"
 
 // PackFS contains the execution-city-operations pack files.
 //
-//go:embed pack.toml all:agents template-fragments all:schemas all:assets
+//go:embed pack.toml formulas all:agents template-fragments all:schemas all:assets
 var PackFS embed.FS

@@ -431,6 +431,7 @@ provider = "bd"
 	for _, want := range []string{
 		"dog",
 		"execution-city-operations.mayor",
+		"execution-city-operations.eval-runner",
 	} {
 		if !got[want] {
 			t.Fatalf("missing composed agent %q; got agents=%v", want, got)
