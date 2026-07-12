@@ -19,7 +19,7 @@ import (
 
 func TestEvalFormulasCompileAndRouteDeterministicGrading(t *testing.T) {
 	formulatest.EnableV2ForTest(t)
-	formulaDir := filepath.Join("formulas")
+	formulaDir := "formulas"
 
 	cohort, err := formula.Compile(context.Background(), "eval-run-cohort", []string{formulaDir}, map[string]string{
 		"cohort_ref": "fixtures/cohort.json", "surface_kind": "surface.execute",
