@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 : "${GRADER_CAPTURE:?GRADER_CAPTURE is required}"
+: "${EVAL_ACTUAL_TRACE_REF:?EVAL_ACTUAL_TRACE_REF is required}"
+jq -e '.terminal_status and .domain_commands and (.artifact_refs | length == 2)' \
+  "$EVAL_ACTUAL_TRACE_REF" >/dev/null
 printf '%s\n' "$*" >>"$GRADER_CAPTURE"
 jq -n --arg case_id "$EVAL_CASE_ID" '{
   domain: "sample", eval_category: "agent-execution", case_id: $case_id,
