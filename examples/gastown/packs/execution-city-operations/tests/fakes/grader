@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+: "${GRADER_CAPTURE:?GRADER_CAPTURE is required}"
+printf '%s\n' "$*" >>"$GRADER_CAPTURE"
+jq -n --arg case_id "$EVAL_CASE_ID" '{
+  domain: "sample", eval_category: "agent-execution", case_id: $case_id,
+  status: "completed", terminal_status_match: true,
+  expected_terminal_status: "COMPLETED", actual_terminal_status: "COMPLETED",
+  command_set_diff: {matched: ["surface.read"], missing: [], unexpected: []},
+  rubric_scores: [{axis: "correctness", score: 0.72, evidence_ref: "artifact://output.json"}],
+  citation_findings: []
+}'

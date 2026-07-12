@@ -122,6 +122,7 @@ check-all: fmt-check lint vet check-bd check-dolt check-docker test-integration 
 ## test-packs: run bundled pack script test suites against fake gc/aws CLIs
 test-packs:
 	bash examples/gastown/packs/domain-handoff/tests/run-tests.sh
+	bash examples/gastown/packs/execution-city-operations/tests/run-tests.sh
 
 LINT_BASE ?= origin/main
 LINT_CHANGED_REF ?= HEAD

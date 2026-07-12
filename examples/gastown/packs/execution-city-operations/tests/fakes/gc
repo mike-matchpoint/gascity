@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+: "${GC_FAKE_STATE:?GC_FAKE_STATE is required}"
+
+die() { printf 'fake-gc: %s\n' "$*" >&2; exit 1; }
+state() { cat "$GC_FAKE_STATE"; }
+write_state() { jq . >"$GC_FAKE_STATE.tmp" && mv -f "$GC_FAKE_STATE.tmp" "$GC_FAKE_STATE"; }
+
+[ "${1:-}" = "bd" ] || die "unsupported command: $*"
+shift
+case "${1:-}" in
+  show)
+    shift; ID="${1:?id required}"
+    state | jq --arg id "$ID" '[.[] | select(.id == $id)]'
+    ;;
+  list)
+    state
+    ;;
+  update)
+    shift; ID="${1:?id required}"; shift
+    META='{}'
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --set-metadata)
+          KV="$2"; shift 2; KEY="${KV%%=*}"; VALUE="${KV#*=}"
+          META=$(jq -nc --argjson meta "$META" --arg key "$KEY" --arg value "$VALUE" '$meta + {($key): $value}')
+          ;;
+        *) shift ;;
+      esac
+    done
+    state | jq --arg id "$ID" --argjson meta "$META" 'map(if .id == $id then .metadata = ((.metadata // {}) + $meta) else . end)' | write_state
+    ;;
+  create)
+    shift
+    TITLE=""; TYPE="task"; META='{}'; DESCRIPTION=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --title) TITLE="$2"; shift 2 ;;
+        --type) TYPE="$2"; shift 2 ;;
+        --metadata) META="$2"; shift 2 ;;
+        --description) DESCRIPTION="$2"; shift 2 ;;
+        --json) shift ;;
+        *) [ -z "$TITLE" ] && TITLE="$1"; shift ;;
+      esac
+    done
+    jq -e 'type == "object"' <<<"$META" >/dev/null || die "metadata must be an object"
+    COUNT=$(state | jq 'length + 1')
+    ID="triage-$COUNT"
+    state | jq --arg id "$ID" --arg title "$TITLE" --arg type "$TYPE" --arg description "$DESCRIPTION" --argjson metadata "$META" \
+      '. + [{id: $id, title: $title, type: $type, status: "open", description: $description, metadata: $metadata}]' | write_state
+    jq -nc --arg id "$ID" '{id: $id}'
+    ;;
+  *) die "unsupported bd command: $*" ;;
+esac

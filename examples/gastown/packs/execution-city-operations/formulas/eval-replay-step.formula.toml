@@ -1,0 +1,74 @@
+description = """
+Implements eval.replay_step.v1 for exactly one complete recorded-step fixture.
+The surface-under-test executes through gc.kind routing and the controller
+grades its trace through the same deterministic tool seam as cohort runs.
+"""
+formula = "eval-replay-step"
+version = 1
+contract = "graph.v2"
+
+[vars]
+[vars.fixture_ref]
+description = "Path or URI of one complete recorded-step fixture"
+required = true
+[vars.fixture_id]
+description = "Canonical recorded-step fixture identifier"
+required = true
+[vars.fixture_payload_b64]
+description = "Optional base64 encoding of the complete fixture"
+default = ""
+[vars.surface_kind]
+description = "gc.kind claimed by the bound surface-under-test pool"
+required = true
+[vars.grader_cmd]
+description = "City-provided deterministic grader command, including arguments"
+required = true
+[vars.run_id]
+description = "Stable eval run identifier"
+required = true
+[vars.eval_suite]
+description = "Stable eval suite identifier"
+required = true
+[vars.binding_prefix]
+description = "Qualified pack prefix, including the trailing dot, for generic eval agents"
+default = "execution-city-operations."
+
+[[steps]]
+id = "validate"
+title = "Validate replay fixture {{fixture_id}}"
+description = """
+Validate that `{{fixture_ref}}` is one complete recorded-step fixture whose ID
+is `{{fixture_id}}`. Require input payload and scope, workspace refs, expected
+terminal status, expected command set, rubric expectations, registry stamp,
+and provenance. Do not grade or repair the fixture.
+"""
+metadata = { "gc.routed_to" = "{{binding_prefix}}eval-runner", "eval.contract" = "eval.replay_step.v1", "eval.fixture_id" = "{{fixture_id}}", "eval.fixture_ref" = "{{fixture_ref}}", "eval.run_id" = "{{run_id}}", "eval.eval_suite" = "{{eval_suite}}" }
+
+[[steps]]
+id = "replay-case"
+title = "Replay eval fixture {{fixture_id}}"
+needs = ["validate"]
+expand = "eval-run-case"
+
+[steps.expand_vars]
+case_id = "{{fixture_id}}"
+fixture_id = "{{fixture_id}}"
+fixture_ref = "{{fixture_ref}}"
+fixture_payload_b64 = "{{fixture_payload_b64}}"
+surface_kind = "{{surface_kind}}"
+grader_cmd = "{{grader_cmd}}"
+run_id = "{{run_id}}"
+eval_suite = "{{eval_suite}}"
+binding_prefix = "{{binding_prefix}}"
+
+[[steps]]
+id = "finalize"
+title = "Finalize replay run {{run_id}}"
+needs = ["replay-case"]
+description = """
+Write one schema-valid eval.replay_step.v1 manifest from the immutable fixture,
+trace, and deterministic grading artifacts. If the grader check failed, invoke
+`eval-file-triage.sh` for every distinct failure class. Do not grade or revise
+the grading result.
+"""
+metadata = { "gc.routed_to" = "{{binding_prefix}}eval-runner", "eval.contract" = "eval.replay_step.v1", "eval.manifest_schema" = "eval-run-manifest.v1", "eval.classifier_route" = "{{binding_prefix}}prompt-eval-classifier", "eval.run_id" = "{{run_id}}", "eval.eval_suite" = "{{eval_suite}}" }
