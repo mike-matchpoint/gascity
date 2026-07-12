@@ -29,6 +29,17 @@ test "$(wc -l <"$GRADER_CAPTURE" | tr -d ' ')" = "1"
 test "$(cat "$GRADER_CAPTURE")" = "--format json"
 jq -e '.status == "completed" and .rubric_scores[0].score == 0.72' "$GC_ARTIFACT_DIR/grading-result.json" >/dev/null
 
+jq '.payload' "$PACK_DIR/schemas/events/examples/repo-bug-reported.v1.example.json" >"$WORK_DIR/repo-payload.json"
+export GASCITY_SOURCE_CITY="sample-execution-city"
+unset GASCITY_PROCESS_SLUG GASCITY_CITY_PAIR_SLUG
+if "$PACK_DIR/assets/scripts/publish-cross-city-event.sh" \
+  --event-type RepoBugReported.v1 --payload-file "$WORK_DIR/repo-payload.json" --dry-run \
+  >"$WORK_DIR/publish.out" 2>"$WORK_DIR/publish.err"; then
+  printf 'expected envelope publish without process identity to fail\n' >&2
+  exit 1
+fi
+grep -F "GASCITY_PROCESS_SLUG is required" "$WORK_DIR/publish.err" >/dev/null
+
 jq '. + [{"id":"plan-empty","status":"closed","metadata":{"gc.output_json":"{\"cases\":[]}"}}]' \
   "$GC_FAKE_STATE" >"$GC_FAKE_STATE.tmp"
 mv -f "$GC_FAKE_STATE.tmp" "$GC_FAKE_STATE"
