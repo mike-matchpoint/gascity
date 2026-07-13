@@ -1,0 +1,4 @@
+16:33  up 2 days,  9:56, 1 user, load averages: 6.95 12.42 16.92
+The system has 25769803776 (1572864 pages with a page size of 16384).
+
+System-wide memory free percentage: 80%

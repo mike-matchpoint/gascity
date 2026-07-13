@@ -23,6 +23,21 @@ EVAL_FIXTURE_REF=$(printf '%s' "$BEAD" | jq -r '.metadata["eval.fixture_ref"] //
 [ -n "$EVAL_CASE_ID" ] && [ -n "$EVAL_FIXTURE_ID" ] && [ -n "$EVAL_FIXTURE_REF" ] || die "bead is missing fixture identity"
 
 mkdir -p "$GC_ARTIFACT_DIR"
+export EVAL_ACTUAL_TRACE_REF="$GC_ARTIFACT_DIR/actual-trace.json"
+TRACE_JSON=$(printf '%s' "$BEAD" | jq -er '.metadata["gc.output_json"] | fromjson') \
+  || die "execution trace is missing or is not JSON"
+printf '%s' "$TRACE_JSON" | jq -e '
+  type == "object" and
+  (.terminal_status | type == "string" and length > 0) and
+  (.domain_commands | type == "array" and all(.[]; type == "string" and length > 0)) and
+  (.artifact_refs | type == "array" and length == 2) and
+  ([.artifact_refs[].artifact_name] | sort == ["manifest.json", "output.json"]) and
+  (all(.artifact_refs[];
+    (.uri | type == "string" and length > 0) and
+    (.content_sha256 | type == "string" and test("^[a-f0-9]{64}$"))))
+' >/dev/null || die "execution trace does not satisfy StepExecutionTrace"
+printf '%s' "$TRACE_JSON" | jq -cS . >"$EVAL_ACTUAL_TRACE_REF"
+
 RESULT_TMP="$GC_ARTIFACT_DIR/grading-result.json.tmp"
 RESULT_FILE="$GC_ARTIFACT_DIR/grading-result.json"
 set +e
@@ -41,7 +56,7 @@ jq -e '
   (.command_set_diff.matched | type == "array") and
   (.command_set_diff.missing | type == "array") and
   (.command_set_diff.unexpected | type == "array") and
-  (.rubric_scores | type == "array") and
+  (.rubric_scores | type == "array" and length > 0) and
   (.citation_findings | type == "array")
 ' "$RESULT_TMP" >/dev/null || die "grader output does not satisfy the grading-result contract"
 

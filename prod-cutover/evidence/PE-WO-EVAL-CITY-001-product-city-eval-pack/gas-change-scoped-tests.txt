@@ -1,0 +1,2 @@
+ok  	github.com/gastownhall/gascity/examples/gastown/packs/execution-city-operations	(cached)
+execution-city-operations eval tests: PASS

@@ -18,7 +18,8 @@ cat >"$GC_FAKE_STATE" <<JSON
   {"id":"execute-1","status":"closed","metadata":{
     "gc.root_bead_id":"workflow-1","gc.step_ref":"eval.replay.execute-under-test","gc.attempt":"1",
     "eval.case_id":"case-001","eval.fixture_id":"STEP#surface.execute#case-001",
-    "eval.fixture_ref":"fixtures/recorded-step.json","eval.grader_cmd":"grader --format json"
+    "eval.fixture_ref":"fixtures/recorded-step.json","eval.grader_cmd":"grader --format json",
+    "gc.output_json":"{\"terminal_status\":\"COMPLETED\",\"domain_commands\":[\"surface.read\"],\"artifact_refs\":[{\"artifact_name\":\"manifest.json\",\"uri\":\"artifact://manifest.json\",\"content_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},{\"artifact_name\":\"output.json\",\"uri\":\"artifact://output.json\",\"content_sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}]}"
   }}
 ]
 JSON
@@ -27,7 +28,17 @@ export GC_ARTIFACT_DIR="$WORK_DIR/execute-artifacts"
 "$PACK_DIR/assets/scripts/eval-grader-check.sh" >/dev/null
 test "$(wc -l <"$GRADER_CAPTURE" | tr -d ' ')" = "1"
 test "$(cat "$GRADER_CAPTURE")" = "--format json"
+jq -e '.terminal_status == "COMPLETED" and (.domain_commands == ["surface.read"]) and (.artifact_refs | length == 2)' "$GC_ARTIFACT_DIR/actual-trace.json" >/dev/null
 jq -e '.status == "completed" and .rubric_scores[0].score == 0.72' "$GC_ARTIFACT_DIR/grading-result.json" >/dev/null
+
+jq 'map(if .id == "execute-1" then .metadata |= del(."gc.output_json") else . end)' \
+  "$GC_FAKE_STATE" >"$GC_FAKE_STATE.tmp"
+mv -f "$GC_FAKE_STATE.tmp" "$GC_FAKE_STATE"
+if "$PACK_DIR/assets/scripts/eval-grader-check.sh" >"$WORK_DIR/missing-trace.out" 2>"$WORK_DIR/missing-trace.err"; then
+  printf 'expected identity-only grading to fail\n' >&2
+  exit 1
+fi
+grep -F "execution trace" "$WORK_DIR/missing-trace.err" >/dev/null
 
 jq '.payload' "$PACK_DIR/schemas/events/examples/repo-bug-reported.v1.example.json" >"$WORK_DIR/repo-payload.json"
 export GASCITY_SOURCE_CITY="sample-execution-city"
