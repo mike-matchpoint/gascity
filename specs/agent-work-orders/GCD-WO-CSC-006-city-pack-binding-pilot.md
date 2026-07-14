@@ -85,8 +85,9 @@ and routing. Vehicle-graph is the ratified pilot city (standing pilot-city polic
 - **Blocked by (all wave 23, merged before this WO dispatches):**
   - `GasCity-Dev::GCD-WO-CSC-003-evaluator-judge-primitives` — authors the
     `codegen-support` `evaluator`/`judge` agents, the C9 verdict-metadata contract
-    (`eval_verdict`, `eval_evidence`, `eval_reject_count`, `judge_verdict`,
-    `rejection_reason`, `decision_state`, + A1 §2 `overseer_issue_id`), the
+    (`eval_verdict`, `eval_evidence`, `verdict_patch_id`, `eval_reject_count`,
+    `judge_verdict`, `rejection_reason`, `decision_state`, `residue`, + A1 §2
+    `overseer_issue_id`), the
     `gc.kind=eval_request|judge_request` routing selectors, the three city injection-seam
     fragment names, and the documented city-binding mechanism. THIS WO IMPORTS ALL OF THAT —
     it re-declares nothing.
@@ -319,7 +320,7 @@ evidence; each has a STOP-gate):**
 | R1b | City-binding mechanism + seam fragment names | GCD-WO-CSC-003's pack README/binding doc + `grep -rn "city-architecture-standards\|city-evidence-doctrine\|city-invariants" examples/gastown/packs/codegen-support/` | append_fragments-based city content over empty-default upstream defines; seam names exactly the C11 three | seam names differ from C11 (bind the MERGED names; flag the kit drift in the PR) |
 | R1c | New polecat fragment names | `ls examples/gastown/packs/codegen-support/template-fragments/ \| grep polecat` (plain fixed-string pattern — ALL six new GCD-WO-CSC-005 names start with `polecat-`, including `polecat-overseer-issue-marker`; do NOT copy an escaped alternation into `grep -E` — an escaped pipe in ERE matches literally and finds nothing), then set-difference against the 6 pre-existing `polecat-*` names quoted in R0 | SIX new names total (kit C11: "the 5 new + overseer-marker"): the 5 D10 diligence fragments — code hygiene (incl. fabricated-evidence ban), evidence contract, final rebase+revalidate, autonomy-and-blockers, submit-to-evaluator done-sequence override — plus the overseer-issue-marker fragment (A1 §2); exact names as merged | fewer than the GCD-WO-CSC-005 deliverable set present, or the done-sequence override fails the Step-3 supersession gate |
 | R1d | Router formula name + watch var name | `ls examples/gastown/packs/codegen-support/formulas/ \| grep -i router` + `grep -n "formula" examples/gastown/packs/codegen-support/assets/scripts/spec-cartographer-watch.sh` | a `wo-router` formula; the watch script reads the per-rig `[rigs.formula_vars]` var **`wo_planning_formula`** (GCD-WO-CSC-004's pinned name — the discovery grep pattern `formula` matches it as a substring; verify the merged spelling, don't trust this file) with legacy `spec-cartographer` default | no var exists (STOP — the C10 seam is missing upstream) |
-| R1e | Verdict metadata keys (context for doctrine fragments + runbook, NOT re-declared) | kit C9 + GCD-WO-CSC-003 merged docs | `eval_verdict, eval_evidence, eval_reject_count, judge_verdict, rejection_reason, decision_state, overseer_issue_id` | — (import citation only) |
+| R1e | Verdict metadata keys (context for doctrine fragments + runbook, NOT re-declared) | kit C9 + GCD-WO-CSC-003 merged docs | `eval_verdict, eval_evidence, verdict_patch_id, eval_reject_count, judge_verdict (PASS\|REJECT\|NOT_REQUIRED), rejection_reason, decision_state, overseer_issue_id, residue` | — (import citation only) |
 
 **R2 — doctrine content sources** (for step 5; all at the estate code root, siblings of
 this repo): `master/DOCTRINE-fixture-realism-and-lifecycle-seam-acceptance.md` (D1 fixture

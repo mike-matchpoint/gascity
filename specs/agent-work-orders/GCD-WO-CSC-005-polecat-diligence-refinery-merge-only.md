@@ -833,10 +833,12 @@ Each criterion names its backing test:
   — a silent no-gate outcome is more-testing-not-less by design.
 - **Convoy-autoland regression**: the `integration/*` predicate is a case-glob on the
   branch already read by the step — if a city ever lands integration branches under a
-  different prefix, the full battery still applies to any bead lacking
-  `judge_verdict=PASS` (convoy beads assigned by `next-iteration` never carry one), so
-  the backstop holds by the second predicate even if the first misses. State this
-  dual-predicate rationale in the 7b note.
+  different prefix, the full battery still applies to any bead lacking an approved
+  verdict (`PASS`/`NOT_REQUIRED` — convoy beads assigned by `next-iteration` never
+  carry one) or lacking a matching `verdict_patch_id`, so the backstop holds by the
+  remaining predicates even if the branch-glob misses. State this triple-form
+  predicate rationale (approved verdict + patch-id match + `integration/*`) in the 7b
+  note.
 - **Stale judge PASS after refinery rejection**: cleared explicitly in 7c AND cleared
   again by the submit sequence on resubmission — belt and suspenders across the two WOs
   (the R1 handshake) — AND structurally dead even if both clears were missed: the R5(d)
