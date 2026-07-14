@@ -53,7 +53,10 @@ func TestNoBdExecOutsideBeads(t *testing.T) {
 		}
 		if info.IsDir() {
 			base := filepath.Base(path)
-			if base == ".git" || base == "vendor" || base == ".claude" || strings.HasPrefix(base, ".beads-src") {
+			// "worktrees" holds durable agent worktrees (full repo
+			// checkouts); scanning them double-counts every file and
+			// flags foreign in-progress work.
+			if base == ".git" || base == "vendor" || base == ".claude" || base == "worktrees" || strings.HasPrefix(base, ".beads-src") {
 				return filepath.SkipDir
 			}
 			return nil

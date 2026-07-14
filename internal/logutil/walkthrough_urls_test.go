@@ -42,7 +42,10 @@ func TestWalkthroughURLStringsStayInContractFile(t *testing.T) {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", ".gc", "node_modules":
+			// "worktrees" holds durable agent worktrees (full repo
+			// checkouts); scanning them double-counts every file and
+			// flags foreign in-progress work.
+			case ".git", ".gc", "node_modules", "worktrees":
 				return filepath.SkipDir
 			default:
 				return nil
