@@ -28,6 +28,9 @@ func TestAllAndSourceAreDeterministic(t *testing.T) {
 		"codegen-support=examples/gastown/packs/codegen-support",
 		"execution-city-operations=examples/gastown/packs/execution-city-operations",
 		"domain-handoff=examples/gastown/packs/domain-handoff",
+		"telos-core=examples/gastown/packs/telos-core",
+		"telos-codegen=examples/gastown/packs/telos-codegen",
+		"telos-exec-monitoring=examples/gastown/packs/telos-exec-monitoring",
 	}
 	if strings.Join(first, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("All = %v, want %v", first, want)

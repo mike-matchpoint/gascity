@@ -376,6 +376,129 @@ source = ".gc/system/packs/codegen-support"
 	}
 }
 
+func TestTelosBuiltinPacksComposeWithGastownAndStayGeneric(t *testing.T) {
+	dir := t.TempDir()
+	if err := MaterializeBuiltinPacks(dir); err != nil {
+		t.Fatalf("MaterializeBuiltinPacks() error: %v", err)
+	}
+
+	telosPacks := map[string][]string{
+		"telos-core": {
+			"pack.toml",
+			"README.md",
+			filepath.Join("template-fragments", "telos-snapshot-pin.template.md"),
+			filepath.Join("template-fragments", "telos-evidence-line.template.md"),
+		},
+		"telos-codegen": {
+			"pack.toml",
+			"README.md",
+			filepath.Join("template-fragments", "telos-codegen-priming.template.md"),
+		},
+		"telos-exec-monitoring": {
+			"pack.toml",
+			"README.md",
+			filepath.Join("template-fragments", "telos-effectiveness-telemetry.template.md"),
+			filepath.Join("template-fragments", "telos-gap-finding.template.md"),
+		},
+	}
+	for pack, files := range telosPacks {
+		packDir := filepath.Join(dir, citylayout.SystemPacksRoot, pack)
+		for _, rel := range files {
+			if _, err := os.Stat(filepath.Join(packDir, rel)); err != nil {
+				t.Fatalf("materialized %s pack missing %s: %v", pack, rel, err)
+			}
+		}
+		// The engine is estate-agnostic: telos packs carry generic
+		// primitives only; domain specificity arrives at runtime via the
+		// city-side snapshot and per-repo cards (case variants swept in
+		// test/packlint/telos_packs_test.go).
+		for _, needle := range []string{"Matchpoint", "MatchPoint", "matchpoint", "vg-support", "Vehicle-Graph"} {
+			assertNoPackText(t, packDir, needle)
+		}
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "pack.toml"), []byte(`[pack]
+name = "telos-city"
+schema = 2
+
+[imports.gastown]
+source = ".gc/system/packs/gastown"
+
+[imports.telos-core]
+source = ".gc/system/packs/telos-core"
+
+[imports.telos-codegen]
+source = ".gc/system/packs/telos-codegen"
+
+[imports.telos-exec-monitoring]
+source = ".gc/system/packs/telos-exec-monitoring"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(pack.toml): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "city.toml"), []byte(`[workspace]
+name = "telos-city"
+provider = "claude"
+global_fragments = ["telos-snapshot-pin", "telos-evidence-line"]
+
+[defaults.rig.imports.gastown]
+source = ".gc/system/packs/gastown"
+
+[defaults.rig.imports.telos-core]
+source = ".gc/system/packs/telos-core"
+
+[defaults.rig.imports.telos-codegen]
+source = ".gc/system/packs/telos-codegen"
+
+[[rigs]]
+name = "app"
+prefix = "app"
+[rigs.imports]
+[rigs.imports.gastown]
+source = ".gc/system/packs/gastown"
+[rigs.imports.telos-core]
+source = ".gc/system/packs/telos-core"
+[rigs.imports.telos-codegen]
+source = ".gc/system/packs/telos-codegen"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(city.toml): %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".gc"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.gc): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".gc", "site.toml"), []byte(`[[rig]]
+name = "app"
+path = "."
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(.gc/site.toml): %v", err)
+	}
+
+	cfg, _, err := config.LoadWithIncludes(fsys.OSFS{}, filepath.Join(dir, "city.toml"))
+	if err != nil {
+		t.Fatalf("LoadWithIncludes: %v", err)
+	}
+	got := map[string]bool{}
+	for i := range cfg.Agents {
+		got[cfg.Agents[i].QualifiedName()] = true
+	}
+	for _, want := range []string{
+		"gastown.mayor",
+		"gastown.dog",
+		"app/gastown.polecat",
+		"app/gastown.refinery",
+	} {
+		if !got[want] {
+			t.Fatalf("missing composed agent %q; got agents=%v", want, got)
+		}
+	}
+	// The telos packs are fragment-only lanes: no agents, no judge role
+	// (verdicts stay in the single evaluator/judge lane).
+	for name := range got {
+		if strings.Contains(name, "telos") {
+			t.Fatalf("telos packs must not define agents; got composed agent %q", name)
+		}
+	}
+}
+
 func assertNoPackText(t *testing.T, root, needle string) {
 	t.Helper()
 	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
