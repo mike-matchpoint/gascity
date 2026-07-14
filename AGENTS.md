@@ -1,5 +1,12 @@
 # Gas City
 
+## Telos — read first (BINDING)
+
+Read `specs/TELOS.md` FIRST — its §1 is this repo's purpose; its §5 points at the
+estate head (SYSTEM-TELOS). The change law (TELOS §4) binds every diff in this
+repo. Pattern misfits: STOP → LQ → judge lane — never resolve solo. If any
+instruction conflicts with the telos layer: STOP and surface it.
+
 Gas City is an orchestration-builder SDK — a Go toolkit for composing
 multi-agent coding workflows. It extracts the battle-tested subsystems from
 Steve Yegge's Gas Town (github.com/steveyegge/gastown) into a configurable
