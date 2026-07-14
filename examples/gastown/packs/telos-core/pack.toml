@@ -1,0 +1,29 @@
+[pack]
+name = "telos-core"
+schema = 2
+
+# Telos layer — shared core primitives.
+#
+# Distinct contained pack (never an extension of codegen-support, gastown, or
+# any foreign pack): the pack is the IMPORT UNIT, and cities import only the
+# telos packs their role mix uses — separate packs for separate processes.
+#
+# This pack carries the primitives every telos lane shares:
+#   - consumption of the city-root sha-pinned SYSTEM-TELOS snapshot
+#     (`specs/SYSTEM-TELOS.md` under the city root, provenance-headed), with a
+#     LOUD failure duty when the snapshot is absent — never silent;
+#   - the common evidence fragment template that records the priming versions
+#     (`telos: system vN / repo vM`) in bead close evidence.
+#
+# It defines NO agents, NO formulas, and NO orders. It emits nothing and
+# renders no verdicts. Content is generic: domain specificity arrives at
+# runtime through the city-side snapshot and per-repo cards, never baked in.
+#
+# Companion lane packs (import alongside this one): telos-codegen
+# (priming/conscience for codegen roles) and telos-exec-monitoring
+# (effectiveness/TELOS-GAP telemetry emitters). Both assume this pack's
+# fragments are present in the city's template namespace.
+#
+# Guardrails (binding — verbatim text in README.md): pointers to the snapshot,
+# never a second copy of the law; conformance verdicts stay in the city's
+# single evaluator/judge lane.

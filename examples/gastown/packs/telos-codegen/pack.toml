@@ -1,0 +1,27 @@
+[pack]
+name = "telos-codegen"
+schema = 2
+
+# Telos layer — priming/conscience lane for codegen roles.
+#
+# Distinct contained pack (never an extension of codegen-support, gastown, or
+# any foreign pack): the pack is the IMPORT UNIT, and cities import only the
+# telos packs their role mix uses — separate packs for separate processes.
+#
+# This pack primes code-generating roles with the telos read order (city
+# snapshot -> repo card if present -> change-law-binds) and the STOP-on-conflict
+# duty. It EMITS NOTHING and renders NO verdicts: conformance verdicts belong
+# to the city's single evaluator/judge lane, and this pack grants no review or
+# judge authority to any role it primes.
+#
+# It defines NO agents, NO formulas, and NO orders. Content is generic: domain
+# specificity arrives at runtime through the city-side snapshot and per-repo
+# cards, never baked in.
+#
+# Requires: telos-core imported alongside (its telos-snapshot-pin and
+# telos-evidence-line fragments carry the shared mechanics this lane's
+# fragment points at).
+#
+# Guardrails (binding — verbatim text in README.md): pointers to the snapshot,
+# never a second copy of the law; conformance verdicts stay in the city's
+# single evaluator/judge lane.

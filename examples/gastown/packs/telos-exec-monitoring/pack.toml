@@ -1,0 +1,28 @@
+[pack]
+name = "telos-exec-monitoring"
+schema = 2
+
+# Telos layer — effectiveness/TELOS-GAP telemetry emitters.
+#
+# Distinct contained pack (never an extension of codegen-support, gastown, or
+# any foreign pack): the pack is the IMPORT UNIT, and cities import only the
+# telos packs their role mix uses — separate packs for separate processes.
+#
+# FIRST LAW (binding — verbatim text in README.md): this pack emits
+# telemetry/findings ONLY. It renders NO conformance verdicts and defines NO
+# judge role; verdicts stay in the city's single evaluator/judge lane.
+#
+# This pack's fragments teach monitoring-capable roles to EMIT countable
+# effectiveness telemetry records and TELOS-GAP-faceted finding records
+# (grammar: card | depth | pointer | nowhere | n/a) into bead notes/evidence
+# and mail to the owning lane. Emitters observe and record; they never
+# classify catches as true/false, never grade work, never fix gaps from the
+# monitoring seat.
+#
+# It defines NO agents, NO formulas, and NO orders. Content is generic: domain
+# specificity arrives at runtime through the city-side snapshot and per-repo
+# cards, never baked in.
+#
+# Requires: telos-core imported alongside (its telos-snapshot-pin and
+# telos-evidence-line fragments carry the shared mechanics this lane's
+# fragments point at).

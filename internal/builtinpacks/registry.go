@@ -20,6 +20,9 @@ import (
 	executioncityoperations "github.com/gastownhall/gascity/examples/gastown/packs/execution-city-operations"
 	"github.com/gastownhall/gascity/examples/gastown/packs/gastown"
 	"github.com/gastownhall/gascity/examples/gastown/packs/maintenance"
+	teloscodegen "github.com/gastownhall/gascity/examples/gastown/packs/telos-codegen"
+	teloscore "github.com/gastownhall/gascity/examples/gastown/packs/telos-core"
+	telosexecmonitoring "github.com/gastownhall/gascity/examples/gastown/packs/telos-exec-monitoring"
 	"github.com/gastownhall/gascity/internal/bootstrap/packs/core"
 	"github.com/gastownhall/gascity/internal/fsys"
 	gitutil "github.com/gastownhall/gascity/internal/git"
@@ -56,6 +59,9 @@ func All() []Pack {
 		{Name: "codegen-support", Subpath: "examples/gastown/packs/codegen-support", FS: codegensupport.PackFS},
 		{Name: "execution-city-operations", Subpath: "examples/gastown/packs/execution-city-operations", FS: executioncityoperations.PackFS},
 		{Name: "domain-handoff", Subpath: "examples/gastown/packs/domain-handoff", FS: domainhandoff.PackFS},
+		{Name: "telos-core", Subpath: "examples/gastown/packs/telos-core", FS: teloscore.PackFS},
+		{Name: "telos-codegen", Subpath: "examples/gastown/packs/telos-codegen", FS: teloscodegen.PackFS},
+		{Name: "telos-exec-monitoring", Subpath: "examples/gastown/packs/telos-exec-monitoring", FS: telosexecmonitoring.PackFS},
 	}
 }
 
