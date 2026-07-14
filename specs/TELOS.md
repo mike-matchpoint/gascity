@@ -1,4 +1,4 @@
-> specs-version: 1 | updated: 2026-07-14
+> specs-version: 2 | updated: 2026-07-14
 # TELOS — GasCity-Dev
 
 ## §1 Purpose (≤80 words)
@@ -29,7 +29,7 @@ Factory-engine role (TD §D): one canonical Go object model, two typed projectio
 | typed-wire exceptions are enumerated design — `SessionRawMessageFrame` + `EventPayloadUnion` are the ONLY custom-marshal wire types; `/svc/*` is the single untyped path; SSE framing carved out in exactly two files; `internal/api/openapi.json` + `docs/schema/openapi.json` are GENERATED (pre-commit regenerates; `TestOpenAPISpecInSync`) | design-sealed / generated | specs/architecture.md §3.2, §3.4–3.9 |
 | worker-boundary migration bypass list — the named remaining direct `session.Manager` sites are documented state, not violations to fix wholesale; the removed Agent/Handle interfaces must not be reconstructed | design-sealed (migration in progress since 12a0a848) | AGENTS.md:141-164 |
 | doc/code conflict direction — DX wins, tutorials win, the glossary wins: update the DOC, never regress code to a stale doc; counterweight: specs/architecture.md is NORMATIVE with a same-commit maintenance rule for cited symbols | doc-adjudication | AGENTS.md:26-27, 174; engdocs/architecture/glossary.md:5-7; specs/architecture.md §8 |
-| dolt ≥ 1.86.2 and bd 1.0.6 (estate fork `Matchpoint-Intelligence/Beads-Dev`) floors are load-bearing — older dolt can hang `dolt_backup sync` under heavy write load; bead shadows in Dolt remain the nudge durability layer | runtime premise | README.md:58-71; GCD-WO-CSC-001 Goal 3 |
+| dolt ≥ 1.86.2 and bd 1.0.6 (estate fork `Matchpoint-Intelligence/Beads-Dev`) floors are load-bearing — older dolt can hang `dolt_backup sync` under heavy write load; bead shadows in Dolt remain the nudge durability layer; `events.jsonl` becomes controller-owned single-writer under C6 | runtime premise | README.md:58-71; GCD-WO-CSC-001 Goal 3 |
 ### Credential-scope pointers (H1 adjacency)
 | credential | scope | expiry class | owning refresh mechanism |
 |---|---|---|---|
