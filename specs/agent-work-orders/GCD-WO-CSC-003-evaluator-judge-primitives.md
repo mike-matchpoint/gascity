@@ -211,6 +211,7 @@ Bounded-context REJECT rules (kit K2, GasCity-Dev row) restated:
 - **NO upstream (gastownhall/gascity) PR** — fork `main` only.
 - **NO implementation of `regenerate_on_reject`** — the name is RESERVED in the README
   (D10); wiring regenerate semantics now is scope creep.
+- No telos primitives in this pack — the telos-* packs are their only home (D6 v2)
 
 ## Architecture Links
 
@@ -1016,6 +1017,7 @@ Each criterion names its backing test:
 - [ ] PR merged to `origin/main` via the loop (evaluator+judge green); no direct-to-main
       commit.
 - [ ] No city started; live pilot validation left to GCD-WO-CSC-006's named follow-up.
+- [ ] Zero telos primitives introduced into codegen-support or any foreign pack; guardrails A/B honored
 
 ## Master cutover contribution
 
@@ -1081,3 +1083,23 @@ Estate-authority note (FLAG, no action here): the kit C9 table in
 WO remains the C9 authority per its own header ("defined ONCE here, everyone else
 imports") — the kit table gains `verdict_patch_id`/`NOT_REQUIRED`/`residue` via the
 Mayor's governed-doc lane, not via this WO.
+
+## Telos pack topology (amended 2026-07-14 — D6 v2)
+
+Tail amendment — BINDING (see the header note). Owner ruling D6 v2 (telos-layer
+program pack-topology ruling, 2026-07-14) fixes where telos-layer content may live.
+These are ADDITIVE constraints: nothing above is weakened or contradicted. The full
+constraint is stated here — an executor reading only this WO needs nothing else:
+
+1. **These primitives STAY in `codegen-support`; this lane IS the verdict lane.** The
+   evaluator/judge primitives this WO ships stay in `codegen-support` — they are the
+   CSC evaluator lane, not telos primitives. This WO plus the merged
+   `GCD-WO-EVAL-001` ARE the single evaluator/judge lane: conformance verdicts live
+   here and nowhere else. No downstream binding may add a telos-specific judge role.
+2. **Telos primitives have exactly one home.** Any telos primitive this WO's work is
+   tempted to introduce lands ONLY in the distinct contained packs `telos-core` /
+   `telos-codegen` / `telos-exec-monitoring` — never as extensions of
+   `codegen-support`, `gastown`, or any foreign pack. The pack is the IMPORT UNIT;
+   separate packs for separate processes.
+3. **Guardrails (verbatim, BINDING):**
+   "(A) packs carry primitives + sha-pinned POINTERS to the SYSTEM-TELOS snapshot, never a second copy of the law; (B) the monitoring pack emits telemetry/findings ONLY — conformance verdicts stay in the single evaluator/judge lane (GCD-WO-CSC-003 / GCD-WO-EVAL-001, shaped to blueprint ROL-5/6 pre-merge; no telos-specific judge role)."

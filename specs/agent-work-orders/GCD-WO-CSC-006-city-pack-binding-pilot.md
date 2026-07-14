@@ -164,6 +164,11 @@ Bounded-context REJECT rules (kit K2, `*-code-generation-city` row) restated:
   `integration_branch_auto_land = "true"`, the mayor/dog/debugger `pack.toml` patches, and
   `[daemon]` all remain byte-identical (spec-cartographer is RETAINED during migration per
   C10 — the router is selected via the watch var, the legacy formula stays available).
+- **NO telos pack forks / NO telos law copies in the city** — telos content in the city is
+  limited to the P1.5 delivery artifacts (the sha-pinned SYSTEM-TELOS snapshot + the
+  telos-binding fragment); no evaluator/judge fragment delegates verdicts to a telos role
+  (D6 v2 — see the "Telos pack topology" tail section, which also binds the Binding
+  template below).
 
 ## Architecture Links
 
@@ -697,6 +702,8 @@ Each criterion names its backing test:
 - [ ] Multi-repo merge via the harness saga; no direct-to-main commits; no secrets.
 - [ ] No city started, no AWS interaction, live pilot drill left as the named un-pause
       follow-up.
+- [ ] Telos pack topology (D6 v2) honored: no telos pack fork, no telos law copies in the
+      city, no verdict delegation to a telos role; guardrails A/B honored.
 
 ## Master cutover contribution
 
@@ -708,6 +715,10 @@ family). The credential punch-list item rides the CSC program punch list, not th
 ---
 
 ## Binding template (NORMATIVE for GCD-WO-CSC-007 — apply mechanically per city)
+
+Telos rows: this template is additionally bound by the "Telos pack topology (amended
+2026-07-14 — D6 v2)" section at this file's tail — its constraints apply unchanged to
+every templated city.
 
 Parameters per target city:
 
@@ -750,3 +761,25 @@ Procedure (numbers = this WO's Implementation Steps; all are per-CITY_REPO):
   PR as an owner-visible flag.
 - Preservation rule: existing patches, fragments, `[daemon]`, caps, and comments stay
   byte-identical outside the enumerated in-place extensions.
+
+## Telos pack topology (amended 2026-07-14 — D6 v2)
+
+Tail amendment — BINDING. Owner ruling D6 v2 (telos-layer program pack-topology
+ruling, 2026-07-14) fixes where telos-layer content may live. These are ADDITIVE
+constraints binding BOTH this WO's pilot binding AND the **Binding template** section
+above — every city templated by `GCD-WO-CSC-007` inherits them unchanged. The full
+constraint is stated here — an executor reading only this WO needs nothing else:
+
+1. **Same import surface, never a fork.** City imports of applicable telos packs (per
+   the city's role mix) ride the same `.gc/system/packs/<name>` import surface as this
+   WO's binding — never a pack fork. Behavior tuning stays in the sanctioned override
+   layers already named in Non-Goals; copying a telos pack file into the city repo to
+   edit it is a REJECT, exactly like any other imported pack.
+2. **Telos content in a city = the P1.5 delivery artifacts only.** The sha-pinned
+   SYSTEM-TELOS snapshot + the telos-binding fragment — never Matchpoint law inside
+   pack files.
+3. **Verdicts never delegate to a telos role.** No evaluator/judge fragment (pilot or
+   templated) may delegate verdicts to a telos role — conformance verdicts stay in the
+   single evaluator/judge lane.
+4. **Guardrails (verbatim, BINDING):**
+   "(A) packs carry primitives + sha-pinned POINTERS to the SYSTEM-TELOS snapshot, never a second copy of the law; (B) the monitoring pack emits telemetry/findings ONLY — conformance verdicts stay in the single evaluator/judge lane (GCD-WO-CSC-003 / GCD-WO-EVAL-001, shaped to blueprint ROL-5/6 pre-merge; no telos-specific judge role)."
