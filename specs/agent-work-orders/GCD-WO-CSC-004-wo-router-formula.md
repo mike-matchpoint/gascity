@@ -346,7 +346,18 @@ the `wo_planning_formula` rig var exists for exactly this."; (b) **explicit-anno
 rule**: "Dependency edges derive ONLY from the work order's `Blocked by:` / `Blocks:` /
 `Land-together rule:` lines and index-family structure (`## Sub-work-orders`). The router
 never infers dependencies from prose, file overlap, or thematic similarity. Missing formal
-annotations are an authoring defect to surface in the mayor mail, not to compensate for."
+annotations are an authoring defect to surface in the mayor mail, not to compensate for.";
+(c) **structured decision package + batching + ACK** (blueprint QST-1/2/5): "Every
+mayor-action disposition in this formula ships ONE structured decision package, never a
+bare failure line: a stable question id (`${WORK_ORDER_ID}/${EPOCH}#qN`), the exact
+decision needed, the option set, a recommendation, and the blast radius — and ONE run
+raises ONE package enumerating the COMPLETE set of defects/decisions found in that run
+(missing annotations, open prior work beads, dropped closed targets, preflight failures
+— never one question per run serially: a re-run after an answer must not surface a
+defect this run could already see). The mayor ACKs receipt in-band (mail reply/nudge);
+the parked WO (`decision_state=mayor_action`) is never re-slung by the watch and this
+formula never resubmits an unanswered package — the answer arrives as the mayor re-arm
+(answer==release)."
 
 **Step 2 — the four steps.**
 
@@ -382,7 +393,20 @@ content:
    label exists, this is a re-plan over live work: apply the mayor-action disposition with
    reason "open prior work bead(s) exist for ${WORK_ORDER_ID}; re-plan is a mayor call"
    and exit (the watch never re-slings planned WOs — reaching this means a manual
-   re-sling). Closed prior beads: list them in the mayor mail, emit fresh.
+   re-sling). Closed prior beads: list them in the mayor mail, emit fresh. Content-state
+   corollary (C9/LAW-4): the router NEVER writes or clears verdict metadata
+   (`eval_verdict`/`judge_verdict`/`verdict_patch_id`/`eval_reject_count`/`residue`) on
+   any existing bead — live beads' verdict lifecycles belong to the evaluator/judge/
+   refinery lane; a re-plan that would touch them parks here instead.
+4b. **Upstream residue consumption (GEN-6 — residue rows are premises):** for each
+   `cross_wo_blockers.json` blocker entry WITH known beads, read the blocker's work/
+   convoy beads' `metadata.residue` (C9 rows, authority GCD-WO-CSC-003;
+   `gc bd show <id> --json | jq -r '.[0].metadata.residue // empty'`) and collect every
+   `not-delivered`/`known-gap` row. These rows feed (i) the bead body's "Upstream
+   residue" section (Step 2.5 template) and (ii) the mayor summary mail. No rows / no
+   residue key = render the explicit marker "Upstream residue: none declared" — never
+   silence (a missing payload renders a marker, blueprint ART-5). Deterministic reads
+   only; the router never judges residue content.
 5. **Compose the work bead(s).** Default exactly ONE, `draft_id: "work-1"`. Coarse-split
    (2–5 beads, `work-1..work-N`) is permitted ONLY when the target WO itself contains a
    `## Sub-work-orders` section enumerating sub-deliverables that do NOT exist as their
@@ -400,13 +424,22 @@ content:
 
    Integration target: integration/${WORK_ORDER_ID}
 
+   Upstream residue (premises — declared gaps in the work this WO builds
+   on; VERIFY each one's impact before building on the affected seam):
+   <the not-delivered/known-gap rows collected in step 4b, one line each
+   with the owning bead/WO id — or exactly "Upstream residue: none
+   declared">
+
    Acceptance criteria (verbatim from the work order — the binding bar):
    <the WO's ## Acceptance Criteria section, quoted verbatim>
 
    done_when: every acceptance criterion above is demonstrably
    satisfied with real command evidence; the repo's declared validation
    battery (AGENTS.md) is green; work is committed on your polecat
-   branch and handed off per your done sequence.
+   branch and handed off per your done sequence — including the
+   structured residue declaration your done sequence writes (delivered /
+   not-delivered / known-gap rows, every gap mapped to an existing
+   bead/WO; silent residue is an evaluator REJECT).
    ```
 
    Title: `Implement ${WORK_ORDER_ID}` (≤70 chars; truncate the stem tail, never the
@@ -463,8 +496,12 @@ bash .gc/scripts/wo-router-emit.sh 2> "$RUN_DIR/wo_router_emit.stderr"
 then the exact exit-status handling shape of the `inventory_beads` step
 (spec-cartographer:815–856): exit 0 → verify `$RUN_DIR/emitted.json` non-empty → compose
 and send the mayor summary mail (compact: WO id, bead ids from `emitted.json`, convoy
-id/joined, HOLDING created/released/partial, edges added, prior-epoch note) → close +
-drain-ack; exit ≠0 → failure.json + mayor mail + mayor-action disposition, never close.
+id/joined, HOLDING created/released/partial, edges added, prior-epoch note, upstream
+residue rows surfaced in step 4b or "none declared") → close +
+drain-ack; exit ≠0 → failure.json + mayor mail + mayor-action disposition, never close —
+the failure mail is the Step-1(c) structured decision package (question id
+`${WORK_ORDER_ID}/${EPOCH}#qN`, decision, options, recommendation, blast radius; the
+COMPLETE defect set this run observed, never the first defect only).
 
 *2.4 `id = "validate-store"`, `needs = ["emit"]`* — deterministic. Same shape:
 
@@ -569,6 +606,12 @@ No other agent.toml field changes (Non-Goals).
   `.gc/scripts/cartographer-load-state.sh` preamble in every post-init step; the
   `cartographer-emit-plan-preflight.sh` and `wo-router-emit.sh` /
   `wo-router-validate-store.sh` invocations; `gc runtime drain-ack` in every step; the
+  blueprint-conformance pins — the decision-package paragraph strings (the question-id
+  grammar `#q`, "COMPLETE set", "blast radius", "never resubmits"), the
+  residue-consumption strings (`metadata.residue`, "Upstream residue: none declared",
+  the bead-body "Upstream residue" section header, the done_when residue sentence
+  "silent residue is an evaluator REJECT"), and the verdict-metadata firewall sentence
+  ("NEVER writes or clears verdict metadata"); the
   ABSENCE of dropped-lane markers (`new_to_existing_decisions`,
   `existing_to_new_decisions`, `key_excerpts`, `inline_wo_blockers` as a mined input —
   assert the formula text does not contain them).
@@ -658,7 +701,11 @@ pins its expected non-zero count; planted-RED cases included).
 
 1. `formulas/wo-router.formula.toml` exists with exactly the 4 pinned steps, both required
    vars, and every R2 KEEP seam present (convoy parentage, HOLDING doctrine,
-   mayor-action disposition, load-state preamble, close+drain-ack per step) —
+   mayor-action disposition, load-state preamble, close+drain-ack per step) — plus the
+   blueprint-conformance content: the structured decision-package + complete-set + ACK
+   paragraph, the upstream-residue consumption step (4b) with the explicit
+   none-declared marker, the bead-body residue premises section + done_when residue
+   duty, and the verdict-metadata firewall —
    `test/packlint/wo_router_formula_test.go`.
 2. No dropped-lane text in the router (decision arrays, key_excerpts, inline-blocker
    mining, forbidden-phrase scan) — same test, absence assertions.
@@ -723,3 +770,40 @@ None — platform-fork pack content; no AWS resources created, renamed, or delet
 identity surface (kit K1 prod-gate language not triggered). Runtime exposure reaches
 hosted cities only via city-repo binding (GCD-WO-CSC-006/007 set the rig var) plus the
 AGC-WO-CSC-006A/B image/deploy lane at un-pause, each under its own gates.
+
+## Blueprint conformance (amended 2026-07-14 — LAW-4/ROL-5/ROL-6/QST/GEN-6)
+
+Tail amendment — BINDING. Reshaped pre-dispatch to the ratified generation-system
+blueprint (`master/generation-architecture/BLUEPRINT.md` v1.4), in lockstep with the
+amended C9 authority (GCD-WO-CSC-003) and its producer WO (GCD-WO-CSC-005). Edits are
+integrated above (Step 1 pinned paragraph (c), Step 2.2 items 4/4b, the Step 2.5 bead
+body template, Step 2.3 mail composition, Step 6 test pins, AC 1); summary and
+citation map:
+
+1. **Content-state keying (LAW-4) — firewall role.** The router has no verdict
+   surface; its conformance duty is negative: it NEVER writes or clears verdict
+   metadata (`eval_verdict`/`judge_verdict`/`verdict_patch_id`/`eval_reject_count`/
+   `residue`) on any existing bead (Step 2.2 item 4). Emitted work beads enter the C9
+   content-state-keyed verdict lifecycle downstream; a re-plan over live work parks to
+   mayor-action rather than touching a live bead's verdict state.
+2. **Acting evaluator (ROL-5) / conditional judge (ROL-6) — not hosted here.** Both
+   are owned by GCD-WO-CSC-003 (agents/formulas) and consumed by GCD-WO-CSC-005 (the
+   refinery gate). This WO neither re-declares nor contradicts them (C9 import
+   discipline; the router's emitted beads carry no verdict expectations).
+3. **Question package + batching + ACK (QST-1/2/5).** Step 1 pinned paragraph (c) +
+   Step 2.3: every mayor-action disposition ships ONE structured decision package
+   (question id `${WORK_ORDER_ID}/${EPOCH}#qN`, decision, options, recommendation,
+   blast radius); one run enumerates the COMPLETE defect/decision set it observed
+   (never serial one-per-run questions); the mayor ACKs in-band; the parked WO is
+   never re-slung and the package is never resubmitted — answer==release via the
+   mayor re-arm. The formula's existing completion-first + drain-ack discipline
+   (carried verbatim from spec-cartographer) is the session-always-releases half and
+   is unchanged.
+4. **Residue rows as premises (GEN-6) — consumer side.** Step 2.2 item 4b reads
+   upstream blockers' C9 `residue` rows deterministically and surfaces every
+   not-delivered/known-gap row in the emitted bead body ("Upstream residue" premises
+   section — explicit "none declared" marker when absent, never silence) and in the
+   mayor summary mail. Producer side (writing rows at close-out) is GCD-WO-CSC-005's
+   submit sequence; enforcement (silent residue = REJECT) is GCD-WO-CSC-003's
+   evaluator. The bead-body done_when restates the producer duty so every routed
+   polecat sees it.

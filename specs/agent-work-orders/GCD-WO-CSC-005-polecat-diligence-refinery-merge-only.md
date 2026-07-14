@@ -72,11 +72,17 @@ state:
      prerequisites; final fetch+rebase AND re-run acceptance on the rebased tree before
      submitting.
    - `polecat-autonomy-and-blockers` — resolvable decisions are the polecat's; structured
-     escalation (decision, options, recommendation, blast radius) via mayor mail as the
-     rare last resort; never idle-wait.
+     escalation as a DECISION PACKAGE (question id, question, complete option set,
+     recommendation, blast radius) via mayor mail as the rare last resort; the FIRST
+     blocker STOP enumerates the COMPLETE known incompatibility set (batched, never
+     one-per-cycle); the mayor ACKs receipt in-band and the polecat never resubmits an
+     un-answered question; never idle-wait.
    - `polecat-submit-to-evaluator` — the done-sequence override: routes completed work to
      `gc.kind=eval_request` (C9), **explicitly superseding** the earlier refinery-handoff
-     done sequences; carries the resume-and-fix rule for evaluator/judge rejections.
+     done sequences; clears ALL stale verdict keys incl. `verdict_patch_id`; writes the
+     **structured residue rows** (C9 `residue`: delivered / not-delivered / known-gap,
+     gaps mapped to existing beads/WOs — silent residue is an evaluator REJECT); carries
+     the resume-and-fix rule for evaluator/judge rejections.
    - `polecat-overseer-issue-marker` — A1 §2: when the bead carries
      `metadata.overseer_issue_id`, the final commit message AND the submission notes
      carry the marker line `Overseer-Issue: <issue-id>` (the refinery PR body includes
@@ -84,7 +90,12 @@ state:
 2. **`evaluator_gated` branches in `examples/gastown/packs/gastown/formulas/mol-refinery-patrol.toml`**:
    new formula var `evaluator_gated` (default `"false"` — every existing city
    byte-behaviorally unchanged). When the EFFECTIVE gate is `"true"` AND the work bead
-   carries `judge_verdict=PASS` AND the merge source is not an `integration/*` landing:
+   carries an approved verdict (`judge_verdict=PASS`, or `NOT_REQUIRED` — the C9
+   conditional-judge no-risk-marker handoff) AND **the verdict's `verdict_patch_id`
+   equals the patch-id of the branch content the refinery is about to merge (the
+   content-state guard, blueprint LAW-4 — a verdict proves exactly the content it was
+   computed on; mismatch = full battery, never degrade on a stale verdict)** AND the
+   merge source is not an `integration/*` landing:
    `run-tests` degrades to setup + build smoke; `handle-failures` handles only
    smoke-failure rejection + merge mechanics (clearing stale verdicts on rejection and
    PRESERVING the branch — resume-and-fix, never a gated branch delete).
@@ -274,11 +285,19 @@ All repo-relative; READ-first:
 
 **R1 — C9 IMPORT (authority `GCD-WO-CSC-003` — verify against merged content, correct
 this table in the PR if drifted).** Keys: `eval_verdict`, `eval_evidence`,
-`eval_reject_count`, `judge_verdict`, `rejection_reason`, `decision_state`,
-`overseer_issue_id`. Routing values: `gc.kind=eval_request` → evaluator pool;
-`judge_request` → judge; judge-PASS → refinery handoff. The submission transition this
+`verdict_patch_id` (content-state key — `git patch-id --stable` of the evaluated
+diff), `eval_reject_count`, `judge_verdict`, `rejection_reason`, `decision_state`,
+`overseer_issue_id`, `residue` (structured close-out rows). Values:
+`judge_verdict` ∈ {`PASS`, `REJECT`, `NOT_REQUIRED`} — `NOT_REQUIRED` is the
+conditional-judge no-risk-marker handoff (evidence-backed evaluator PASS, judge lane
+skipped BY DESIGN; the refinery treats it exactly like `PASS`). Routing values:
+`gc.kind=eval_request` → evaluator pool;
+`judge_request` → judge; judge-PASS / evaluator `NOT_REQUIRED` → refinery handoff. The
+submission transition this
 WO produces (row "Submit for evaluation" of 003's R3 table): write `branch`, `target`,
-notes; CLEAR `rejection_reason`, `eval_verdict`, `judge_verdict`; set
+notes, **`residue`** (the structured rows — this WO's submit sequence is the C9-pinned
+residue WRITER); CLEAR `rejection_reason`, `eval_verdict`, `judge_verdict`,
+**`verdict_patch_id`**; set
 `gc.kind=eval_request`, clear `gc.routed_to`; `--status=open --assignee=""`; KEEP
 `eval_reject_count` (the shared reject budget — evaluator/judge own it) and
 `overseer_issue_id` (external correlation — never cleared by agents).
@@ -318,9 +337,18 @@ rig's `formula_vars.evaluator_gated` is `"true"`; ANY lookup failure → `"false
 
 **R5 — full-battery exception predicate (pinned).** Gated smoke applies ONLY when ALL
 hold: (a) `EVALUATOR_GATED = "true"`; (b) the work bead's `metadata.judge_verdict` is
-exactly `PASS` (read fresh via `gc bd show $WORK`); (c) `$BRANCH` does NOT match
+exactly `PASS` or `NOT_REQUIRED` (read fresh via `gc bd show $WORK`; C9
+conditional-judge — both are evidence-backed approvals); (c) `$BRANCH` does NOT match
 `integration/*` (case-glob on the branch read from bead metadata — convoy autolands land
-`integration/<wo-id>` onto the default target and KEEP the full battery; kit-verbatim).
+`integration/<wo-id>` onto the default target and KEEP the full battery; kit-verbatim);
+(d) **content-state match (LAW-4):** the bead's `metadata.verdict_patch_id` is
+non-empty AND equals the patch-id the refinery computes over the content it is about
+to merge — post-rebase, in its own worktree:
+`git diff "origin/$TARGET...HEAD" | git patch-id --stable | awk '{print $1}'`
+(a clean rebase preserves the patch-id by construction; conflict resolutions change it
+and legitimately void the degrade). A mismatch is NOT a rejection and NOT a defect —
+it simply runs today's full battery (never degrade on a stale verdict). Session
+restarts, re-wakes, and agent swaps never void a verdict — only content change does.
 Anything else — ungated city, missing/stale verdict, ad-hoc slung bead, convoy landing —
 runs today's full battery unchanged.
 
@@ -390,19 +418,28 @@ post-rebase. The evaluator's merge check is conflict-only — being behind is fi
 CONFLICTING is a rejection you can prevent right here.
 
 **Step 4 — `polecat-autonomy-and-blockers.template.md`** (define
-`polecat-autonomy-and-blockers`; ≤ ~45 lines). Content: this pipeline runs AUTONOMOUSLY
+`polecat-autonomy-and-blockers`; ≤ ~60 lines). Content: this pipeline runs AUTONOMOUSLY
 — when a design choice is resolvable from the work item, the rig repo's specs, and its
 existing conventions, RESOLVE it yourself (priority: the work item's stated intent, then
 the repo's conventions); do not invent scope and do not guess blindly; do NOT escalate
 decisions your context already settles; a GENUINE blocker (the work item names a
 contract/input that truly does not exist after you refreshed onto the current target; or
-an action outside your authority) STOPS the work: mail the mayor a STRUCTURED blocker —
+an action outside your authority) STOPS the work: **before stopping, SWEEP the remaining
+scope for every further blocker/seam incompatibility you can already see — the FIRST
+STOP enumerates the COMPLETE known set (blueprint QST-1: batched by default; serial
+one-question-per-cycle escalation wastes a full worker lifetime per question and is a
+defect, not diligence)**; then mail the mayor ONE STRUCTURED DECISION PACKAGE —
 `gc mail send mayor/ -s "BLOCKED: <bead-id> — <one-line decision needed> [HIGH]"` with
-body listing the exact decision, the options, your recommendation, the blast radius, and
+body carrying, per question: a stable question id (`<bead-id>#q1`, `#q2`, …), the exact
+decision needed, the complete option set, your recommendation, the blast radius, and
 what evidence would unblock; set the bead back with
-`--set-metadata rejection_reason="blocked: <one line>"` and `gc runtime drain-ack`;
+`--set-metadata rejection_reason="blocked: <one line per question id>"` and `gc runtime
+drain-ack` — the durable mail + bead metadata IS the question record (QST-2/ACK: the
+mayor acknowledges receipt in-band by mail/nudge; once sent and drain-acked, NEVER
+resend an unanswered question in a later session — resubmission churn is a defect; the
+answer arrives as your bead's release, answer==release);
 escalation is the rare LAST resort, never a default — and never idle-wait for an answer
-in a running session.
+in a running session (the session always releases: drain-ack).
 
 **Step 5 — `polecat-submit-to-evaluator.template.md`** (define
 `polecat-submit-to-evaluator`). THE load-bearing fragment — GCD-WO-CSC-006's
@@ -447,16 +484,30 @@ NOTES="Implemented: $SUMMARY"
 [ -n "$OVERSEER_ISSUE" ] && NOTES="$NOTES
 Overseer-Issue: $OVERSEER_ISSUE"
 
+# Structured residue declaration (C9 `residue` — GEN-6 close-out law). One row
+# per acceptance criterion / scope item of your work item: status delivered,
+# not-delivered, or known-gap; every NON-delivered row names an EXISTING bead
+# or work-order id in mapped_to (fold residue into existing vehicles — never
+# defer to an imaginary future WO, never omit a row). The evaluator REJECTs
+# silent residue (missing rows, unmapped gaps, or a "delivered" the diff does
+# not deliver). Downstream planning consumes these rows as premises.
+RESIDUE='[{"item":"<criterion or scope item>","status":"delivered"},
+          {"item":"<gap>","status":"known-gap","mapped_to":"<existing bead/WO id>"}]'
+
 # Write submission metadata. --set-metadata KEY= clears the value: stale
 # verdicts and rejection reasons from earlier attempts must never ride into a
-# fresh evaluation. eval_reject_count is NOT touched — the evaluator/judge own
-# the shared reject budget. overseer_issue_id is never cleared.
+# fresh evaluation (verdict_patch_id included — the verdict content-state key
+# is re-earned per evaluation, C9). eval_reject_count is NOT touched — the
+# evaluator/judge own the shared reject budget. overseer_issue_id is never
+# cleared. residue is written fresh here on EVERY submission.
 gc bd update "$BEAD_ID" \
   --set-metadata branch="$BRANCH" \
   --set-metadata target="$TARGET" \
   --set-metadata rejection_reason= \
   --set-metadata eval_verdict= \
   --set-metadata judge_verdict= \
+  --set-metadata verdict_patch_id= \
+  --set-metadata residue="$RESIDUE" \
   --notes "$NOTES"
 
 # Route to the evaluator pool (typed selector on gc.kind=eval_request).
@@ -518,7 +569,7 @@ the enumerated insertions):
 
 ```toml
 [vars.evaluator_gated]
-description = "When \"true\" AND the work bead carries judge_verdict=PASS AND the merge source is not an integration/* landing: run-tests degrades to setup+build smoke and handle-failures to smoke-rejection+merge mechanics. Full battery always kept for integration/* landings and for beads without a fresh judge PASS. Effective value is wisp var OR [rigs.formula_vars] (resolved at run time — bd mol wisp does not consume rig vars at pour time; see refinery-wisp-pour-vars-override)."
+description = "When \"true\" AND the work bead carries an approved verdict (judge_verdict PASS or NOT_REQUIRED) whose verdict_patch_id matches the patch-id of the content about to merge AND the merge source is not an integration/* landing: run-tests degrades to setup+build smoke and handle-failures to smoke-rejection+merge mechanics. Full battery always kept for integration/* landings, for beads without an approved verdict, and for any verdict_patch_id mismatch (never degrade on a stale verdict — verdicts key to content-states, not sessions). Effective value is wisp var OR [rigs.formula_vars] (resolved at run time — bd mol wisp does not consume rig vars at pour time; see refinery-wisp-pour-vars-override)."
 default = "false"
 ```
 
@@ -533,11 +584,23 @@ if [ -z "${WORK:-}" ]; then
     --exclude-type=epic --limit=1 --json | jq -r '.[0].id // empty')
 fi
 BRANCH=${BRANCH:-$(gc bd show $WORK --json | jq -r '.[0].metadata.branch // empty')}
+TARGET=${TARGET:-$(gc bd show $WORK --json | jq -r '.[0].metadata.target_branch // .[0].metadata.target // "main"')}
 EVALUATOR_GATED="{{evaluator_gated}}"
 [ "$EVALUATOR_GATED" = "true" ] || EVALUATOR_GATED=$(effective_rig_var evaluator_gated "{{evaluator_gated}}" "false")
 JUDGE_VERDICT=$(gc bd show $WORK --json | jq -r '.[0].metadata.judge_verdict // empty')
+# Content-state guard (C9 verdict_patch_id, blueprint LAW-4): the verdict is
+# valid for exactly the content it proved. Compute the patch-id of what this
+# refinery run will actually merge (post-rebase worktree HEAD vs target); a
+# clean rebase preserves it, conflict resolutions change it. Mismatch or any
+# read failure => full battery (never degrade on a stale verdict). Session
+# restarts / re-wakes never void a verdict — only content change does.
+VERDICT_PATCH_ID=$(gc bd show $WORK --json | jq -r '.[0].metadata.verdict_patch_id // empty')
+PATCH_ID=$(git diff "origin/$TARGET...HEAD" 2>/dev/null | git patch-id --stable | awk '{print $1}')
 GATED_SMOKE="false"
-if [ "$EVALUATOR_GATED" = "true" ] && [ "$JUDGE_VERDICT" = "PASS" ] && [ -n "$BRANCH" ]; then
+if [ "$EVALUATOR_GATED" = "true" ] && [ -n "$BRANCH" ] \
+   && { [ "$JUDGE_VERDICT" = "PASS" ] || [ "$JUDGE_VERDICT" = "NOT_REQUIRED" ]; } \
+   && [ -n "$VERDICT_PATCH_ID" ] && [ -n "$PATCH_ID" ] \
+   && [ "$PATCH_ID" = "$VERDICT_PATCH_ID" ]; then
   case "$BRANCH" in integration/*) : ;; *) GATED_SMOKE="true" ;; esac
 fi
 ```
@@ -549,17 +612,21 @@ fi
   behavior):** the existing setup/typecheck/lint/build + run_tests recipe, UNCHANGED.
   Close-condition line updated to "when the selected checks complete". Explicit note in
   the step: "Full battery is DELIBERATELY kept for `integration/*` landings (convoy
-  autolands — the one-full-gate-at-final-state backstop) and for any bead without
-  `judge_verdict=PASS` (fail-safe: more testing, never less)."
+  autolands — the one-full-gate-at-final-state backstop), for any bead without an
+  approved verdict (`judge_verdict` PASS/NOT_REQUIRED), and for any bead whose
+  `verdict_patch_id` does not match the content about to merge — a stale verdict never
+  degrades anything (fail-safe: more testing, never less; the mismatch itself is not a
+  defect and not a rejection)."
 
 - **7c. `handle-failures` step** — keep the existing text intact; APPEND a gated clause
   to the branch-caused fork: when `GATED_SMOKE = "true"` and the smoke failed because of
   the branch, use the reject-to-pool recipe (workflow cleanup + `gc bd update` back to
   the pool) with THREE deviations from the ungated recipe, each explicit in the formula
   text:
-  1. add `--set-metadata eval_verdict= --set-metadata judge_verdict=` to the
+  1. add `--set-metadata eval_verdict= --set-metadata judge_verdict=
+     --set-metadata verdict_patch_id=` to the
      `gc bd update` call (a rejected-by-refinery bead must never retain a stale judge
-     PASS; the resubmission re-earns both verdicts);
+     PASS or its content-state key; the resubmission re-earns all three);
   2. prefix the reason: `rejection_reason="gated smoke failed: <failure summary>"`;
   3. **do NOT delete the branch** — the ungated recipe's
      `git push origin --delete $BRANCH` line is OMITTED in the gated clause
@@ -613,8 +680,10 @@ change to the fragment.
   `{{ define "<pinned name>" }}`; `polecat-submit-to-evaluator` contains (normalized
   whitespace): "SUPERSEDES ALL EARLIER DONE SEQUENCES", the handoff-override +
   done-target-override supersession sentence, `gc.kind=eval_request`,
-  `--assignee=""`, the three verdict-clear args (`rejection_reason=`, `eval_verdict=`,
-  `judge_verdict=`), the target read
+  `--assignee=""`, the FOUR verdict-clear args (`rejection_reason=`, `eval_verdict=`,
+  `judge_verdict=`, `verdict_patch_id=`), the residue write (`--set-metadata
+  residue=` + the three status literals `delivered`/`not-delivered`/`known-gap` +
+  `mapped_to` + "silent residue"), the target read
   `.metadata.target_branch // .metadata.target // "main"`, "resume-and-fix" +
   "regenerate_on_reject" (reserved reference), and does NOT contain a refinery
   assignment (`assignee="$REFINERY_TARGET"` absent) nor `session wake`/`session nudge`;
@@ -622,8 +691,10 @@ change to the fragment.
   "ROOT CAUSE"; `polecat-evidence-contract` contains "NEVER park work in `git stash`" +
   "commit early" + "not the one who merges"; `polecat-final-rebase-revalidate` contains
   the fetch/rebase-then-re-run-acceptance pair + "conflict-only" prevention line;
-  `polecat-autonomy-and-blockers` contains the structured-blocker field list (decision/
-  options/recommendation/blast radius) + "LAST resort"; `polecat-overseer-issue-marker`
+  `polecat-autonomy-and-blockers` contains the structured-blocker field list (question
+  id `#q1` grammar / decision / complete option set / recommendation / blast radius) +
+  the batching rule ("COMPLETE known set") + the ACK/no-resend rule ("NEVER resend an
+  unanswered question") + "LAST resort"; `polecat-overseer-issue-marker`
   contains the exact literal `Overseer-Issue: `, `overseer_issue_id`, the id-grammar
   charset (`[A-Za-z0-9_.:-]+`), the `merge_strategy=mr` instruction (A2.10 ruling), and
   the inert-when-absent rule. **Cadence-boundary
@@ -633,12 +704,15 @@ change to the fragment.
   contain the one-line cadence pointer ("Push cadence is governed by").
 - **(b) `test/packlint/csc_refinery_gating_test.go`**: `mol-refinery-patrol.toml`
   contains `[vars.evaluator_gated]` + `default = "false"`; `version = 5`; the gate
-  predicate strings (`judge_verdict`, `integration/*` case-glob, `GATED_SMOKE`); the
+  predicate strings (`judge_verdict`, `NOT_REQUIRED`, `verdict_patch_id`,
+  `git patch-id --stable`, the mismatch-runs-full-battery note ("never degrade on a
+  stale verdict"), `integration/*` case-glob, `GATED_SMOKE`); the
   session-restart re-derive line from 7b (assert the literal
   `.[0].metadata.branch // empty` appears in the `run-tests` gate block, so
   `case "$BRANCH" in integration/*)` never reads an undefined value); the
   gated-smoke command pair (setup+build only) and the retained full-battery text; the
-  verdict-clear args in the gated rejection; the gated no-branch-delete pin (the gated
+  THREE verdict-clear args in the gated rejection (incl. `verdict_patch_id=`); the
+  gated no-branch-delete pin (the gated
   clause contains "do NOT delete the branch" / omits `git push origin --delete` — assert
   the ungated fork still contains exactly its one pre-existing delete line, count
   unchanged); the retained literal "FORBIDDEN: Writing
@@ -713,7 +787,9 @@ Each criterion names its backing test:
    `test/packlint/csc_polecat_fragments_test.go`.
 2. `polecat-submit-to-evaluator` supersedes BOTH earlier done sequences in explicit
    language, routes via `gc.kind=eval_request` with `--assignee=""` + cleared
-   `gc.routed_to`, clears `rejection_reason`/`eval_verdict`/`judge_verdict`, preserves
+   `gc.routed_to`, clears `rejection_reason`/`eval_verdict`/`judge_verdict`/
+   `verdict_patch_id`, writes the structured `residue` rows (delivered /
+   not-delivered / known-gap, gaps mapped to existing beads/WOs), preserves
    the bead-metadata target read, keeps `eval_reject_count`/`overseer_issue_id`
    untouched, and contains NO refinery assignment or wake/nudge — same test (contains +
    absence assertions).
@@ -726,9 +802,14 @@ Each criterion names its backing test:
    `overseer_issue_id`, inert when absent — same test (A1 §2 discharged for the polecat
    side).
 5. `mol-refinery-patrol` v5: `evaluator_gated` var (default `"false"`), run-time
-   effective-gate resolution, gated smoke = setup+build only, gated `handle-failures`
-   rejection clears stale verdicts AND preserves the branch (no gated
-   `git push origin --delete`; resume-and-fix), `integration/*` + missing-judge-PASS
+   effective-gate resolution, the R5 predicate complete — approved verdict
+   (`PASS`/`NOT_REQUIRED`) AND `verdict_patch_id` matching the computed patch-id of
+   the content about to merge (mismatch = full battery, never a rejection) — gated
+   smoke = setup+build only, gated `handle-failures`
+   rejection clears stale verdicts incl. `verdict_patch_id` AND preserves the branch
+   (no gated
+   `git push origin --delete`; resume-and-fix), `integration/*` + missing-approval +
+   patch-id-mismatch all
    keep the FULL battery, all in-formula pour sites propagate the var, ungated text
    byte-identical — `test/packlint/csc_refinery_gating_test.go` + byte-preservation
    audit.
@@ -758,7 +839,9 @@ Each criterion names its backing test:
   dual-predicate rationale in the 7b note.
 - **Stale judge PASS after refinery rejection**: cleared explicitly in 7c AND cleared
   again by the submit sequence on resubmission — belt and suspenders across the two WOs
-  (the R1 handshake).
+  (the R1 handshake) — AND structurally dead even if both clears were missed: the R5(d)
+  content-state guard compares `verdict_patch_id` against the actual content about to
+  merge, so a stale verdict can never buy a degrade (third, mechanical axis).
 - **`refinery-rebase-conflict-auto-resolve` interaction** (city fragment that
   auto-resolves trivial rebase conflicts in some deployed cities): its path re-merges
   WITHOUT re-running the polecat — under the gated flow such a bead still carries its
@@ -794,3 +877,49 @@ implements is the polecat half of the estate's issue-correlation thread; the exe
 half is GCD-WO-CSC-008 and the ledger-advancement listener is AGC-WO-CSC-004 — no
 cutover artifact originates here. Runtime exposure reaches hosted cities only via the
 wave-24/25 bindings + deploy WOs at un-pause, under their own gates.
+
+## Blueprint conformance (amended 2026-07-14 — LAW-4/ROL-5/ROL-6/QST/GEN-6)
+
+Tail amendment — BINDING (see the header note). Reshaped pre-dispatch to the ratified
+generation-system blueprint (`master/generation-architecture/BLUEPRINT.md` v1.4), in
+lockstep with the amended C9 authority (GCD-WO-CSC-003 — same wave, merged first; the
+R1 import table above already reflects it). Edits are integrated above (Goal 1/2, R1,
+R5, Steps 4/5/7a/7b/7c, Step 9a/9b, AC 2/5, Risks); summary and citation map:
+
+1. **Content-state keying of the refinery degrade (LAW-4/STM-5) — the load-bearing
+   item.** `evaluator_gated` degrade is valid ONLY when the approved verdict's
+   `verdict_patch_id` (C9) equals the patch-id the refinery computes over the content
+   it is about to merge, post-rebase, in its own worktree (R5(d); the 7b gate block).
+   Mismatch or any read failure = today's full battery — never a rejection, never a
+   degrade on a stale verdict. Clean rebases preserve the patch-id by construction;
+   conflict resolutions change it and legitimately void the degrade. Session
+   restarts, re-wakes, and agent swaps never void a verdict — only content change
+   does. The submit sequence (Step 5) and the gated rejection (7c) both clear
+   `verdict_patch_id` alongside the verdicts, so the key is re-earned per
+   content-state.
+2. **Acting evaluator (ROL-5) — consumer side.** Owned by GCD-WO-CSC-003 (capability
+   self-test, evidence honesty, unsubstantiated-PASS = infra failure); this WO's
+   fragments carry the producer half unchanged: real commands, real captured output,
+   evidence the evaluator re-runs (Steps 1–3). No re-declaration (C9 discipline).
+3. **Conditional judge (ROL-6) — consumer side.** The refinery accepts
+   `judge_verdict` `PASS` OR `NOT_REQUIRED` (the evaluator's no-risk-marker direct
+   handoff) as the approved-verdict predicate (R5(b), 7a/7b); the judge lane runs
+   only on risk markers, per the C9 rule this WO imports. Everything else about the
+   full-battery backstop (integration/* landings, missing approval) is unchanged —
+   fail-safe remains more testing, never less.
+4. **Question package + batching + ACK (QST-1/2/5).** `polecat-autonomy-and-blockers`
+   (Step 4) now pins: one structured DECISION PACKAGE per STOP (stable question id
+   `<bead-id>#qN`, decision, complete option set, recommendation, blast radius,
+   unblocking evidence); the FIRST STOP enumerates the COMPLETE known
+   blocker/incompatibility set (sweep remaining scope before stopping — serial
+   one-question-per-cycle escalation is a defect); the mayor ACKs receipt in-band
+   (mail/nudge) and an unanswered question is NEVER resent (the durable mail + bead
+   metadata is the question record; answer==release); the session always releases
+   (drain-ack — the existing GasCity idiom, kept).
+5. **Residue rows (GEN-6/GOV-4) — producer side.** The submit sequence (Step 5)
+   writes the C9 `residue` rows on EVERY submission: one row per acceptance
+   criterion/scope item — delivered / not-delivered / known-gap — every gap mapped to
+   an EXISTING bead or WO (no-deferral law: residue folds into existing vehicles).
+   Silent residue is an evaluator REJECT (enforced by GCD-WO-CSC-003's ordered
+   checks); downstream planning (GCD-WO-CSC-004's router) consumes the rows as
+   premises.

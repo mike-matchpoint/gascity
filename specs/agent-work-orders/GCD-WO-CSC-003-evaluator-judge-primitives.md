@@ -58,10 +58,21 @@ layering). Clean end state:
    checks stopping at the first substantiated failure, deliverable-in-diff,
    anti-fabrication hunt, band-aid detection, conflict-only merge-readiness, run-to-
    completion. Evaluates the polecat's PUSHED branch in its own worktree (what will
-   actually merge).
+   actually merge). **Acting is proven, not assumed (blueprint ROL-5):** the evaluator
+   runs a capability self-test — one trivial real command whose captured output becomes
+   the FIRST evidence line — before any check; a session that cannot execute commands
+   has NO verdict authority: it reports the infrastructure failure (mayor mail) and
+   writes NO verdict (an unsubstantiated verdict is an infrastructure failure, never a
+   judgment).
 2. **NEW `judge` agent** (`agents/judge/{agent.toml,prompt.template.md}`): rig-scope
    one-shot pool agent, selector on `"gc.kind" = "judge_request"`, default pool
-   `max_active_sessions = 2`, claude/opus/high. Port of the harness stop-judge:
+   `max_active_sessions = 2`, claude/opus/high. **CONDITIONAL (blueprint ROL-6): the
+   judge runs ONLY on risk-marker PASSes** — the evaluator routes a PASS to
+   `judge_request` only when a deterministic risk marker fires (R2 risk-marker table);
+   a no-marker, evidence-backed PASS records `judge_verdict=NOT_REQUIRED` (with the
+   marker checklist outcome in evidence) and hands off to the refinery directly. The
+   judge never runs unconditionally on every PASS and never re-verifies properties
+   owned by deterministic gates. Port of the harness stop-judge:
    maker-checker on the status transition ONLY — verifies the evaluator PASS is
    evidence-backed (spot-reproduces ≥1 executed command), re-confirms deliverable-in-diff,
    re-runs the conflict-only merge check, never resolves anything. Judge-PASS hands the
@@ -73,10 +84,16 @@ layering). Clean end state:
    prompts.
 4. **Verdict metadata contract (C9 — defined ONCE here, everyone else imports):** bead
    metadata keys `eval_verdict`, `eval_evidence` (path/URI to a JSONL artifact of
-   `{"command": …, "output_excerpt": …}` objects), `eval_reject_count`, `judge_verdict`,
-   `rejection_reason`, `decision_state`, `overseer_issue_id` (A1 §2) — with a full
-   writer/clearer ownership table in the pack README. **A PASS without the evidence
-   artifact is invalid (the judge rejects it).**
+   `{"command": …, "output_excerpt": …}` objects), **`verdict_patch_id` (the
+   content-state key: `git patch-id --stable` of the evaluated diff — every verdict is
+   keyed to the CONTENT it proved, blueprint LAW-4/STM-5)**, `eval_reject_count`,
+   `judge_verdict`, `rejection_reason`, `decision_state`, `overseer_issue_id` (A1 §2),
+   **`residue` (structured close-out rows — delivered / not-delivered / known-gap,
+   GEN-6)** — with a full writer/clearer ownership table in the pack README. **A PASS
+   without the evidence artifact is invalid (the judge rejects it), and any verdict
+   without `verdict_patch_id` is invalid — verdicts attach to content-states, never to
+   sessions: re-wakes, crashes, and agent swaps never invalidate a verdict; only
+   content change does.**
 5. **Escalation rule:** rejections share ONE budget (`eval_reject_count`, incremented by
    evaluator AND judge rejections). At `max_eval_rejects` (formula var, default `"2"`)
    the rejecting agent sets `decision_state=mayor_action`, clears routing, and sends
@@ -300,8 +317,11 @@ model = "opus"`.
 | Models | `provider = "claude"`; `[option_defaults] model = "opus"`, `effort = "high"` (both agents; cities re-point provider — and may restate model/effort/pools per C11) |
 | Formula names | `mol-evaluate-task`, `mol-judge-task` (files `formulas/mol-evaluate-task.formula.toml`, `formulas/mol-judge-task.formula.toml`; `formula = "<name>"`, `version = 1`, `contract = "graph.v2"`) |
 | Seam fragment names | `city-architecture-standards`, `city-evidence-doctrine`, `city-invariants` (files `template-fragments/<name>.template.md`) |
-| Verdict keys | `eval_verdict`, `eval_evidence`, `eval_reject_count`, `judge_verdict`, `rejection_reason`, `decision_state`, `overseer_issue_id` |
-| Verdict values | `eval_verdict`/`judge_verdict` ∈ {`PASS`, `REJECT`}; `decision_state` escalation value = `mayor_action` |
+| Verdict keys | `eval_verdict`, `eval_evidence`, `verdict_patch_id`, `eval_reject_count`, `judge_verdict`, `rejection_reason`, `decision_state`, `overseer_issue_id`, `residue` |
+| Verdict values | `eval_verdict` ∈ {`PASS`, `REJECT`}; `judge_verdict` ∈ {`PASS`, `REJECT`, `NOT_REQUIRED`}; `decision_state` escalation value = `mayor_action` |
+| Content-state key grammar | `verdict_patch_id` = first field of `git diff "origin/$TARGET...origin/$BRANCH" \| git patch-id --stable`, computed at verdict time in the verdict-writer's worktree; written with EVERY `eval_verdict`/`judge_verdict` write |
+| Risk markers (judge triggers — deterministic, evaluated by the evaluator at PASS time, checklist + outcomes recorded as an evidence line) | (i) the diff contains zero source-code changes (docs/spec/config-only or empty — the no-diff/empty-leg/docs-band classes); (ii) `eval_reject_count > 0` (first PASS after any rejection); (iii) corrective-class bead: non-empty `overseer_issue_id` OR non-empty `metadata.target_branch` (repair bead). ANY marker ⇒ `gc.kind=judge_request`; NO marker ⇒ `judge_verdict=NOT_REQUIRED` + direct refinery handoff |
+| Residue value shape | JSON array string: `[{"item": "<acceptance criterion / scope item>", "status": "delivered"\|"not-delivered"\|"known-gap", "mapped_to": "<existing bead or WO id — REQUIRED unless delivered>"}]`; writer = the polecat submit sequence (GCD-WO-CSC-005); silent residue = evaluator REJECT |
 | Escalation var | `max_eval_rejects`, default `"2"` |
 | Reserved var | `regenerate_on_reject` (documented, NOT implemented) |
 | Evidence local grammar | `<city-root>/.gc/evidence/<rig>/<work-bead-id>/eval-attempt-<N>.jsonl`, N = `eval_reject_count`+1 at claim time |
@@ -314,16 +334,24 @@ handshake with GCD-WO-CSC-005; both WOs pin this table):**
 | Transition | Writer | Writes |
 |---|---|---|
 | Submit for evaluation | polecat done-override (GCD-WO-CSC-005) | `branch`, `target`, notes; CLEARS `rejection_reason`, `eval_verdict`, `judge_verdict`; sets `gc.kind=eval_request`, `gc.routed_to=` (clear), `--status=open --assignee=""`. KEEPS `eval_reject_count`, `overseer_issue_id` |
-| Evaluator PASS | evaluator | `eval_verdict=PASS`, `eval_evidence=<path/URI>`, `gc.kind=judge_request`, `gc.routed_to=` (clear), `--status=open --assignee=""` |
-| Evaluator REJECT (budget left) | evaluator | `eval_verdict=REJECT`, `rejection_reason=<failure + required fix>`, `eval_reject_count=<n+1>`, `eval_evidence=<path/URI>`, `gc.kind=` (clear), `gc.routed_to="${GC_RIG:+$GC_RIG/}{{binding_prefix}}polecat"`, `--status=open --assignee=""` |
-| Judge PASS | judge | `judge_verdict=PASS`, `gc.kind=` (clear), `--status=open --assignee="$REFINERY_TARGET"`, `gc.routed_to="$REFINERY_TARGET"` + wake/nudge (handoff-override recipe); `branch`/`target` NOT rewritten |
+| Evaluator PASS — risk marker present (R2 risk-marker table) | evaluator | `eval_verdict=PASS`, `eval_evidence=<path/URI>`, `verdict_patch_id=<patch-id>`, `gc.kind=judge_request`, `gc.routed_to=` (clear), `--status=open --assignee=""` |
+| Evaluator PASS — NO risk marker (conditional judge, ROL-6) | evaluator | `eval_verdict=PASS`, `eval_evidence=<path/URI>`, `verdict_patch_id=<patch-id>`, `judge_verdict=NOT_REQUIRED`, `gc.kind=` (clear), `--status=open --assignee="$REFINERY_TARGET"`, `gc.routed_to="$REFINERY_TARGET"` + wake/nudge (handoff-override recipe — the same block the judge-PASS route uses); marker checklist + outcomes appended to the evidence JSONL |
+| Evaluator REJECT (budget left) | evaluator | `eval_verdict=REJECT`, `rejection_reason=<failure + required fix>`, `eval_reject_count=<n+1>`, `eval_evidence=<path/URI>`, `verdict_patch_id=<patch-id>`, `gc.kind=` (clear), `gc.routed_to="${GC_RIG:+$GC_RIG/}{{binding_prefix}}polecat"`, `--status=open --assignee=""` |
+| Judge PASS | judge | `judge_verdict=PASS`, `gc.kind=` (clear), `--status=open --assignee="$REFINERY_TARGET"`, `gc.routed_to="$REFINERY_TARGET"` + wake/nudge (handoff-override recipe); `branch`/`target`/`verdict_patch_id` NOT rewritten — the judge PASS is valid ONLY at the patch-id it re-computed and matched (step 2 of `mol-judge-task`) |
+| Judge stale-content re-route (re-computed patch-id ≠ `verdict_patch_id`) | judge | `eval_verdict=` (clear), `judge_verdict=` (clear), `verdict_patch_id=` (clear), `rejection_reason="stale verdict: branch content changed since evaluation"`, `gc.kind=eval_request`, `gc.routed_to=` (clear), `--status=open --assignee=""`. **`eval_reject_count` NOT incremented** — staleness is a race, not a content failure (blueprint ACC-1/ROL-5); the work re-enters evaluation, never construction |
+| Judge infra re-route (missing/empty/unreproducible evidence, missing `verdict_patch_id` — an unsubstantiated PASS) | judge | same writes as the stale-content row with `rejection_reason="unsubstantiated evaluator PASS: <what was missing>"` — treated as an INFRASTRUCTURE failure of the evaluation lane (LAW-7): never accepted, never charged to the shared budget, never routed to the polecat (the maker did nothing wrong) |
 | Judge REJECT (budget left) | judge | `judge_verdict=REJECT`, `rejection_reason=<one line>`, `eval_reject_count=<n+1>`, `gc.kind=` (clear), route to polecat pool as above |
 | Escalation (either agent, `n+1 ≥ max_eval_rejects`) | rejecting agent | verdict + reason + count as above, PLUS `decision_state=mayor_action`, `gc.kind=` (clear), `gc.routed_to=` (clear), `--status=open --assignee=""`, then mayor mail (R2 subject) |
 | Mayor re-arm (documented recipe, no automation) | mayor/human | clear `decision_state`, optionally reset `eval_reject_count`, re-set `gc.kind=eval_request` (re-evaluate) or `gc.routed_to=<pool>polecat` (re-fix) |
 
-`eval_reject_count` is a SINGLE shared budget: evaluator and judge rejections both
-increment it. `overseer_issue_id` is written only by external correlation machinery
-(estate-side; A1 §2) and NEVER cleared by any agent in this table.
+`eval_reject_count` is a SINGLE shared budget: evaluator and judge CONTENT rejections
+both increment it; the stale-content and infra re-route rows never do (attempt-neutral,
+blueprint ACC-2). `overseer_issue_id` is written only by external correlation machinery
+(estate-side; A1 §2) and NEVER cleared by any agent in this table. `residue` is written
+by the polecat submit sequence (GCD-WO-CSC-005) and never cleared by evaluator/judge —
+it is the close-out record downstream planning consumes. **Content-state law (LAW-4):**
+every verdict write carries the `verdict_patch_id` it proved; verdicts survive re-wakes,
+crashes, and agent swaps — only a changed patch-id invalidates them.
 
 **R4 — effective-var lookup (load-bearing gotcha + the canonical block).** VERIFIED facts:
 (a) `bd mol wisp` does NOT consume `[rigs.formula_vars]` at pour time (in-repo authority:
@@ -482,6 +510,12 @@ landing-arbiter prompt's voice and shape; every command block below is load-bear
 6. **Startup S2 — verify the claim** (assignee = `$GC_AGENT`, status = `in_progress`);
    read `metadata.branch` / `metadata.target` — see the formula's fail-fast step for the
    missing-branch path.
+6b. **S2b — capability self-test (acting evaluator, ROL-5):** before any check, run one
+   trivial real command in your worktree (`git rev-parse HEAD`) and capture its output —
+   this becomes the FIRST line of the evidence JSONL. If you cannot execute commands,
+   you have NO verdict authority: mail the mayor the infrastructure failure, `gc runtime
+   drain-ack`, exit — write NO verdict (a verdict produced without proven command
+   execution is an infrastructure failure, never a judgment).
 7. **S3 — pour the formula wisp and work its steps in order** (steps are NOT
    materialized as child beads — refinery-patrol convention):
 
@@ -499,10 +533,16 @@ gc bd update "$WISP" --assignee="$GC_AGENT"
    Plus the pour-time gotcha note: battery/evidence/budget vars deliberately NOT passed
    here — the formula resolves them from `[rigs.formula_vars]` at run time (R4).
 8. **Verdict contract summary** — the R2 keys + "a PASS without the evidence artifact is
-   invalid; the judge will reject it" + run-to-completion paragraph (never end the
-   session without writing a verdict to the bead; a long-running check still executing
-   is not a finding — wait for its real exit code; if a tool genuinely cannot complete,
-   write REJECT with the infrastructure reason, never a placeholder).
+   invalid; the judge will reject it" + "every verdict you write carries
+   `verdict_patch_id` — the patch-id of the diff you evaluated; verdicts are keyed to
+   content, not to your session" + the risk-marker rule (on PASS, evaluate the R2
+   risk-marker checklist deterministically and record it in evidence: any marker →
+   route `judge_request`; no marker → `judge_verdict=NOT_REQUIRED` + direct refinery
+   handoff — the judge lane exists for risk, not for ceremony) + run-to-completion
+   paragraph (never end the session without writing a verdict to the bead; a
+   long-running check still executing is not a finding — wait for its real exit code;
+   if a tool genuinely cannot complete, write REJECT with the infrastructure reason,
+   never a placeholder).
 9. **City doctrine seams** — one short paragraph: "City-specific architecture standards,
    evidence doctrine, and invariants are appended to this prompt by the city binding
    (fragments `city-architecture-standards`, `city-evidence-doctrine`,
@@ -521,7 +561,12 @@ GUPP, S0/S1/S2, pour `mol-judge-task` with the same four vars, verdict summary, 
 seams paragraph). Role text (stop_judge port, generic): you did not write the code and
 you did not run the adversarial evaluation; your ONLY job is deciding whether the
 proposed transition (evaluator PASS → refinery merge queue) is genuinely earned from the
-evidence on disk; spot-reproduce at least one executed command from the evidence
+evidence on disk; you only ever receive RISK-MARKER transitions (the C9 conditional-judge
+rule — no-marker PASSes are handed to the refinery without you; do not re-verify
+properties the deterministic gates own); the PASS you approve is keyed to content — you
+re-compute the patch-id and approve ONLY at a match (a mismatch is a stale verdict, not
+a defect: re-route to evaluation, budget-neutral); spot-reproduce at least one executed
+command from the evidence
 artifact; confirm the deliverable exists in the branch diff; re-run the conflict-only
 merge check; you never resolve, fix, rebase, or edit anything; you do not over-claim —
 PASS approves exactly one bead's handoff to the refinery, nothing more.
@@ -604,7 +649,13 @@ Steps (`[[steps]]`, chained `needs`):
 2. `setup-worktree` — in the evaluator's own worktree: `git fetch --prune origin`, then
    `git checkout --detach "origin/$BRANCH"` (evaluate the PUSHED branch — what will
    merge; if the ref does not exist, that IS the finding: REJECT "declared branch not on
-   origin").
+   origin"). Then the **capability self-test** (ROL-5): `git rev-parse HEAD` — its
+   `{command, output_excerpt}` pair is the FIRST evidence line; a failure here is an
+   infrastructure failure (mayor mail + drain, NO verdict written, no budget consumed).
+   Then compute the content-state key:
+   `PATCH_ID=$(git diff "origin/$TARGET...origin/$BRANCH" | git patch-id --stable | awk '{print $1}')`
+   — recorded in evidence and written as `verdict_patch_id` with the verdict (empty
+   PATCH_ID on a non-empty diff = infrastructure failure, same posture).
 3. `ordered-checks` — embed the R4 effective-var block, resolve the five battery vars +
    `MAX_EVAL_REJECTS`; then the ordered checks, STOPPING at the first substantiated
    failure (each check's real command + output appended to the evidence file AS IT RUNS
@@ -628,7 +679,15 @@ Steps (`[[steps]]`, chained `needs`):
       special-casing to force green = REJECT).
    6. **City invariants:** enforce every REJECT-level rule the appended city doctrine
       fragments state (inert when a city appended none).
-   7. **Merge-readiness (conflict-only):** `git merge-tree --write-tree
+   7. **Residue declaration (GEN-6):** the submission carries the C9 `residue` rows
+      (bead metadata `residue`, R2 value shape): every acceptance criterion / scope
+      item of the bead's named work maps to a `delivered` row or an explicit
+      `not-delivered`/`known-gap` row whose `mapped_to` names an EXISTING bead or WO.
+      Missing/empty declaration, an unmapped gap, or a claimed-delivered item the diff
+      demonstrably does not deliver = REJECT ("silent residue"). The rows themselves
+      are the polecat's (GCD-WO-CSC-005 submit sequence) — this check verifies
+      presence and honesty, never authors them.
+   8. **Merge-readiness (conflict-only):** `git merge-tree --write-tree
       "origin/$TARGET" "origin/$BRANCH"` — conflict markers reported = failed check;
       a merely-BEHIND but conflict-free branch is merge-ready and MUST NOT be failed for
       staleness; verification only, never resolve (maker's job).
@@ -642,14 +701,24 @@ Steps (`[[steps]]`, chained `needs`):
    "{{evidence_publish_cmd}}" "")`; if non-empty run it, capture the single-line stdout
    as `EVID_REF` (publish failure = do NOT pass — treat as an infrastructure REJECT with
    the reason recorded); else `EVID_REF="${EVID_FILE#$CITY_ROOT/}"`.
-5. `verdict-and-route` — exactly the R3 writes, as three explicit command blocks (PASS /
-   REJECT-with-budget / ESCALATE), each a single chained `gc bd update … && …` so the
-   metadata write cannot be skipped (refinery merge-push chaining idiom). The escalate
+5. `verdict-and-route` — exactly the R3 writes, as FOUR explicit command blocks
+   (PASS-with-risk-marker → `judge_request` / PASS-no-marker → `judge_verdict=
+   NOT_REQUIRED` + direct refinery handoff / REJECT-with-budget / ESCALATE), each a
+   single chained `gc bd update … && …` so the metadata write cannot be skipped
+   (refinery merge-push chaining idiom). Every verdict write includes
+   `verdict_patch_id="$PATCH_ID"` (computed in `setup-worktree`). Before the PASS
+   fork, the step runs the **deterministic risk-marker checklist** (R2 table: (i)
+   zero-source-line/docs-only diff via `git diff --numstat` classification; (ii)
+   `EVAL_REJECT_COUNT > 0`; (iii) non-empty `overseer_issue_id` or
+   `metadata.target_branch`) and appends the checklist + outcomes as an evidence line
+   — the fork between the two PASS blocks is those three tests, never model whim. The
+   PASS-no-marker block uses the SAME refinery handoff recipe as `mol-judge-task`
+   (assignee + `gc.routed_to` + wake/nudge). The escalate
    block ends with `gc mail send mayor/ -s "[EVALUATOR ACTION REQUIRED] $WORK: max eval
    rejects reached [HIGH]" -m "<bead, branch, attempt count, last rejection_reason,
-   evidence ref>"`. PASS is FORBIDDEN unless `$EVID_FILE` exists and is non-empty
-   (`[ -s "$EVID_FILE" ]` guard inline — a PASS without evidence is invalid by
-   construction, not just by judge review).
+   evidence ref>"`. PASS (either block) is FORBIDDEN unless `$EVID_FILE` exists and is
+   non-empty (`[ -s "$EVID_FILE" ]` guard inline — a PASS without evidence is invalid
+   by construction, not just by judge review) AND `$PATCH_ID` is non-empty.
 6. `finalize` — restore the worktree to a neutral detached state
    (`git checkout --detach "origin/$TARGET" || true`), burn the wisp
    (`gc bd mol burn` pour-less variant — one-shot, no next iteration), `gc runtime
@@ -666,23 +735,35 @@ readable = the PASS is unverifiable → JUDGE REJECT (fail closed)").
 Steps:
 
 1. `validate-identity` — as Step 6.1 (work bead must carry `eval_verdict=PASS` AND
-   non-empty `eval_evidence` AND `metadata.branch`; anything else = REJECT immediately
-   with `rejection_reason="judge_request without evidence-backed evaluator PASS"`).
+   non-empty `eval_evidence` AND non-empty `verdict_patch_id` AND `metadata.branch`;
+   anything else is an UNSUBSTANTIATED PASS = the R3 **judge infra re-route** row:
+   clear the verdict keys, `rejection_reason="unsubstantiated evaluator PASS: <what
+   was missing>"`, `gc.kind=eval_request`, NO `eval_reject_count` increment — an
+   infrastructure failure of the evaluation lane is never accepted and never charged
+   to the maker).
 2. `verify-evidence` — resolve the artifact: if `eval_evidence` contains `://`, fetch via
    the effective `evidence_fetch_cmd` (R4 block; fail closed per the var description);
    else read `$CITY_ROOT/<eval_evidence>`. Assert: non-empty; every line parses as JSON
    with BOTH `command` and `output_excerpt` keys (`jq -e 'has("command") and
-   has("output_excerpt")'` per line); then **spot-reproduce at least one executed
-   command** from the artifact in the judge's own worktree (fetch + detach onto
-   `origin/$BRANCH` first, as Step 6.2) and confirm the real output is consistent with
-   the recorded excerpt. Contradiction or unreadable/malformed artifact = REJECT.
+   has("output_excerpt")'` per line). Fetch + detach onto `origin/$BRANCH` (as Step
+   6.2), then **re-compute the content-state key** —
+   `PATCH_ID=$(git diff "origin/$TARGET...origin/$BRANCH" | git patch-id --stable | awk '{print $1}')`
+   — and compare to `metadata.verdict_patch_id`: **mismatch = the R3 stale-content
+   re-route row** (the branch changed since evaluation — clear the verdicts, route
+   `gc.kind=eval_request`, NO budget increment; staleness is a race, never a content
+   REJECT). On match, **spot-reproduce at least one executed
+   command** from the artifact in the judge's own worktree and confirm the real output
+   is consistent with the recorded excerpt. Contradiction or unreadable/malformed
+   artifact = REJECT (a fabricated-evidence content failure — this one DOES consume
+   budget).
 3. `verify-deliverable` — `git diff --stat "origin/$TARGET...origin/$BRANCH"` non-trivial
    toward the bead's named deliverable (anti-empty-work re-check — the judge repeats it
    because the transition, not the evaluation, is being approved).
 4. `verify-merge-readiness` — `git merge-tree --write-tree "origin/$TARGET"
    "origin/$BRANCH"`; conflict = transition not earned (REJECT, one line); behind-only =
    fine (verbatim conflict-only rule from R5).
-5. `verdict-and-route` — R3 writes: judge-PASS block (verbatim, including the wake/nudge
+5. `verdict-and-route` — R3 writes: judge-PASS block (valid only at the matched
+   patch-id from step 2; verbatim, including the wake/nudge
    lines — quote the `polecat-handoff-override` recipe shape):
 
 ```bash
@@ -724,7 +805,16 @@ this statement); (9) the seam-fragment mechanism note recording Step 9c's compos
 outcome (which define wins the name collision on append); (10) a note that these formula
 names are upstream identities pinned by the consuming program — the `<domain>.<name>.v1`
 convention applies to city-side DOMAIN binding formulas (execution-city-operations
-README), not here.
+README), not here; (11) **the content-state law**: every verdict carries
+`verdict_patch_id` (grammar in the R2 table); verdicts attach to content-states, never
+sessions — re-wakes/crashes/agent swaps never invalidate one, only content change does;
+downstream degrades (the gastown `evaluator_gated` flow) are valid ONLY at a matching
+patch-id; (12) **the conditional-judge rule + risk-marker table** (R2): the judge runs
+only on risk-marker PASSes; `judge_verdict=NOT_REQUIRED` semantics and the evaluator's
+recorded marker checklist; (13) **the residue contract** (R2 `residue` shape): writer =
+the polecat submit sequence, silent residue = evaluator REJECT, rows are never cleared
+by evaluator/judge and are consumed as premises by downstream planning (the wo-router
+lane, GCD-WO-CSC-004).
 
 **Step 9 — tests.**
 
@@ -738,6 +828,9 @@ README), not here.
   strings (normalized-whitespace contains): "ASSUME THE WORK IS BROKEN" / "judge
   BEHAVIOR, not intent" (evaluator), "spot-reproduce" + "did not write the code"
   (judge), "git merge-tree --write-tree" + "MUST NOT be failed for staleness" (both),
+  the capability self-test line (`git rev-parse HEAD` + "NO verdict authority",
+  evaluator), the content-state line (`verdict_patch_id`, both prompts), the
+  risk-marker rule (`NOT_REQUIRED`, evaluator),
   the run-to-completion sentence, the three seam names in the doctrine paragraph, and
   the pour commands naming `mol-evaluate-task`/`mol-judge-task`.
 - **(b) `test/packlint/csc_eval_formula_test.go`**: both formulas assert
@@ -746,7 +839,14 @@ README), not here.
   (`gc.kind=judge_request` in evaluate; the refinery handoff block in judge; the polecat
   pool route `{{binding_prefix}}polecat`), the evidence grammar
   (`.gc/evidence/` + `eval-attempt-`), the `[ -s "$EVID_FILE" ]` PASS guard, the R4
-  lookup function name `effective_rig_var` present in BOTH formulas, and vars
+  lookup function name `effective_rig_var` present in BOTH formulas, the content-state
+  machinery (`git patch-id --stable` present in BOTH formulas; `verdict_patch_id`
+  written in every verdict block; the stale-content re-route string "stale verdict"
+  + `gc.kind=eval_request` in the judge formula; the infra re-route string
+  "unsubstantiated evaluator PASS"), the conditional-judge fork (`NOT_REQUIRED` +
+  the risk-marker checklist strings in mol-evaluate-task's verdict step), the residue
+  check strings (`residue` + "silent residue" in mol-evaluate-task's ordered checks),
+  and vars
   `max_eval_rejects`/`evidence_publish_cmd`/`evidence_fetch_cmd` declared with the
   pinned defaults. Include ONE planted-RED style negative: assert the string
   `regenerate_on_reject` does NOT appear in either formula (reserved ≠ declared).
@@ -842,7 +942,11 @@ Each criterion names its backing test:
    (no estate literals — the concrete skill identity rides the city seam fragments,
    AC 7 unweakened).
 3. Both formulas present, graph.v2, with the R3 routing state machine as explicit
-   chained `gc bd update` blocks, the shared `eval_reject_count` budget, the
+   chained `gc bd update` blocks — including `verdict_patch_id` on every verdict write
+   (`git patch-id --stable` in both formulas), the deterministic risk-marker fork with
+   the `NOT_REQUIRED` direct-handoff block, the judge's stale-content and infra
+   re-route rows (budget-neutral, back to `eval_request`), the residue
+   presence/honesty check — plus the shared `eval_reject_count` budget, the
    `max_eval_rejects` escalation to `decision_state=mayor_action` + mayor mail, and the
    evidence-guarded PASS — `test/packlint/csc_eval_formula_test.go`.
 4. Evidence artifact grammar + publish/fetch seam pinned; PASS impossible without a
@@ -850,10 +954,11 @@ Each criterion names its backing test:
 5. Three seam fragments exist as EMPTY defines with the C11 names; city-define-wins
    precedence proven (or a structured blocker raised); mechanism recorded in the README
    — Step 9c compose test.
-6. Pack README carries all ten Step-8 items, including the explicit RIG-scope binding
-   statement, the no-`CLAUDE_CONFIG_DIR` statement, and the reserved
-   `regenerate_on_reject` note — packlint assertion on the README literals (add to 9a
-   or 9d).
+6. Pack README carries all thirteen Step-8 items, including the explicit RIG-scope
+   binding statement, the no-`CLAUDE_CONFIG_DIR` statement, the reserved
+   `regenerate_on_reject` note, the content-state law, the conditional-judge
+   risk-marker table, and the residue contract — packlint assertion on the README
+   literals (add to 9a or 9d).
 7. Zero domain literals in the pack runtime surface; no embed.go/pack.toml change; no
    Go changes outside test files — grep gate + diff audit (Validation).
 8. Agents compose into a scratch city as `codegen-support.evaluator`/`.judge`; new files
@@ -879,9 +984,12 @@ Each criterion names its backing test:
   evidence), forcing the durable-URI seam at un-pause instead of silently passing.
   Documented in the README; the AWS lane is `AGC-WO-CSC-005`-adjacent city wiring, not
   upstream scope.
-- **Stale verdicts skating through:** prevented structurally — the submit sequence
-  (GCD-WO-CSC-005) clears `eval_verdict`/`judge_verdict` on every resubmission, and the
-  refinery's gated branch (same WO) requires `judge_verdict=PASS` freshly present. The
+- **Stale verdicts skating through:** prevented structurally on TWO axes — the submit
+  sequence (GCD-WO-CSC-005) clears `eval_verdict`/`judge_verdict`/`verdict_patch_id` on
+  every resubmission, and the content-state key makes staleness detectable even when a
+  clear is missed: the judge re-computes the patch-id before approving, and the
+  refinery's gated branch (same WO) degrades ONLY when the verdict's `verdict_patch_id`
+  equals the patch-id of the content it is about to merge. The
   R3 table is the single shared authority; both WOs quote it.
 - **WO size:** 2 agents + 2 formulas + 3 one-line fragments + README + 4 test files is
   one coherent generation run. If the prompts balloon, cut prose, never checks — the
@@ -913,3 +1021,58 @@ via the wave-24/25 city bindings + aws-GasCity image/deploy WOs at un-pause, und
 own gates. The C9 contract this WO authors is referenced by the estate's error/overseer
 program (A1 §2 `overseer_issue_id`) — that linkage lives in bead metadata and city
 fragments, not in this repo's runtime surface.
+
+## Blueprint conformance (amended 2026-07-14 — LAW-4/ROL-5/ROL-6/QST/GEN-6)
+
+Tail amendment — BINDING (see the header note). This WO was reshaped pre-dispatch to
+the ratified generation-system blueprint
+(`master/generation-architecture/BLUEPRINT.md` v1.4); the C9 contract it authors is
+the substrate the whole CSC lane inherits, so conformance lands HERE, once. The edits
+are integrated above (Goal 1/2/4, R2, R3, Step 2, Step 6, Step 7, Step 8 items 11–13,
+Step 9, AC 2/3/6, Risks); this section is the summary and the citation map:
+
+1. **Content-state verdict keying (LAW-4/STM-5).** New C9 key `verdict_patch_id` =
+   `git patch-id --stable` of the evaluated diff (`origin/$TARGET...origin/$BRANCH`),
+   written with EVERY `eval_verdict`/`judge_verdict` write (R2 grammar row; Step 6.2
+   compute; Step 6.5/7.5 writes). Verdicts attach to content-states, never worker
+   lifetimes: re-wakes, crashes, and agent swaps never invalidate a verdict — only a
+   changed patch-id does. The judge re-computes and compares before approving; a
+   mismatch is the R3 stale-content re-route (back to `gc.kind=eval_request`,
+   budget-neutral — staleness is a race, not a defect). Downstream: the
+   `evaluator_gated` refinery degrade (GCD-WO-CSC-005) is valid ONLY at a matching
+   patch-id.
+2. **Acting evaluator (ROL-5/LAW-7).** Capability self-test before any verdict is
+   trusted (Goal 1; Step 2 §6b; Step 6.2): one real command whose captured output is
+   the first evidence line; no command execution ⇒ no verdict authority ⇒
+   infrastructure failure, never a judgment. Verdicts carry executed-commands evidence
+   with real output excerpts (the existing `.gc/evidence/` JSONL — unchanged path). An
+   unsubstantiated PASS (missing/empty/unreproducible evidence or missing
+   `verdict_patch_id`) is an infrastructure failure of the evaluation lane: the judge
+   re-routes it to re-evaluation, budget-neutral, never accepts it and never charges
+   the maker (R3 infra re-route row; Step 7.1).
+3. **Conditional judge (ROL-6).** The judge runs ONLY on risk markers, evaluated
+   deterministically by the evaluator at PASS time and recorded in evidence (R2
+   risk-marker table): zero-source/docs-only diff (no-diff/empty-leg/docs-band
+   classes), first PASS after any rejection (`eval_reject_count > 0`),
+   corrective-class bead (`overseer_issue_id` / repair `target_branch`). A no-marker
+   PASS writes `judge_verdict=NOT_REQUIRED` + direct refinery handoff (R3 row; Step
+   6.5). Deterministic properties stay with the deterministic gates — the judge never
+   re-verifies them and never runs as ceremony.
+4. **Question package (QST-1/2/5) — scoped note.** This WO's mayor escalation
+   (`decision_state=mayor_action` + mail) is an ESCALATION lane and keeps its pinned
+   shape; the structured decision-package/batching/ACK contract for worker questions
+   lands with the producers: the polecat blocker fragment (GCD-WO-CSC-005) and the
+   router's mayor-action package (GCD-WO-CSC-004). No re-declaration here (C9
+   discipline: defined once, imported).
+5. **Residue rows (GEN-6/GOV-4).** New C9 key `residue` (R2 shape row): structured
+   delivered / not-delivered / known-gap rows, every gap mapped to an EXISTING bead or
+   WO. Writer = the polecat submit sequence (GCD-WO-CSC-005); this WO's evaluator
+   enforces presence + honesty — silent residue = REJECT (Step 6.3 check 7); rows are
+   never cleared by evaluator/judge and are consumed as premises by downstream
+   planning (GCD-WO-CSC-004's router).
+
+Estate-authority note (FLAG, no action here): the kit C9 table in
+`master/city-scaling-improvements/wo-authoring-kit.md` predates this amendment; this
+WO remains the C9 authority per its own header ("defined ONCE here, everyone else
+imports") — the kit table gains `verdict_patch_id`/`NOT_REQUIRED`/`residue` via the
+Mayor's governed-doc lane, not via this WO.
