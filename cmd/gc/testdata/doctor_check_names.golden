@@ -28,6 +28,7 @@ skill-collision
 order-firing-current
 codex-hooks-drift
 rig-pack-coverage
+telos-pack-wiring
 mcp-config
 mcp-shared-target
 packv2-import-state
