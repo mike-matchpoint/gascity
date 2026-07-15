@@ -10,12 +10,12 @@ literal here breaks three downstream WOs.
 Execution classification: Dev-only (pack content — agents, formulas, template fragments,
 pack README — plus repo-native Go structural tests; no AWS, no deploy surface, no city
 runs). `boundary: dev` (QST-6 fail-closed) · `live-tier: none` (inert pack content until a
-city binds — nothing runs here; live evaluator/judge behavior is GCD-WO-CSC-006's named
+city binds — nothing runs here; live evaluator/judge behavior = GCD-WO-CSC-006's named
 un-pause follow-up) · `blast radius:` the `codegen-support` pack (2 agents, 2 formulas, 3
 seam fragments, README) + named test files; the C9 verdict-metadata contract this WO
-authors is consumed by GCD-WO-CSC-005/006/007, city repos, and the estate overseer
-correlation thread (A1 §2) · `additive vs mutating: additive` (new files only; pack.toml/
-embed.go byte-identical, diff-audited). **Wave 23** (CSC program band 23/24/25;
+authors is consumed cross-repo per the WOC-11 T3 row · `additive vs mutating: additive`
+(new files only; pack.toml/embed.go byte-identical, diff-audited). **Wave 23** (CSC
+program band 23/24/25;
 harness-ledger mega-wave 33 as of 2026-07-14), `blocked_by`
 `GasCity-Dev::GCD-WO-EVAL-001-generic-eval-execution-primitives` (wave 18 — cross-wave,
 parser-safe; its zero-domain-literals grep gate, ZFC discipline, and agents-never-grade-
@@ -1113,99 +1113,78 @@ constraint is stated here — an executor reading only this WO needs nothing els
 
 ## WO-CS v1 conformance (audited 2026-07-14 — Track C)
 
-Track C audit-wave C-W1 amendment. Authorities: `master/generation-architecture/
-IMPLEMENTATION-CHECKPOINT.md` §5 (C-2);
-`Matchpoint-Platform/specs/patterns/SKILL-work-order-audit-and-authoring.md` v3.0.0 §1B
-(WOC-1..11 incl. the PAT-030 schema law). ADDITIVE layer: nothing above is weakened — the
-2026-07-14 "Blueprint conformance" and "Telos pack topology" tail sections above remain
-BINDING and untouched; this section layers alongside them. Amended under the loop's
-build-phase PAUSE (ruling R3) with this unit verified PENDING at 0 runs first-hand.
+Track C audit-wave C-W1 amendment; ADDITIVE — the two 2026-07-14 tails above remain
+BINDING, untouched. Authorities:
+`master/generation-architecture/IMPLEMENTATION-CHECKPOINT.md` §5 (C-2);
+`Matchpoint-Platform/specs/patterns/SKILL-work-order-audit-and-authoring.md` v3.0.0 §1B.
+Amended under the build-phase PAUSE (ruling R3); unit verified PENDING at 0 runs
+first-hand. Tails slimmed 2026-07-15, over-cap remediation — obligations/facts/anchors
+intact; pre-slim prose: this file @ `f8935e2b`.
 
-### WOC map (component → disposition)
+### WOC map
 
-| WOC | disposition |
-|---|---|
-| WOC-1 execution classification | UPGRADED in place (R-C2 live-tier terms) |
-| WOC-2 deliverables + AC-named tests | in-body, verified (each AC names its backing test) |
-| WOC-3 negative scope fence | in-body, verified complete: every deferred seam names its owner (GCD-WO-CSC-005 — polecat/refinery/gastown edits + submit-sequence residue writer; GCD-WO-CSC-004 — router/watch; GCD-WO-CSC-006/007 — city bindings; AGC-WO-CSC-003 — the AWS evidence lane; telos packs — D6 v2 home). `regenerate_on_reject` is a RESERVED name, not a deferred seam |
-| WOC-4 static premises | ADDED — `## Premises (drift gate)` + `## Specs impact` below |
-| WOC-5 runtime premises | ADDED below (`library-id: UNWRITTEN (Track B)`, ruling R2) |
-| WOC-6 coordination declaration | ADDED below |
-| WOC-7 policy defaults | in-body (R2 pinned literals, formula-var defaults) + declaration below |
-| WOC-8 seam probe / anchor record | in-body EXEMPLAR (the @`a47df8f5` provenance record + Step 0 gates) — RE-VERIFIED below, not duplicated. The Step-0(b) EVAL-001 probe was executed first-hand by this audit and PASSES today |
-| WOC-9 pattern + telos pins | ADDED below (PAT-030 now binds via AC-T2) |
-| WOC-10 same-motion doc/index obligations | in-body (pack README = the C9 binding doc; Done Means checklist) + `## Specs impact` below; index motion N/A (pre-SVA @0; Track B) |
-| WOC-11 TCS declaration + schema law | ADDED below — the T3 row records the C9 registration GAP; supervisor ruling R1 folds the register-first obligation into acceptance (AC-T2) |
-| Residue manifest (GEN-6) | ADDED below + acceptance fold (AC-T1). NOTE the two residue layers: the C9 bead-metadata `residue` rows this WO DEFINES are the BEAD-level contract; the table below is this WO's own WO-level close-out record |
+WOC-1 UPGRADED in place (R-C2 live-tier terms — header block). WOC-2 in-body, verified
+(each AC names its backing test). WOC-3 in-body (§ Non-Goals), verified complete — every
+deferred seam names its owner there; `regenerate_on_reject` = RESERVED name, not a
+deferred seam. WOC-4/-5/-6/-9/-11 + GEN-6 residue ADDED below (WOC-4 = `## Premises
+(drift gate)` + `## Specs impact`; WOC-11's T3 row records the C9 registration GAP →
+AC-T2; residue rides AC-T1). WOC-7 in-body + declaration below. WOC-8 in-body EXEMPLAR —
+RE-VERIFIED below. WOC-10 in-body (pack README = the C9 binding doc; Done Means
+checklist) + `## Specs impact` below (incl. the index-motion N/A).
 
-### Anchor re-verification record (WOC-8 — 2026-07-14, GasCity-Dev origin/main @ `e3a3a1673600`)
+### Anchor re-verification record (WOC-8 — 2026-07-14, origin/main @ `e3a3a1673600`)
 
-The in-body @`a47df8f5` record claimed "commits past `c85d92cf` are CSC spec-file-only" —
-TRUE at `a47df8f5`, and re-verified with the necessary supplement: commits
-`a47df8f5..e3a3a167` are NOT spec-only (GCD-WO-EVAL-001 + PE-WO-EVAL-CITY-001 merged into
-`execution-city-operations/`; telos packs + `specs/TELOS.md` + hygiene riders landed), BUT
-zero of them touch `examples/gastown/packs/codegen-support/`,
-`examples/gastown/packs/gastown/`, or the engine files this WO anchors (verified:
+The in-body @`a47df8f5` claim ("commits past `c85d92cf` are CSC spec-file-only") was TRUE
+at `a47df8f5`; supplement: `a47df8f5..e3a3a167` is NOT spec-only, BUT
 `git diff --name-only c85d92cf..e3a3a167 -- examples/gastown/packs/codegen-support
-examples/gastown/packs/gastown` is EMPTY; `agents/landing-arbiter/agent.toml`
-byte-identical). Two content-anchored drift notes: (a) `cmd/gc/embed_builtin_packs_test.go`
-(Step 9c's precedent file) HAS changed — re-anchor
-`TestCodegenSupportBuiltinPackComposesWithGastown` by name, not by "~line 182"; (b) the
-Step-0(b) gate passes TODAY: `ls examples/gastown/packs/execution-city-operations/formulas/`
-→ 3 formulas (EVAL-001 = MERGED_DEV). Every R1/R2 pack-content anchor holds at `e3a3a167`.
+examples/gastown/packs/gastown` is EMPTY and `agents/landing-arbiter/agent.toml` is
+byte-identical. Drift notes: (a)
+`cmd/gc/embed_builtin_packs_test.go` (Step 9c's precedent) HAS changed — re-anchor
+`TestCodegenSupportBuiltinPackComposesWithGastown` by name, not "~line 182"; (b) the
+Step-0(b) gate passes TODAY (3 formulas; EVAL-001 = MERGED_DEV). Every R1/R2 pack-content
+anchor holds at `e3a3a167`.
 
 ### Runtime premises (WOC-5)
 
-`library-id: UNWRITTEN (Track B)` (ruling R2). Park-vs-repair per THIS WO's own text
-(ruling R-C1 Beat-5) — the Step-0 gates below are the WO's own STOPs.
-
-| # | premise (re-verify at Step 0) | runnable check | on failure |
-|---|---|---|---|
-| RP-1 | repo base ≥ `c85d92cf`, rebased to current `origin/main` | `git log -1 origin/main` (Step 0a) | REPAIR (rebase) |
-| RP-2 | GCD-WO-EVAL-001 content merged | `ls examples/gastown/packs/execution-city-operations/formulas/` non-empty (Step 0b) — passes at audit time | PARK (structured blocker) |
-| RP-3 | R1 anchor unchanged | `agents/landing-arbiter/agent.toml` byte-check (Step 0c) | PARK (STOP — anchor drift is a premise break) |
-| RP-4 | embed globs cover new paths | `cat …/codegen-support/embed.go` (Step 0d) | PARK (embed edit is a Non-Goals REJECT) |
-| RP-5 | `gc config show --json` exposes rig formula_vars | the R4 scratch-city STOP-gate (Step 0e) — pin `<RIG-FORMULA-VARS-PATH>` | PARK (WO text: STOP, structured blocker — a Go change is out of ZFC scope) |
-| RP-6 | no deliverable file pre-exists | Step 0f `ls` sweep | PARK (overlap with a sibling WO — STOP) |
-| RP-7 | cities remain PAUSED | per the Cities-PAUSED Validation clause | PARK (standing policy + K1) |
+`library-id: UNWRITTEN (Track B)` (ruling R2). The premise rows ARE the body's own Step-0
+gates (a)–(f) (premises + checks verbatim there); park-vs-repair per THIS WO's own text
+(ruling R-C1 Beat-5): RP-1 (0a) → REPAIR (rebase); RP-2 (0b — passes
+at audit time) → PARK (structured blocker); RP-3 (0c) → PARK (STOP — anchor drift =
+premise break); RP-4 (0d) → PARK (embed edit = Non-Goals REJECT); RP-5 (0e — pin
+`<RIG-FORMULA-VARS-PATH>`) → PARK (STOP — a Go change is out of ZFC scope); RP-6 (0f) →
+PARK (sibling-overlap STOP); RP-7 (cities PAUSED — Validation clause) → PARK (standing
+policy + K1).
 
 ### Coordination declaration (WOC-6)
 
-co_repos: `[]` — single-repo unit (matches the harness ledger). Validation traversal set
-is in-repo (packlint, compose tests, scratch cities inside the Go test harness). The
-matchpoint-loop-harness prompt files (`mlh/prompts/{evaluator,stop_judge}.md`) are
-READ-ONLY content-derivation sources (cited prior art), not validation dependencies — no
-runtime-premise row and no edit leg owed (R-C1: read-only consumption of landed sibling
-content). Ordering: blocked_by `GCD-WO-EVAL-001` (merged); consumed-by GCD-WO-CSC-005
-(same-wave direct-write edge), GCD-WO-CSC-006 (w24), GCD-WO-CSC-007 (w25) — the C9
-contract rides publish-first/adopt-behind-edges (SYSTEM-TELOS §4 rule 7 lane 1; the
-complete sequenced consumer set was emitted in ONE authoring run per ROL-1). Deploy
-surfaces: NONE (`live-tier: none`). `register: UNWRITTEN (Track B)` (ruling R2).
+co_repos: `[]` — single-repo unit (matches the harness ledger); validation traversal
+in-repo (§ Validation).
+`mlh/prompts/{evaluator,stop_judge}.md` = READ-ONLY content-derivation sources — no
+runtime-premise row, no edit leg owed (R-C1). Ordering: blocked_by
+`GCD-WO-EVAL-001` (merged); consumed-by CSC-005 (same-wave direct-write edge), CSC-006
+(w24), CSC-007 (w25) — C9 rides publish-first/adopt-behind edges (SYSTEM-TELOS §4 rule 7
+lane 1; full consumer set emitted in ONE authoring run, ROL-1). Deploy
+surfaces: NONE. `register: UNWRITTEN (Track B)` (ruling R2).
 
 ### Policy defaults (WOC-7)
 
-Pinned in-body as binding law: every R2 literal (names, selectors, pools 4/2, opus/high,
-`max_eval_rejects` default `"2"`, evidence grammar, mail subject), the R3 state machine,
-formula-var defaults (battery vars default `""` = skip; `evidence_publish_cmd` default
-`""` with the single-filesystem caveat). Seed default declared by this audit (WOC-7):
-where the merged upstream `gc bd mol burn` pour-less variant's exact flag spelling
-differs from this file's sketch, the MERGED in-repo formula precedents
-(`mol-debugger-plan`, `mol-refinery-patrol`) are the binding spelling — discovery-first,
-never a confirmation question. A generator asking to confirm a stated default is a
-template defect.
+Pinned in-body as binding law: every R2-table literal, the R3 state machine, the
+formula-var defaults (stated verbatim at the body's formula sketches, incl. the
+`evidence_publish_cmd` single-filesystem caveat). Seed default declared by this audit: where the merged upstream
+`gc bd mol burn` pour-less variant's exact flag spelling differs from this file's sketch,
+the MERGED in-repo formula precedents (`mol-debugger-plan`, `mol-refinery-patrol`) are
+the binding spelling — discovery-first, never a confirmation question; a generator asking
+to confirm a stated default is a template defect.
 
 ### Pattern + telos pins (WOC-9)
 
-Telos pins: `GasCity-Dev/specs/TELOS.md` v3 @ `16026788515b` +
-`Matchpoint-Platform/specs/patterns/SYSTEM-TELOS.md` v2 @ `08994e13e751` (the D6 v2 tail
-section above is the pack-topology arm of the same law). Catalog patterns:
-**PAT-030@1.0.0** (`Matchpoint-Platform/specs/patterns/PAT-030-schema-law.md` @
-`357bee458fc8`) — BINDS the C9 seam this WO authors (see the T3 row + AC-T2; knob
-surface: none — PAT-030 §3 deliberately has no knobs). No other catalog pattern fits
-(no-stretch; no AWS resource named). This repo carries no `specs/patterns/` consumer
-stubs / PATTERN-INDEX shard (pre-adoption; Track B owns stub adoption) — pins here are
-import citations; the PAT-030 ADR-027 marker obligation attaches to the schema-register
-artifact AC-T2 produces, not to Go source (none is written here).
+Telos pins: the § Premises TELOS v3 + SYSTEM-TELOS v2 rows (the D6 v2 tail above = the
+pack-topology arm). Catalog patterns: **PAT-030@1.0.0** (§ Premises row @ `357bee458fc8`)
+— BINDS the C9 seam this WO authors (T3 row + AC-T2; knob surface: none — PAT-030 §3 has
+no knobs). No other catalog pattern fits (no-stretch; no AWS resource named). No
+`specs/patterns/` consumer stubs / PATTERN-INDEX shard here (pre-adoption; Track B) —
+pins are import citations; the PAT-030 ADR-027 marker obligation attaches to the
+schema-register artifact AC-T2 produces, not to Go source.
 
 ### Test-contract declaration (WOC-11 — every row marked; unmarked = authoring-audit RED)
 
@@ -1226,10 +1205,10 @@ artifact AC-T2 produces, not to Go source (none is written here).
 
 ### Residue manifest (GEN-6 — silent residue = REJECT)
 
-Layer note: the C9 bead-metadata `residue` rows this WO DEFINES (R2 value-shape row) are
-the BEAD-level close-out contract for generated work; the table below is THIS WO's own
-WO-level close-out record — the implementer fills it in the structured result; ABSENCE of
-the table is the REJECT condition (adopted verbatim via skill §1B):
+Two layers: the C9 bead-metadata `residue` rows this WO DEFINES (R2 value-shape row) =
+the BEAD-level contract; the table below = this WO's own WO-level close-out record — the
+implementer fills it in the structured result; ABSENCE of the table is the REJECT
+condition (adopted verbatim via skill §1B):
 
 | class | item | detail | vehicle / consumer |
 |---|---|---|---|
@@ -1238,9 +1217,9 @@ the table is the REJECT condition (adopted verbatim via skill §1B):
 | known-gap | <gap> | <blast radius> | <owning-context lane per rule 7> |
 | re-sweep | <obligation> | <verify-at-dispatch command> | <dispatcher premise check> |
 
-`none` rows are stated explicitly. Vehicle mapping is mandatory — no "future WO" value
-exists (no-new-WOs law). The kit-C9-table drift FLAG in the Blueprint-conformance section
-above (Mayor governed-doc lane) is a standing `re-sweep` row candidate.
+`none` rows stated explicitly; vehicle mapping mandatory — no "future WO" value exists
+(no-new-WOs law). The Blueprint-conformance kit-C9-table drift FLAG = a standing
+`re-sweep` row candidate.
 
 ### Acceptance criteria — Track C additions (binding, additive)
 
@@ -1268,36 +1247,31 @@ above (Mayor governed-doc lane) is a standing `re-sweep` row candidate.
 
 ## Telos injection coverage (amended 2026-07-15 — Track-D investigation)
 
-Tail amendment — BINDING (see the header note). ADDITIVE layer: nothing above is
-weakened or contradicted; the "Blueprint conformance", "Telos pack topology", and
-"WO-CS v1 conformance" tail sections above remain BINDING and untouched. This section
-ADDS scope (in-scope systemic work, no-new-WOs law): the owner-ordered Track-D
-telos-injection investigation (Beat 64, 2026-07-15) found a coverage hole in the very
+Tail amendment — BINDING (header note); ADDITIVE: all three tails above stay BINDING,
+untouched. ADDS scope (in-scope systemic work, no-new-WOs law): the owner-ordered Track-D
+telos-injection investigation (Beat 64, 2026-07-15) found a coverage hole in the
 fragment-append mechanism this WO's seam design (Goal 6, Step 5) and the telos packs
-(D6 v2 section above) depend on. The fix lands here because this WO is the pending
-vehicle that authors the fragment-injection seam contract.
+(D6 v2 above) depend on; the fix lands here — this WO authors the fragment-injection
+seam contract.
 
 ### Finding (code-cited; re-anchor by content, not line number)
 
-- **Plain-`.md` prompts never receive fragments.** `renderPromptWithMeta`
+- Plain-`.md` prompts never receive fragments: `renderPromptWithMeta`
   (`cmd/gc/prompt.go:100–106` @ origin/main `76591be5`; content anchor: the
-  `!isPromptTemplatePath(templatePath)` early return) exits BEFORE the shared-template
-  loading and before the `injectFragments` append loop (`cmd/gc/prompt.go:173–187`).
-  The upstream doc comment on `AgentDefaults.AppendFragments`
-  (`internal/config/config.go`) states it plainly: "plain .md remains inert."
-- **The implicit per-provider utility agents ride exactly that path.**
-  `InjectImplicitAgents` (`internal/config/config.go:3205` area; content anchor:
-  `promptTemplate := citylayout.SystemPacksRoot + "/core/assets/prompts/pool-worker.md"`)
-  gives every implicit provider agent — city scope AND per-rig scope, one per configured
-  provider — the plain-md template
-  `internal/bootstrap/packs/core/assets/prompts/pool-worker.md` and
-  `default_sling_formula` fallback `"mol-do-work"`. The Track-D investigation counted 8
-  such implicit utility agents across the estate's current city role mix.
-- **Consequence:** those agents' rendered prompts carry ZERO city fragments — no
-  `workspace.global_fragments`, no `[agent_defaults] append_fragments`, no per-agent
-  `append_fragments`, and therefore zero telos fragments. Any city that slings real work
-  at an implicit provider agent gets an un-primed session outside every doctrine seam
-  this WO authors.
+  `!isPromptTemplatePath(templatePath)` early return) exits BEFORE shared-template
+  loading and the `injectFragments` append loop (`cmd/gc/prompt.go:173–187`); the
+  `AgentDefaults.AppendFragments` doc comment (`internal/config/config.go`): "plain .md
+  remains inert."
+- The implicit per-provider utility agents ride exactly that path: `InjectImplicitAgents`
+  (`internal/config/config.go:3205` area; content anchor: `promptTemplate :=
+  citylayout.SystemPacksRoot + "/core/assets/prompts/pool-worker.md"`) gives every
+  implicit provider agent — city scope AND per-rig, one per configured provider — that
+  plain-md template and `default_sling_formula` fallback `"mol-do-work"`; estate count at
+  investigation: 8 implicit utility agents.
+- Consequence: those rendered prompts carry ZERO city fragments (no
+  `workspace.global_fragments`, no `[agent_defaults]` or per-agent `append_fragments`) —
+  zero telos fragments; real work slung at an implicit provider agent gets an un-primed
+  session outside every doctrine seam this WO authors.
 
 ### Scope additions (binding, additive)
 
@@ -1383,7 +1357,6 @@ fallback), and test files. A diff outside the UNION of the two fences is a findi
 
 none — the deliverable docs are pack content (`examples/gastown/packs/codegen-support/README.md`
 — the C9 binding doc — plus agent/formula/fragment files) and the AC-T2 schema-register
-artifacts; no governed `specs/` doc in this repo is invalidated (`specs/TELOS.md` and
-`specs/architecture.md` untouched by pack-content additions). No `specs/SPECS-INDEX.md`
-exists (pre-SVA `@0` sentinel) — no index motion. Estate-side: the kit C9 table drift is
-FLAGGED (not edited) per the Blueprint-conformance section — Mayor governed-doc lane.
+artifacts; no governed `specs/` doc is invalidated. No `specs/SPECS-INDEX.md` exists
+(pre-SVA `@0` sentinel) — no index motion. Estate-side: the kit C9 table drift is FLAGGED
+(not edited) per the Blueprint-conformance section — Mayor governed-doc lane.
