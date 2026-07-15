@@ -9,7 +9,13 @@ pilot).
 
 Execution classification: Dev-only city-source configuration across five deployed-city
 SOURCE repos (TOML patches + template fragments + repo-native tests; no AWS mutation, no
-deploy surface, no city runs). `boundary=dev`, **wave 25** (CSC program band 23/24/25),
+deploy surface, no city runs). `boundary: dev` (QST-6 fail-closed) · `live-tier: none` (no
+hosted interaction anywhere; runtime exposure only via source-sync at un-pause under the
+AGC WOs' gates) · `blast radius:` five city source repos (the closed A1 §8 edit set) —
+config bindings, doctrine fragments, runbooks, tests; the pilot and exec-mon cities
+receive ZERO commits · `additive vs mutating: additive` (template-applied in-place
+extensions only; byte-preservation rule pinned). **Wave 25** (CSC program band 23/24/25;
+harness-ledger mega-wave 35 as of 2026-07-14),
 `blocked_by` `GasCity-Dev::GCD-WO-CSC-006-city-pack-binding-pilot` (wave 24 — cross-wave
 edge, parser-safe; pinned in harness DEPS regardless).
 Multi-repo unit — co_repos (object-form, EXACTLY per kit A1 §8, for the wiring entry):
@@ -394,3 +400,174 @@ is stated here — an executor reading only this WO needs nothing else:
    role — conformance verdicts stay in the single evaluator/judge lane.
 2. **Guardrails (verbatim, BINDING):**
    "(A) packs carry primitives + sha-pinned POINTERS to the SYSTEM-TELOS snapshot, never a second copy of the law; (B) the monitoring pack emits telemetry/findings ONLY — conformance verdicts stay in the single evaluator/judge lane (GCD-WO-CSC-003 / GCD-WO-EVAL-001, shaped to blueprint ROL-5/6 pre-merge; no telos-specific judge role)."
+
+## WO-CS v1 conformance (audited 2026-07-14 — Track C)
+
+Track C audit-wave C-W1 amendment. Authorities: `master/generation-architecture/
+IMPLEMENTATION-CHECKPOINT.md` §5 (C-2);
+`Matchpoint-Platform/specs/patterns/SKILL-work-order-audit-and-authoring.md` v3.0.0 §1B.
+ADDITIVE layer: nothing above is weakened — the merged GCD-WO-CSC-006 Binding template
+stays NORMATIVE and the 2026-07-14 "Telos pack topology" tail section above remains
+BINDING and untouched. Amended under the loop's build-phase PAUSE (ruling R3) with this
+unit verified PENDING at 0 runs first-hand.
+
+### WOC map (component → disposition)
+
+| WOC | disposition |
+|---|---|
+| WOC-1 execution classification | UPGRADED in place (R-C2 live-tier terms) |
+| WOC-2 deliverables + AC-named tests | in-body, verified |
+| WOC-3 negative scope fence | in-body, verified complete: owners named (pilot defects → blocker referencing 006; capacity → aws-GasCity/NodePool, owner-flagged; secrets → operator, A1 §11; the 4 DEAD stubs + 2 exec-mon cities + the pilot = zero-commit fences) |
+| WOC-4 static premises | ADDED — `## Premises (drift gate)` + `## Specs impact` below |
+| WOC-5 runtime premises | ADDED below (`library-id: UNWRITTEN (Track B)`, ruling R2) |
+| WOC-6 coordination declaration | in-body (co_repos preamble, A1 §8 closed set) — COMPLETED below (traversal set + CRD-7 lane + deploy surfaces) |
+| WOC-7 policy defaults | in-body (template rows; P6 rule) + declaration below |
+| WOC-8 seam probe / anchor record | ADDED — anchor record below (SURVEY DRIFT found and recorded; the delta table is stale in enumerable ways the WO's own re-verify duty absorbs) |
+| WOC-9 pattern + telos pins | ADDED below |
+| WOC-10 same-motion doc/index obligations | in-body (per-city runbooks, names files, Step-6 sweep transcript, punch-list PR section) + `## Specs impact` below; index motion N/A (no SPECS-INDEX anywhere in the set; Track B) |
+| WOC-11 TCS declaration + schema law | ADDED below |
+| Residue manifest (GEN-6) | ADDED below + acceptance fold (AC-T1) |
+
+### Anchor re-verification record (WOC-8 — 2026-07-14; GasCity-Dev @ `e3a3a1673600`; co_repo heads recorded)
+
+Current origin/main heads (all fetched first-hand): `demo-sandbox-…` @ `cb0c81b92fae`,
+`product-enrichment-…` @ `318eec0be7ac`, `compatibility-orchestration-…` @ `c36445b3cf3a`,
+`client-platform-…` @ `75fc23329ae7`, `analytics-…` @ `8e39f4d18c5c`; pilot
+`vehicle-graph-city` @ `0ccf4007f2b8`. **SURVEY DRIFT RECORDED (premise re-pin, R-C3 —
+the Step-0 "re-verify each co_repo against the delta table" duty absorbs all of it; the
+template's parameterized form already tolerates it):**
+
+1. **compat-orch rig roster CHANGED**: now SEVEN rigs — `Matchpoint-Compatibility-Engine`,
+   `Matchpoint-Compatibility-Materialization`, `Matchpoint-Vehicle-Projection`,
+   `Matchpoint-Estate-Foundation`, `Matchpoint-Platform`, `Matchpoint-Estate-Ops`,
+   `Matchpoint-Product-Projection` (the surveyed `Matchpoint-Product-Compatibility`/`pc`
+   and `Matchpoint-Sync-Orchestration`/`so` rigs are GONE — estate repo reshape). T2/T3/T4
+   iterate EVERY rig found on disk (template rule), so the correct count at execution is
+   whatever the worktree shows — the delta-table "×6" and the Step-3 rig-letter list are
+   AUTHORING-TIME SURVEY VALUES, not law. P5 invariants derivation for this city covers
+   the ON-DISK roster (CE/CM/MPP replace pc/so — derive from those repos' `specs/` +
+   `AGENTS.md`).
+2. **`[workspace] max_active_sessions = 24` caps VERIFIED PRESENT at the recorded heads**
+   in compatibility-orchestration (city.toml:10) and client-platform (city.toml:11) —
+   never removed in either repo's history; the other three cities carry per-rig
+   `[[rigs.patches]]` caps (=20) and no `[workspace]` cap. The survey rows above (P6
+   comment-update ONLY, cap value unchanged) stand as written; the Step-7 capacity flags
+   stand LIVE; re-derive at execution. *(Round-2 correction 2026-07-14: the round-1
+   anchor record falsely reported these caps absent — refuted first-hand at the same
+   recorded heads.)*
+3. **`template-fragments/` NOW EXISTS in all five cities**, each carrying
+   `telos-binding.template.md` (P1.5 delivery). T5's "create if absent" executes as
+   create-if-absent; the telos artifact is PRESERVED byte-identical in every city
+   (guardrail A) — same rule as the pilot's audit (GCD-WO-CSC-006 AC-T3).
+4. The pilot's as-built artifacts (fragments/tests/runbook/names file) are NOT yet on
+   `vehicle-graph-city` main (wave 24 unmerged — correct at audit time); Step-0's
+   pull-and-match gate remains the execution-time probe.
+
+### Runtime premises (WOC-5)
+
+`library-id: UNWRITTEN (Track B)` (ruling R2). Park-vs-repair per THIS WO's own text.
+
+| # | premise (re-verify at Step 0) | runnable check | on failure |
+|---|---|---|---|
+| RP-1 | pilot artifacts post-wave-24 on vehicle-graph-city `origin/main` | `git -C <vehicle-graph-city> pull` + `ls tests/csc-resolved-names.env template-fragments/` | PARK (pilot is the clone source; absent = ordering premise broken) |
+| RP-2 | resolved names == pilot's committed names file | 006's R1a–R1d re-run + diff vs `tests/csc-resolved-names.env` | PARK (WO text: "MUST match exactly (STOP on mismatch)") |
+| RP-3 | co_repo survey re-verified (rig rosters, caps, dirs) | per-repo `grep -c '^\[\[rigs\]\]' city.toml` + dir listing vs the delta table + the drift notes above | REPAIR (fold drift into the PR with evidence — the WO's own duty) |
+| RP-4 | post-wave-24 `gc` binary buildable | `make build` in the home worktree | REPAIR (loud SKIP-fail otherwise) |
+| RP-5 | cities remain PAUSED | per the Cities-PAUSED Validation clause | PARK (standing policy + K1) |
+| RP-6 | dead stubs untouched | the dead-stub grep battery over the five diffs | PARK (A1 §8 REJECT — closed edit set) |
+
+### Coordination declaration (WOC-6)
+
+co_repos (object-form, matches the harness ledger): the five cities in the preamble —
+each `role: edit, test: true` because each city's config is edited AND carries its own
+acceptance suite (validation traversal set = the five co_repo worktrees + the home
+worktree for the `gc` build and discovery). `vehicle-graph-city` is READ-ONLY (clone
+source — receives NO commits): per R-C1 that is a runtime-premise row (RP-1) + the
+blocked_by ordering edge through GCD-WO-CSC-006, NOT a co-edit leg. CRD-7 lane:
+**pre-declared co-edit legs (lane 2)** — grant provenance: owner ruling D10 + kit A1 §8
+(F8) BY-NAME pin (the closed five-repo set); the harness CoordinatedMerge saga owns the
+6-repo merge. Deploy surfaces: NONE touched (`live-tier: none`).
+`register: UNWRITTEN (Track B)` (ruling R2).
+
+### Policy defaults (WOC-7)
+
+Pinned in-body as binding law: the merged-006-template-wins conflict rule, the P6
+cap-preservation rule (comments only, values never), upstream defaults untouched,
+sequential-per-city completion when a single run cannot hold all five (Step 1→5
+independent; Step-6 sweep as the final gate — never interleave partial cities). No open
+posture choice remains. A generator asking to confirm a stated default is a template
+defect.
+
+### Pattern + telos pins (WOC-9)
+
+Telos pins: `GasCity-Dev/specs/TELOS.md` v3 @ `16026788515b` +
+`Matchpoint-Platform/specs/patterns/SYSTEM-TELOS.md` v2 @ `08994e13e751` (each city
+carries the P1.5 sha-pinned snapshot pointer — guardrail A; preserved byte-identical per
+the anchor record). Catalog patterns: NONE pinned (no-stretch — mechanical template
+application; consumed contracts are program contracts, see T3). No consumer stubs in any
+repo of the set (pre-adoption; Track B).
+
+### Test-contract declaration (WOC-11 — every row marked; unmarked = authoring-audit RED)
+
+| tier | path class | proving test (path::name) or N/A + justification |
+|---|---|---|
+| T1 logical | decision logic | N/A + justification: mechanical template application — no decision logic authored; per-city divergence is caught by the Step-6 sweep, not computed |
+| T1 logical | parity oracle (refactor-sensitive) | the Step-6 cross-city consistency sweep (5 repos + pilot: identical provider TOML / patch fields / name sets / vars; shared fragments content-identical to the pilot except the marked block; divergence = defect, fix the copy never the pilot) + the byte-preservation rule per city |
+| T2 behavioral | happy | five cloned `csc-*.sh` suites × 5 cities (rig-iterating — EVERY rig asserted) + `gc config show --validate` + `gc lint .` × 5 |
+| T2 behavioral | failure (full-spectrum via T4 negatives) | planted-RED self-check per city (bogus fragment name → FAIL) + dead-stub grep (returns NOTHING) + loud SKIP-fail on missing `$GC_BIN` |
+| T2 behavioral | destructive | N/A + justification: source config only — nothing to destroy |
+| T2 behavioral | partial-failure (forced single-leg) | N/A + justification: no multi-leg runtime in-WO; the 6-repo merge legs belong to the harness CoordinatedMerge saga; sequential-per-city completion bounds partial states (WOC-7) |
+| T2 behavioral | zero-item (never a GREEN path) | rig-iterating assertions must cover EVERY rig found (multi-rig cities: every patch list asserted, not just the first — the compat-orch ×7 reality makes this row load-bearing); planted-RED per city; one city-specific invariant marker each (proves re-derivation, not blind cloning) |
+| T3 contract | schema consumed/published | CONSUMES C9/C10/C11 names via the pilot's committed names file + home-worktree discovery — `$id`: the C9 seam is UNREGISTERED (gap recorded; register-first obligation FOLDED into the C9 authority WO GCD-WO-CSC-003 per supervisor ruling R1). PUBLISHES no data seam (config + doctrine prose) |
+| T4 fixtures | pack import | N/A + justification: no fixture-pack substrate; tests assert against real materialized packs + real TOML per city (fixture-realism) |
+| T5 integration | estate-E2E registration | N/A + justification: city-source repos; no estate same-diff suite rows (ecosystem debt) |
+| T5 integration | requires-siblings | `GasCity-Dev` (home — binary + discovery), the five co_repos, `vehicle-graph-city` (READ-ONLY pilot clone source) (H3) |
+| T6 live | live proof | N/A: live-tier `none` — live fleet validation is a NAMED un-pause follow-up (pilot first per standing policy, then fleet); gated on the 10 secret punch items + 5 evidence-vars items (A2.10), never an acceptance criterion here |
+
+### Residue manifest (GEN-6 — silent residue = REJECT)
+
+The implementer fills this table at close-out; ABSENCE of the table is the REJECT
+condition (adopted verbatim via skill §1B):
+
+| class | item | detail | vehicle / consumer |
+|---|---|---|---|
+| delivered | <deliverable> | <evidence pointer> | — |
+| not-delivered | <item> | <reason> | <EXISTING vehicle — pending-WO amendment / owning lane> |
+| known-gap | <gap> | <blast radius> | <owning-context lane per rule 7> |
+| re-sweep | <obligation> | <verify-at-dispatch command> | <dispatcher premise check> |
+
+`none` rows are stated explicitly. Vehicle mapping is mandatory — no "future WO" value
+exists. Standing row candidates named in-body: 10 secret punch items, 5 evidence-vars
+un-pause items (A2.10), the capacity note (per the anchor record: the surveyed caps no
+longer exist — re-derive and surface honestly).
+
+### Acceptance criteria — Track C additions (binding, additive)
+
+- **AC-T1 (residue manifest):** the structured result carries the GEN-6 residue manifest
+  above; every non-delivered/known-gap row maps to an EXISTING vehicle; silent residue =
+  REJECT.
+- **AC-T2 (same-motion specs impact):** the `## Specs impact` declaration below holds at
+  merge (a false `none` is a reject — CONTRACT §5.5).
+- **AC-T3 (telos artifact preservation):** every city's
+  `template-fragments/telos-binding.template.md` is byte-identical before/after this WO's
+  diff (guardrail A — the anchor record found the file present in ALL five cities).
+
+## Premises (drift gate)
+
+> premises-watermark: GasCity-Dev@0 + Matchpoint-Platform@79 (authored 2026-07-14)
+
+| spec doc | version | sha256-12 | assumed fact |
+|---|---|---|---|
+| specs/TELOS.md | 3 | 16026788515b | home-repo telos card: business-agnostic upstream; MatchPoint doctrine lands ONLY city-side (D10 — the fan-out's whole premise) |
+| Matchpoint-Platform::specs/patterns/SYSTEM-TELOS.md | 2 | 08994e13e751 | estate telos head; guardrail A (sha-pinned pointers, never law copies) binds every templated city |
+| master/city-scaling-improvements/wo-authoring-kit.md | 1 | 68a95bd19427 | C11 fan-out row + A1 §8 (F8) BY-NAME closed edit set (5 cities; 4 stubs DEAD); A1 §11 credential pattern (sha-only lane — ungoverned master/ doc) |
+| master/DOCTRINE-fixture-realism-and-lifecycle-seam-acceptance.md | 2 | 8ee5795d2e6d | binds the per-city test discipline (planted-RED, zero-item never green) + the `city-evidence-doctrine` clone content |
+
+## Specs impact
+
+none — deliverables are city-source config + doctrine fragments + runbooks + tests across
+the five co_repos; no governed `specs/` doc anywhere in the set is invalidated (none of
+the five cities has a `specs/` tree; GasCity-Dev content is untouched beyond this spec
+file). No `specs/SPECS-INDEX.md` exists in any repo of the set (pre-SVA `@0` sentinel) —
+no index motion. The per-city doc obligations (runbooks, names files, sweep transcript,
+punch-list PR section) are named in-body and ride the diffs (WOC-10).

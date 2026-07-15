@@ -4,9 +4,18 @@ NOTE: this WO is long — read the FULL file at
 `specs/agent-work-orders/GCD-WO-CSC-002-ephemeral-workspace-mode.md` in your worktree before
 implementing; tail amendments are BINDING.
 
-Execution classification: **Dev-only** (`boundary=dev`, **wave 23**,
+Execution classification: **Dev-only** — `boundary: dev` (QST-6 fail-closed) ·
+`live-tier: none` (no live surface touched — engine code + pack content + repo-native
+tests; the ADR-024 live drills are aws-GasCity::AGC-WO-CSC-002's named pause exception) ·
+`blast radius:` GasCity-Dev engine (citylayout/runtime routing, rig provisioning, k8s
+no-PVC staging) + gastown pack polecat prompt/worktree script + the DEFAULT PATHS of
+ephemeral runtime artifacts (`.gc/X` → `.gc/runtime/X`, process-lifetime artifacts only,
+mixed-version note pinned in Step 1c); contracts consumed by aws-GasCity::AGC-WO-CSC-002
+and AGC-WO-CSC-007 · `additive vs mutating: additive` (no pre-existing durable data
+transformed; non-k8s cities and persistent-PVC mode byte-parity pinned). **Wave 23** (CSC
+band; harness-ledger mega-wave 33 as of 2026-07-14),
 `blocked_by` = `GasCity-Dev::GCD-WO-CSC-001-runtime-event-nudge-transport` — same-wave
-edge, wired as an apply_deps DIRECT-WRITE per kit ADDENDUM A1 §4). Engine Go + gastown pack
+edge, wired as an apply_deps DIRECT-WRITE per kit ADDENDUM A1 §4. Engine Go + gastown pack
 content inside this repo only; no AWS resources, no deploy surface, no city runs. Master
 cutover contribution: **None (platform repo, no AWS)** — see the section below.
 
@@ -682,3 +691,146 @@ audit test fails on an empty scan; every list assertion requires expected non-ze
 **None (platform repo, no AWS).** Hosted materialization (mirror sidecars, no-PVC flip,
 EFS retirement, drills) is tracked by aws-GasCity CSC WOs (AGC-WO-CSC-002/003/007) in
 their own cutover entries.
+
+## WO-CS v1 conformance (audited 2026-07-14 — Track C)
+
+Track C audit-wave C-W1 amendment. Authorities: `master/generation-architecture/
+IMPLEMENTATION-CHECKPOINT.md` §5 (C-2);
+`Matchpoint-Platform/specs/patterns/SKILL-work-order-audit-and-authoring.md` v3.0.0 §1B
+(WOC-1..11). ADDITIVE layer: nothing above is weakened. Amended under the loop's
+build-phase PAUSE (ruling R3) with this unit verified PENDING at 0 runs first-hand.
+
+### WOC map (component → disposition)
+
+| WOC | disposition |
+|---|---|
+| WOC-1 execution classification | UPGRADED in place (R-C2 live-tier terms) |
+| WOC-2 deliverables + AC-named tests | in-body, verified (every AC names its test) |
+| WOC-3 negative scope fence | in-body, verified complete: every deferred seam names its owner (GCD-WO-CSC-001/C6 — transport; AGC-WO-CSC-002 — mirror serving, verify-fetch hook, mayor runtime-dir render; AGC-WO-CSC-007 — EFS/PVC lifecycle; AGC-WO-CSC-003 — evidence store; AGC-WO-CSC-001 — webhook/CronJob lane; city `append_fragments` — per-city push policy) |
+| WOC-4 static premises | ADDED — `## Premises (drift gate)` + `## Specs impact` below |
+| WOC-5 runtime premises | ADDED below (`library-id: UNWRITTEN (Track B)`, ruling R2) |
+| WOC-6 coordination declaration | ADDED below |
+| WOC-7 policy defaults | in-body (pinned-contract table) + declaration below |
+| WOC-8 seam probe / anchor record | ADDED — anchor record below. Executable probe of the consumed upstream artifact (C6 seams): IMPOSSIBLE at authoring — GCD-WO-CSC-001 is unmerged; the blocked_by serialization + the Required Inputs STOP ("if executing before its merge, STOP and re-queue") are the guard; RP-2 below makes the probe a Step-0 runnable check |
+| WOC-9 pattern + telos pins | ADDED below |
+| WOC-10 same-motion doc/index obligations | in-body (runtime-dir-split.md + Done Means) + `## Specs impact` below; index motion N/A (pre-SVA @0; Track B) |
+| WOC-11 TCS declaration + schema law | ADDED below |
+| Residue manifest (GEN-6) | ADDED below + acceptance fold (AC-T1) |
+
+### Anchor re-verification record (WOC-8 — 2026-07-14, GasCity-Dev origin/main @ `e3a3a1673600`)
+
+Verified first-hand (read-only git): the engine dirs this WO anchors
+(`internal/citylayout`, `internal/nudgequeue`, `internal/config`, `internal/runtime/k8s`,
+`internal/session`, `cmd/gc` non-test) AND the gastown pack
+(`examples/gastown/packs/gastown/`) are byte-identical `c85d92cf..e3a3a167` (only
+`cmd/gc/embed_builtin_packs_test.go` changed — not anchored here). All `file:line`
+references above hold at `e3a3a167`. Note: `internal/builtinpacks/registry.go` HAS changed
+since `a47df8f5` (telos packs registered) — this WO cites it only as "no embed wiring
+changes needed" context (`registry.go:50-60` may have shifted lines; re-anchor by content).
+The committed `.gc/system/packs` mirrors remain ABSENT at `e3a3a167` (Non-Goals check
+re-verified).
+
+### Runtime premises (WOC-5)
+
+`library-id: UNWRITTEN (Track B)` (ruling R2 — honest marker, never a dead pointer).
+Park-vs-repair per THIS WO's own text (ruling R-C1 Beat-5).
+
+| # | premise (re-verify at Step 0) | runnable check | on failure |
+|---|---|---|---|
+| RP-1 | repo base is current `origin/main` | `git fetch origin && git log -1 --format=%H origin/main`, then rebase | REPAIR (rebase + re-verify) |
+| RP-2 | GCD-WO-CSC-001 MERGED (its transport seams are upstream in the same wave) | `grep -rn "apitransport" cmd/gc/providers.go internal/events/` non-empty on the rebased tree (its Step-1 package + registration) | PARK (WO text: "STOP and re-queue — the k8s staging edits collide") |
+| RP-3 | toolchain present | `make setup && make build` | REPAIR |
+| RP-4 | cities remain PAUSED — no hosted interaction | per this WO's Cities-PAUSED Validation clause | PARK (standing policy + kit K1) |
+| RP-5 | no committed `.gc/system/packs` mirrors appeared | `ls .gc/system/packs cmd/gc/.gc/system/packs` (expect absent) | REPAIR (WO text: sync per kit K2 before final commit) |
+
+### Coordination declaration (WOC-6)
+
+co_repos: `[]` — single-repo unit (matches the harness ledger). Validation traversal set
+is entirely in-repo (`t.TempDir()` git repos, fake `k8sOps`, `make test-packs` harnesses).
+Ordering: blocked_by `GasCity-Dev::GCD-WO-CSC-001` (same-wave direct-write edge — the
+serialization that substitutes for a co-edit conflict in `internal/runtime/k8s/`);
+consumed-by `aws-GasCity::AGC-WO-CSC-002` and `AGC-WO-CSC-007` via import citations of the
+pinned-contract table (publish-first, adopt-behind-ordering-edges; SYSTEM-TELOS §4 rule 7
+lane-1 posture). Deploy surfaces: NONE touched (`live-tier: none`); the hosted mirror
+sidecar / no-PVC flip / EFS retirement surfaces belong to the AGC WOs.
+`register: UNWRITTEN (Track B)` — no DEPLOY-SURFACES register exists yet (ruling R2).
+
+### Policy defaults (WOC-7)
+
+Pinned in-body as binding law: the pinned-contract table (env var names, clone-URL
+grammar, `rigs/<name>` landing, NO verify-fetch hook in v1), full-clone (never `--depth`/
+`--filter`), atomic `.tmp-<name>` + rename, fetch/push split with the mirror-fetch-
+without-push hard error, `ErrRigDirty` never-destroy posture. Seed default declared by
+this audit (WOC-7, binding unless the WO text overrides): `make dashboard-check` runs
+ONLY when CI requires it for the touched tree (no `internal/api` surface is touched) — as
+Step 4 already states; a generator asking to confirm any pinned default is a template
+defect.
+
+### Pattern + telos pins (WOC-9)
+
+Telos pins: `GasCity-Dev/specs/TELOS.md` v3 @ `16026788515b` +
+`Matchpoint-Platform/specs/patterns/SYSTEM-TELOS.md` v2 @ `08994e13e751`. Catalog
+patterns: NONE pinned (no-stretch rule — engine-fork workspace/provisioning work; no AWS
+resource named, PAT-001 does not bind). No `specs/patterns/` consumer stubs / shard in
+this repo (pre-adoption; Track B).
+
+### Test-contract declaration (WOC-11 — every row marked; unmarked = authoring-audit RED)
+
+| tier | path class | proving test (path::name) or N/A + justification |
+|---|---|---|
+| T1 logical | decision logic | Test 6 `internal/config/rig_fetch_test.go` URL-resolution table (every Source × MirrorBase × PushBase combination + the pinned hard error — gold table inline) + Test 1 `internal/citylayout/ephemeral_path_test.go` routing table. Misbuild check: the Test 6 combination table + Test 5 reflective Rig↔RigPatch sync are the misbuild pins; no mutation-testing harness exists (recorded honestly) |
+| T1 logical | parity oracle (refactor-sensitive) | Test 8 byte-identical staging goldens (mirror-env absent; persistent-PVC mode) + Test 3 directory-diff against the classification table + Test 2 co-location pin (`StatePath`/`LockPath` UNMOVED) |
+| T2 behavioral | happy | Test 6 fresh clone + idempotent re-run + push-back-to-canonical end-to-end; Test 10 origin-branch recovery |
+| T2 behavioral | failure (full-spectrum via T4 negatives) | Test 6 dirty/diverged/no-source/URL-validation errors; Test 7 CLI aggregate failure (exit non-zero, all reported). No generated negative pack exists (see T4) |
+| T2 behavioral | destructive | Test 10 simulated eviction (delete local worktree + branch, keep bare remote — the REAL eviction shape) |
+| T2 behavioral | partial-failure (forced single-leg) | Test 6 failed-clone-leaves-no-partial-dir (atomic rename pin); Test 7 mixed-outcome aggregation (skip + success + failure in one run) |
+| T2 behavioral | zero-item (never a GREEN path) | Test 4 audit scan asserts NON-EMPTY (≥ the 14 known rows); Test 10 zero-commit guard (a recovery run that finds nothing to recover FAILS) |
+| T3 contract | schema consumed/published | N/A + justification: the exported contract surface is an env/config GRAMMAR (pinned-contract table: env var names, clone-URL grammar, landing rule) + CLI + script behavior — no data-shape payload crosses a seam; downstream consumption is WO-contract import citation + STOP-gates (per premise-pinning CONTRACT: WO files are not pinnable), not schema interchange. No PAT-030 schema class exists here (anti-scope) |
+| T4 fixtures | pack import | N/A + justification: no fixture-pack substrate; fixtures are REAL git repositories/bare remotes built in-test per the fixture-realism doctrine (ecosystem note as in GCD-WO-CSC-001's audit) |
+| T5 integration | estate-E2E registration | N/A + justification: platform-fork repo; no estate same-diff suite row exists (ecosystem debt) |
+| T5 integration | requires-siblings | none (H3) — the MERGED GCD-WO-CSC-001 tree is an ORDERING premise (RP-2), not a sibling test dependency |
+| T6 live | live proof | N/A: live-tier `none` — the ADR-024 proof drills (polecat resume/rejection, `metadata.work_dir`, eviction on the vehicle-graph pilot) are aws-GasCity::AGC-WO-CSC-002's explicitly-named pause exception (owner named in-body) |
+
+### Residue manifest (GEN-6 — silent residue = REJECT)
+
+The implementer fills this table at close-out; ABSENCE of the table is the REJECT
+condition (adopted verbatim via skill §1B):
+
+| class | item | detail | vehicle / consumer |
+|---|---|---|---|
+| delivered | <deliverable> | <evidence pointer> | — |
+| not-delivered | <item> | <reason> | <EXISTING vehicle — pending-WO amendment / owning lane> |
+| known-gap | <gap> | <blast radius> | <owning-context lane per rule 7> |
+| re-sweep | <obligation> | <verify-at-dispatch command> | <dispatcher premise check> |
+
+`none` rows are stated explicitly. Vehicle mapping is mandatory — no "future WO" value
+exists. (The Step-2d "smallest seam + document" fallback, if taken, is a `delivered` row
+naming the chosen seam — see Risks.)
+
+### Acceptance criteria — Track C additions (binding, additive)
+
+- **AC-T1 (residue manifest):** the structured result carries the GEN-6 residue manifest
+  above; every non-delivered/known-gap row maps to an EXISTING vehicle; silent residue =
+  REJECT.
+- **AC-T2 (same-motion specs impact):** the `## Specs impact` declaration below holds at
+  merge (a false `none` is a reject — CONTRACT §5.5).
+
+## Premises (drift gate)
+
+> premises-watermark: GasCity-Dev@0 + Matchpoint-Platform@79 (authored 2026-07-14)
+
+| spec doc | version | sha256-12 | assumed fact |
+|---|---|---|---|
+| specs/TELOS.md | 3 | 16026788515b | repo telos card: business-agnostic orchestration-SDK fork; §4 change law binds every diff; §3 row 11 pins the dolt/bd floors + bead-shadow durability this WO's D3 posture relies on |
+| Matchpoint-Platform::specs/patterns/SYSTEM-TELOS.md | 2 | 08994e13e751 | estate telos head; §4 rule 7 governs the downstream (aws-GasCity) adoption lane of this WO's contracts |
+| master/city-scaling-improvements/wo-authoring-kit.md | 1 | 68a95bd19427 | C7 names THIS WO the engine authority (kit wins on conflict); A1 §4 same-wave direct-write edge; A2.8 mayor-side runtime-dir render = AGC-WO-CSC-002 S4.2; K1 cities-paused; K2 bounded context (sha-only lane — ungoverned master/ doc) |
+| master/DOCTRINE-fixture-realism-and-lifecycle-seam-acceptance.md | 2 | 8ee5795d2e6d | fixture-realism REJECT-level: real git repos/remotes in tests, zero-item runs never green |
+
+## Specs impact
+
+none — this WO's doc deliverable is `engdocs/architecture/runtime-dir-split.md` (a NEW
+engineering doc, named in Done Means and audit-linked by Test 4) plus pack content; no
+governed `specs/` doc is invalidated (`specs/TELOS.md` §3 row 11's dolt/bd/durability
+facts are untouched by a path-routing change; `specs/architecture.md` describes the
+object model / wire surfaces, which this WO does not alter). No `specs/SPECS-INDEX.md`
+exists (pre-SVA `@0` sentinel) — no index motion.

@@ -9,7 +9,14 @@ literal here breaks three downstream WOs.
 
 Execution classification: Dev-only (pack content — agents, formulas, template fragments,
 pack README — plus repo-native Go structural tests; no AWS, no deploy surface, no city
-runs). `boundary=dev`, **wave 23** (CSC program band 23/24/25), `blocked_by`
+runs). `boundary: dev` (QST-6 fail-closed) · `live-tier: none` (inert pack content until a
+city binds — nothing runs here; live evaluator/judge behavior is GCD-WO-CSC-006's named
+un-pause follow-up) · `blast radius:` the `codegen-support` pack (2 agents, 2 formulas, 3
+seam fragments, README) + named test files; the C9 verdict-metadata contract this WO
+authors is consumed by GCD-WO-CSC-005/006/007, city repos, and the estate overseer
+correlation thread (A1 §2) · `additive vs mutating: additive` (new files only; pack.toml/
+embed.go byte-identical, diff-audited). **Wave 23** (CSC program band 23/24/25;
+harness-ledger mega-wave 33 as of 2026-07-14), `blocked_by`
 `GasCity-Dev::GCD-WO-EVAL-001-generic-eval-execution-primitives` (wave 18 — cross-wave,
 parser-safe; its zero-domain-literals grep gate, ZFC discipline, and agents-never-grade-
 themselves layering rules BIND this WO).
@@ -1103,3 +1110,180 @@ constraint is stated here — an executor reading only this WO needs nothing els
    separate packs for separate processes.
 3. **Guardrails (verbatim, BINDING):**
    "(A) packs carry primitives + sha-pinned POINTERS to the SYSTEM-TELOS snapshot, never a second copy of the law; (B) the monitoring pack emits telemetry/findings ONLY — conformance verdicts stay in the single evaluator/judge lane (GCD-WO-CSC-003 / GCD-WO-EVAL-001, shaped to blueprint ROL-5/6 pre-merge; no telos-specific judge role)."
+
+## WO-CS v1 conformance (audited 2026-07-14 — Track C)
+
+Track C audit-wave C-W1 amendment. Authorities: `master/generation-architecture/
+IMPLEMENTATION-CHECKPOINT.md` §5 (C-2);
+`Matchpoint-Platform/specs/patterns/SKILL-work-order-audit-and-authoring.md` v3.0.0 §1B
+(WOC-1..11 incl. the PAT-030 schema law). ADDITIVE layer: nothing above is weakened — the
+2026-07-14 "Blueprint conformance" and "Telos pack topology" tail sections above remain
+BINDING and untouched; this section layers alongside them. Amended under the loop's
+build-phase PAUSE (ruling R3) with this unit verified PENDING at 0 runs first-hand.
+
+### WOC map (component → disposition)
+
+| WOC | disposition |
+|---|---|
+| WOC-1 execution classification | UPGRADED in place (R-C2 live-tier terms) |
+| WOC-2 deliverables + AC-named tests | in-body, verified (each AC names its backing test) |
+| WOC-3 negative scope fence | in-body, verified complete: every deferred seam names its owner (GCD-WO-CSC-005 — polecat/refinery/gastown edits + submit-sequence residue writer; GCD-WO-CSC-004 — router/watch; GCD-WO-CSC-006/007 — city bindings; AGC-WO-CSC-003 — the AWS evidence lane; telos packs — D6 v2 home). `regenerate_on_reject` is a RESERVED name, not a deferred seam |
+| WOC-4 static premises | ADDED — `## Premises (drift gate)` + `## Specs impact` below |
+| WOC-5 runtime premises | ADDED below (`library-id: UNWRITTEN (Track B)`, ruling R2) |
+| WOC-6 coordination declaration | ADDED below |
+| WOC-7 policy defaults | in-body (R2 pinned literals, formula-var defaults) + declaration below |
+| WOC-8 seam probe / anchor record | in-body EXEMPLAR (the @`a47df8f5` provenance record + Step 0 gates) — RE-VERIFIED below, not duplicated. The Step-0(b) EVAL-001 probe was executed first-hand by this audit and PASSES today |
+| WOC-9 pattern + telos pins | ADDED below (PAT-030 now binds via AC-T2) |
+| WOC-10 same-motion doc/index obligations | in-body (pack README = the C9 binding doc; Done Means checklist) + `## Specs impact` below; index motion N/A (pre-SVA @0; Track B) |
+| WOC-11 TCS declaration + schema law | ADDED below — the T3 row records the C9 registration GAP; supervisor ruling R1 folds the register-first obligation into acceptance (AC-T2) |
+| Residue manifest (GEN-6) | ADDED below + acceptance fold (AC-T1). NOTE the two residue layers: the C9 bead-metadata `residue` rows this WO DEFINES are the BEAD-level contract; the table below is this WO's own WO-level close-out record |
+
+### Anchor re-verification record (WOC-8 — 2026-07-14, GasCity-Dev origin/main @ `e3a3a1673600`)
+
+The in-body @`a47df8f5` record claimed "commits past `c85d92cf` are CSC spec-file-only" —
+TRUE at `a47df8f5`, and re-verified with the necessary supplement: commits
+`a47df8f5..e3a3a167` are NOT spec-only (GCD-WO-EVAL-001 + PE-WO-EVAL-CITY-001 merged into
+`execution-city-operations/`; telos packs + `specs/TELOS.md` + hygiene riders landed), BUT
+zero of them touch `examples/gastown/packs/codegen-support/`,
+`examples/gastown/packs/gastown/`, or the engine files this WO anchors (verified:
+`git diff --name-only c85d92cf..e3a3a167 -- examples/gastown/packs/codegen-support
+examples/gastown/packs/gastown` is EMPTY; `agents/landing-arbiter/agent.toml`
+byte-identical). Two content-anchored drift notes: (a) `cmd/gc/embed_builtin_packs_test.go`
+(Step 9c's precedent file) HAS changed — re-anchor
+`TestCodegenSupportBuiltinPackComposesWithGastown` by name, not by "~line 182"; (b) the
+Step-0(b) gate passes TODAY: `ls examples/gastown/packs/execution-city-operations/formulas/`
+→ 3 formulas (EVAL-001 = MERGED_DEV). Every R1/R2 pack-content anchor holds at `e3a3a167`.
+
+### Runtime premises (WOC-5)
+
+`library-id: UNWRITTEN (Track B)` (ruling R2). Park-vs-repair per THIS WO's own text
+(ruling R-C1 Beat-5) — the Step-0 gates below are the WO's own STOPs.
+
+| # | premise (re-verify at Step 0) | runnable check | on failure |
+|---|---|---|---|
+| RP-1 | repo base ≥ `c85d92cf`, rebased to current `origin/main` | `git log -1 origin/main` (Step 0a) | REPAIR (rebase) |
+| RP-2 | GCD-WO-EVAL-001 content merged | `ls examples/gastown/packs/execution-city-operations/formulas/` non-empty (Step 0b) — passes at audit time | PARK (structured blocker) |
+| RP-3 | R1 anchor unchanged | `agents/landing-arbiter/agent.toml` byte-check (Step 0c) | PARK (STOP — anchor drift is a premise break) |
+| RP-4 | embed globs cover new paths | `cat …/codegen-support/embed.go` (Step 0d) | PARK (embed edit is a Non-Goals REJECT) |
+| RP-5 | `gc config show --json` exposes rig formula_vars | the R4 scratch-city STOP-gate (Step 0e) — pin `<RIG-FORMULA-VARS-PATH>` | PARK (WO text: STOP, structured blocker — a Go change is out of ZFC scope) |
+| RP-6 | no deliverable file pre-exists | Step 0f `ls` sweep | PARK (overlap with a sibling WO — STOP) |
+| RP-7 | cities remain PAUSED | per the Cities-PAUSED Validation clause | PARK (standing policy + K1) |
+
+### Coordination declaration (WOC-6)
+
+co_repos: `[]` — single-repo unit (matches the harness ledger). Validation traversal set
+is in-repo (packlint, compose tests, scratch cities inside the Go test harness). The
+matchpoint-loop-harness prompt files (`mlh/prompts/{evaluator,stop_judge}.md`) are
+READ-ONLY content-derivation sources (cited prior art), not validation dependencies — no
+runtime-premise row and no edit leg owed (R-C1: read-only consumption of landed sibling
+content). Ordering: blocked_by `GCD-WO-EVAL-001` (merged); consumed-by GCD-WO-CSC-005
+(same-wave direct-write edge), GCD-WO-CSC-006 (w24), GCD-WO-CSC-007 (w25) — the C9
+contract rides publish-first/adopt-behind-edges (SYSTEM-TELOS §4 rule 7 lane 1; the
+complete sequenced consumer set was emitted in ONE authoring run per ROL-1). Deploy
+surfaces: NONE (`live-tier: none`). `register: UNWRITTEN (Track B)` (ruling R2).
+
+### Policy defaults (WOC-7)
+
+Pinned in-body as binding law: every R2 literal (names, selectors, pools 4/2, opus/high,
+`max_eval_rejects` default `"2"`, evidence grammar, mail subject), the R3 state machine,
+formula-var defaults (battery vars default `""` = skip; `evidence_publish_cmd` default
+`""` with the single-filesystem caveat). Seed default declared by this audit (WOC-7):
+where the merged upstream `gc bd mol burn` pour-less variant's exact flag spelling
+differs from this file's sketch, the MERGED in-repo formula precedents
+(`mol-debugger-plan`, `mol-refinery-patrol`) are the binding spelling — discovery-first,
+never a confirmation question. A generator asking to confirm a stated default is a
+template defect.
+
+### Pattern + telos pins (WOC-9)
+
+Telos pins: `GasCity-Dev/specs/TELOS.md` v3 @ `16026788515b` +
+`Matchpoint-Platform/specs/patterns/SYSTEM-TELOS.md` v2 @ `08994e13e751` (the D6 v2 tail
+section above is the pack-topology arm of the same law). Catalog patterns:
+**PAT-030@1.0.0** (`Matchpoint-Platform/specs/patterns/PAT-030-schema-law.md` @
+`357bee458fc8`) — BINDS the C9 seam this WO authors (see the T3 row + AC-T2; knob
+surface: none — PAT-030 §3 deliberately has no knobs). No other catalog pattern fits
+(no-stretch; no AWS resource named). This repo carries no `specs/patterns/` consumer
+stubs / PATTERN-INDEX shard (pre-adoption; Track B owns stub adoption) — pins here are
+import citations; the PAT-030 ADR-027 marker obligation attaches to the schema-register
+artifact AC-T2 produces, not to Go source (none is written here).
+
+### Test-contract declaration (WOC-11 — every row marked; unmarked = authoring-audit RED)
+
+| tier | path class | proving test (path::name) or N/A + justification |
+|---|---|---|
+| T1 logical | decision logic | The R3 routing state machine is PROMPT/FORMULA content (ZFC — no Go decision logic): proving test = `test/packlint/csc_eval_formula_test.go` (every R3 write-block literal asserted; gold values = the R2/R3 tables in this file) + the planted-RED negative (`regenerate_on_reject` must NOT appear). Misbuild check: the absence assertions ARE the misbuild pins for string contracts; no mutation harness exists (recorded honestly) |
+| T1 logical | parity oracle (refactor-sensitive) | Retention oracle: `git diff --stat origin/main...HEAD` shows `pack.toml` + `embed.go` UNCHANGED (Validation diff audit); no existing behavior is refactored, so no golden-parity oracle is owed beyond the diff audit |
+| T2 behavioral | happy | Step 9c compose test (`cmd/gc/embed_builtin_packs_test.go` extension): agents compose as `codegen-support.evaluator`/`.judge`; new files materialize to `.gc/system/packs/` |
+| T2 behavioral | failure (full-spectrum via T4 negatives) | Step 9c K1 precedence probe (sentinel-absent case fails by construction) + 9b planted-RED negative + `gc lint` diagnostics clean. No generated negative pack exists (see T4 — the gap is the census signal) |
+| T2 behavioral | destructive | N/A + justification: inert pack content — no state is mutated at this tier; the destructive lanes of the R3 machine (rejection routing, escalation) are string-pinned by 9b and behaviorally validated at the pilot (owner: GCD-WO-CSC-006's named un-pause follow-up) |
+| T2 behavioral | partial-failure (forced single-leg) | N/A + justification: no multi-leg runtime here; the state machine's partial-failure rows (judge stale-content + infra re-route — budget-neutral) are 9b-pinned literals; live proof rides the pilot (same owner) |
+| T2 behavioral | zero-item (never a GREEN path) | Kit K6 discipline in-body: every grep/count assertion pins its expected non-zero count; 9c asserts the materialized tree contains the two agent dirs + two formulas + three fragments (non-empty by name) |
+| T3 contract | schema consumed/published | **PUBLISHES the C9 seam** — bead verdict metadata (9 keys + closed value sets), the `residue` JSON value shape, and the evidence JSONL line shape (`{"command","output_excerpt"}`), consumed cross-repo by GCD-WO-CSC-005/006/007, city repos, and the estate overseer thread (A1 §2). `$id`: **NONE — UNREGISTERED** (PAT-030 gap; today the shape lives as prose/tables here + in the kit C9 row + quoted by consumers — exactly the `ProseShapeDuplication` class PAT-030 §4 names). Supervisor ruling R1 (Track C): the register-first obligation is FOLDED into acceptance — see AC-T2. Producer/consumer tests today: the packlint string pins on both sides (9a/9b here; GCD-WO-CSC-005's mirrored pins); schema-derived conformance tests become owed WITH the registration |
+| T4 fixtures | pack import | N/A + ecosystem-debt: no generated fixture pack exists for the C9 seam — packs generate FROM the registered schema (PAT-030 rule 4), so this row is blocked on the AC-T2 registration; the forced-N/A is the census signal routing that substrate work (never deleted to look green) |
+| T5 integration | estate-E2E registration | N/A + justification: platform-fork repo; no estate same-diff suite row exists (ecosystem debt) |
+| T5 integration | requires-siblings | none (H3) — compose tests build scratch cities inside this repo's own test harness |
+| T6 live | live proof | N/A: live-tier `none` — live evaluator/judge behavior (agents actually claiming beads) is GCD-WO-CSC-006's named un-pause follow-up on the vehicle-graph pilot (owner named in-body) |
+
+### Residue manifest (GEN-6 — silent residue = REJECT)
+
+Layer note: the C9 bead-metadata `residue` rows this WO DEFINES (R2 value-shape row) are
+the BEAD-level close-out contract for generated work; the table below is THIS WO's own
+WO-level close-out record — the implementer fills it in the structured result; ABSENCE of
+the table is the REJECT condition (adopted verbatim via skill §1B):
+
+| class | item | detail | vehicle / consumer |
+|---|---|---|---|
+| delivered | <deliverable> | <evidence pointer> | — |
+| not-delivered | <item> | <reason> | <EXISTING vehicle — pending-WO amendment / owning lane> |
+| known-gap | <gap> | <blast radius> | <owning-context lane per rule 7> |
+| re-sweep | <obligation> | <verify-at-dispatch command> | <dispatcher premise check> |
+
+`none` rows are stated explicitly. Vehicle mapping is mandatory — no "future WO" value
+exists (no-new-WOs law). The kit-C9-table drift FLAG in the Blueprint-conformance section
+above (Mayor governed-doc lane) is a standing `re-sweep` row candidate.
+
+### Acceptance criteria — Track C additions (binding, additive)
+
+- **AC-T1 (residue manifest):** the structured result carries the GEN-6 residue manifest
+  above; every non-delivered/known-gap row maps to an EXISTING vehicle; silent residue =
+  REJECT.
+- **AC-T2 (PAT-030 register-first — supervisor ruling R1, Track C 2026-07-14):** BEFORE
+  building the agents/formulas against the C9 shapes, REGISTER the C9 seam per
+  PAT-030@1.0.0: author the C9 verdict-metadata shape (the 9 keys + closed value sets),
+  the `residue` value shape, and the evidence-line shape as versioned JSON Schema 2020-12
+  document(s), `$id`-addressed, with a version + sha row; add the seam ROW referencing the
+  `$id` to the PAT-019 seam register
+  (`Matchpoint-Platform/specs/patterns/CONTRACT-SEAM-REGISTER-pat019.md`; its `$id`-column
+  extension is Track B register work — if the column is not yet writable, the row carries
+  the `$id` in its notes cell as the honest interim, ruling R2 marker discipline).
+  Document-home precedent: the in-repo pack `schemas/` convention
+  (`execution-city-operations/schemas/README.md` mirror doctrine) and the
+  Matchpoint-Platform `packages/contracts/schemas/` lane (PAR-WO-CSC-001) — the executor
+  picks per Platform patterns at execution (in-WO gap-fill, no-deferrals protocol) and
+  records the choice in the residue manifest. The T3 row's declared `$id` + version is
+  then filled in the result. Prose restatements of the shape (here, the kit C9 row, the
+  pack README) become POINTERS to the `$id` per PAT-030 §6 — the README keeps its
+  operating tables but cites the `$id` as ground truth. Single-writer discipline
+  unchanged: this WO remains the C9 authority; consumers pin the `$id`, never re-declare.
+
+## Premises (drift gate)
+
+> premises-watermark: GasCity-Dev@0 + Matchpoint-Platform@79 (authored 2026-07-14)
+
+| spec doc | version | sha256-12 | assumed fact |
+|---|---|---|---|
+| specs/TELOS.md | 3 | 16026788515b | repo telos card: business-agnostic SDK fork; §4 change law binds; zero business literals upstream is card-level law (this WO's REJECT-level grep gate) |
+| Matchpoint-Platform::specs/patterns/SYSTEM-TELOS.md | 2 | 08994e13e751 | estate telos head; §4 rule 7 (versioned seams, single writer) is the change-law frame the C9 contract + AC-T2 registration ride |
+| Matchpoint-Platform::specs/patterns/PAT-030-schema-law.md | 1 | 357bee458fc8 | schema law: one registered JSON Schema 2020-12 per seam deliverable; prose field lists for seam shapes PROHIBITED; register-first WOC-11 STOP; fixture packs generate from the schema (binds AC-T2) |
+| master/city-scaling-improvements/wo-authoring-kit.md | 1 | 68a95bd19427 | C9: this WO IS the verdict-metadata authority ("defined ONCE here, everyone else imports"); A1 §2 `overseer_issue_id`; K2/K6 (sha-only lane — ungoverned master/ doc; kit table predates the Blueprint amendment — FLAG stands) |
+| master/generation-architecture/BLUEPRINT.md | 1 | e5ab1de02432 | v1.4 living law the Blueprint-conformance tail section binds: LAW-4 content-state keying, ROL-5 acting evaluator, ROL-6 conditional judge, QST question package, GEN-6 residue (sha-only lane) |
+| master/DOCTRINE-fixture-realism-and-lifecycle-seam-acceptance.md | 2 | 8ee5795d2e6d | fixture-realism REJECT-level: planted-RED self-checks; zero-item never green; doctrine TEXT stays out of this pack (city-fragment content, D10) |
+
+## Specs impact
+
+none — the deliverable docs are pack content (`examples/gastown/packs/codegen-support/README.md`
+— the C9 binding doc — plus agent/formula/fragment files) and the AC-T2 schema-register
+artifacts; no governed `specs/` doc in this repo is invalidated (`specs/TELOS.md` and
+`specs/architecture.md` untouched by pack-content additions). No `specs/SPECS-INDEX.md`
+exists (pre-SVA `@0` sentinel) — no index motion. Estate-side: the kit C9 table drift is
+FLAGGED (not edited) per the Blueprint-conformance section — Mayor governed-doc lane.

@@ -10,8 +10,14 @@ silent rename.
 
 Execution classification: Dev-only pack content in the GasCity platform fork (formula TOML +
 order/watch script edits + deterministic asset scripts + packlint/Go structural tests; no
-Go role logic, no AWS, no deploy surface, no city runs). `boundary=dev`, **wave 23** (CSC
-program band 23/24/25), `blocked_by`
+Go role logic, no AWS, no deploy surface, no city runs). `boundary: dev` (QST-6
+fail-closed) · `live-tier: none` (offline build + tests only; the first live router run is
+GCD-WO-CSC-006's un-pause binding) · `blast radius:` the `codegen-support` pack (new
+`wo-router` formula + two deterministic scripts, watch script/order text, cartographer
+nudge string) — `spec-cartographer` retained byte-identical; C10 names consumed by
+GCD-WO-CSC-006/007 · `additive vs mutating: additive` (additive migration per C10/D10; the
+legacy lane and its packlint pins untouched). **Wave 23** (CSC program band 23/24/25;
+harness-ledger mega-wave 33 as of 2026-07-14), `blocked_by`
 `GasCity-Dev::GCD-WO-EVAL-001-generic-eval-execution-primitives` (wave 18 — cross-wave,
 parser-safe; pinned in harness DEPS regardless).
 
@@ -807,3 +813,140 @@ citation map:
    submit sequence; enforcement (silent residue = REJECT) is GCD-WO-CSC-003's
    evaluator. The bead-body done_when restates the producer duty so every routed
    polecat sees it.
+
+## WO-CS v1 conformance (audited 2026-07-14 — Track C)
+
+Track C audit-wave C-W1 amendment. Authorities: `master/generation-architecture/
+IMPLEMENTATION-CHECKPOINT.md` §5 (C-2);
+`Matchpoint-Platform/specs/patterns/SKILL-work-order-audit-and-authoring.md` v3.0.0 §1B.
+ADDITIVE layer: nothing above is weakened — the 2026-07-14 "Blueprint conformance" tail
+section above remains BINDING and untouched. Amended under the loop's build-phase PAUSE
+(ruling R3) with this unit verified PENDING at 0 runs first-hand.
+
+### WOC map (component → disposition)
+
+| WOC | disposition |
+|---|---|
+| WOC-1 execution classification | UPGRADED in place (R-C2 live-tier terms) |
+| WOC-2 deliverables + AC-named tests | in-body, verified |
+| WOC-3 negative scope fence | in-body, verified complete: owners named (GCD-WO-CSC-005 — polecat/refinery fragments + gastown formula; GCD-WO-CSC-006/007 — city bindings via `[rigs.formula_vars]`; GCD-WO-CSC-008 — the sole exec-city change). "NO new dependency-inference heuristics" and the self-containment inversion are DESIGN REJECTs of this lane, not deferred seams — no owner owed |
+| WOC-4 static premises | ADDED — `## Premises (drift gate)` + `## Specs impact` below |
+| WOC-5 runtime premises | ADDED below (`library-id: UNWRITTEN (Track B)`, ruling R2) |
+| WOC-6 coordination declaration | ADDED below |
+| WOC-7 policy defaults | in-body (R1 pinned names; fallback-to-legacy posture) + declaration below |
+| WOC-8 seam probe / anchor record | ADDED — anchor record below. The R3 config-shape STOP-gate + Step-0 extraction-fidelity gate are this WO's in-body probes; the consumed upstream artifact (EVAL-001 conventions) is MERGED and was probed first-hand by this audit |
+| WOC-9 pattern + telos pins | ADDED below |
+| WOC-10 same-motion doc/index obligations | in-body (order TOML text, nudge string, PR-recorded line map) + `## Specs impact` below; index motion N/A (pre-SVA @0; Track B) |
+| WOC-11 TCS declaration + schema law | ADDED below |
+| Residue manifest (GEN-6) | ADDED below + acceptance fold (AC-T1). NOTE: the "Upstream residue" bead-body section this WO builds is the CONSUMER of C9 bead-level rows; the table below is this WO's own WO-level close-out record |
+
+### Anchor re-verification record (WOC-8 — 2026-07-14, GasCity-Dev origin/main @ `e3a3a1673600`)
+
+Verified first-hand: `examples/gastown/packs/codegen-support/` is byte-identical
+`c85d92cf..e3a3a167` (git diff empty) — `spec-cartographer.formula.toml` still 3,510
+lines; every R2 KEEP/DROP line ref and R4 watch-script anchor holds at `e3a3a167`.
+GCD-WO-EVAL-001 is MERGED (its conventions bind; probed:
+`execution-city-operations/formulas/` non-empty). The Step-0 re-anchor-by-phrase duty
+stands (main keeps moving).
+
+### Runtime premises (WOC-5)
+
+`library-id: UNWRITTEN (Track B)` (ruling R2). Park-vs-repair per THIS WO's own text.
+
+| # | premise (re-verify at Step 0) | runnable check | on failure |
+|---|---|---|---|
+| RP-1 | repo base current; R2 line refs re-anchored by quoted phrase | Step 0 diff-read + PR line map | REPAIR (re-anchor; content is the identity) |
+| RP-2 | `gc config show --json` rig/var key path observed | the R3 STOP-gate scratch-city run (fixture regenerated from REAL output) | PARK (WO text: "never ship a path you did not observe") |
+| RP-3 | EVAL-001 conventions merged | `ls examples/gastown/packs/execution-city-operations/formulas/` non-empty — passes at audit time | PARK (structured blocker) |
+| RP-4 | toolchain present | `make setup && make build` | REPAIR |
+| RP-5 | cities remain PAUSED | per the Cities-PAUSED Validation clause | PARK (standing policy + K1) |
+
+### Coordination declaration (WOC-6)
+
+co_repos: `[]` — single-repo unit (matches the harness ledger). Validation traversal set
+is in-repo (packlint bash harnesses with fake CLIs, Go structural tier, repo battery).
+`matchpoint-loop-harness/mlh/` is READ-ONLY cited prior art (no premise row, no edit
+leg). Ordering: blocked_by `GCD-WO-EVAL-001` (merged); consumed-by GCD-WO-CSC-006/007
+(C10 names via import citation — publish-first/adopt-behind-edges, SYSTEM-TELOS §4 rule 7
+lane 1). Deploy surfaces: NONE (`live-tier: none`). `register: UNWRITTEN (Track B)`
+(ruling R2).
+
+### Policy defaults (WOC-7)
+
+Pinned in-body as binding law: the R1 literals (`wo-router`, `wo_planning_formula`,
+legacy default `spec-cartographer`), the fail-safe posture (any config-read failure →
+legacy formula, never a crash), the singleton-cap + dual-formula busy gate, fail-loud
+emit (no silent fallbacks). Seed default declared by this audit (WOC-7): the Step-6
+formula-loads smoke uses the `github.com/BurntSushi/toml` decode assertion as the ALWAYS-ON
+lane; `gc formula show wo-router` runs ADDITIONALLY when a harness hook exists (the WO's
+"if/otherwise" resolves to both-when-available, decode-at-minimum — never a confirmation
+question). A generator asking to confirm a stated default is a template defect.
+
+### Pattern + telos pins (WOC-9)
+
+Telos pins: `GasCity-Dev/specs/TELOS.md` v3 @ `16026788515b` +
+`Matchpoint-Platform/specs/patterns/SYSTEM-TELOS.md` v2 @ `08994e13e751`. Catalog
+patterns: NONE pinned (no-stretch — pack content, no AWS resource, no estate data seam
+authored; the C9 residue rows it READS are GCD-WO-CSC-003's seam, see T3). No consumer
+stubs / shard in this repo (pre-adoption; Track B).
+
+### Test-contract declaration (WOC-11 — every row marked; unmarked = authoring-audit RED)
+
+| tier | path class | proving test (path::name) or N/A + justification |
+|---|---|---|
+| T1 logical | decision logic | `test/packlint/wo_router_emit_test.go` golden-input case (the emit-assembly jq — gold `route_plan.json` fixture + planted RED: dropped convoy `owned` label fails the preflight) + `wo_router_watch_test.go` 4-case selection matrix. Misbuild check: the planted-RED cases are the misbuild pins; no mutation harness exists (recorded honestly) |
+| T1 logical | parity oracle (refactor-sensitive) | Retention oracle: `spec-cartographer.formula.toml` byte-identical (CI diff check) + both pre-existing cartographer packlint suites green UNMODIFIED |
+| T2 behavioral | happy | watch case (a) var set → `wo-router` slung; the emit golden case end-to-end (preflight → branch push → `bd create --graph` → `emitted.json`) |
+| T2 behavioral | failure (full-spectrum via T4 negatives) | watch case (c) config-read failure → legacy fallback, no crash; script env-guard negatives (exit 2 + message); no generated negative pack exists (see T4) |
+| T2 behavioral | destructive | N/A + justification: the mutation path (`bd create --graph`, HOLDING `bd batch`) is exercised against fake CLIs only; LIVE behavioral proof of the mutation path is the named un-pause pilot follow-up (owner: GCD-WO-CSC-006) — AC 3 states this split explicitly |
+| T2 behavioral | partial-failure (forced single-leg) | The `bd batch` HOLDING-close SOFT-failure lane (`emit_batch_failure.json`, continue) is formula-pinned text; fake-CLI tier exercises the env-guard + preflight-failure legs — full multi-leg partial-failure proof rides the pilot (honest limit recorded) |
+| T2 behavioral | zero-item (never a GREEN path) | `wo-router-validate-store.sh` check 1 (bead count ≠ node count FAILS; zero-item never green) + packlint expected-count pins (`grep -c 'id = "'` → 4) |
+| T3 contract | schema consumed/published | CONSUMES the C9 `residue` rows (authority `GCD-WO-CSC-003`; Step 2.2 item 4b) — `$id`: UNREGISTERED (gap recorded; the register-first obligation is FOLDED into the C9 AUTHORITY WO per supervisor ruling R1 — its AC-T2; this consumer pins the `$id` once minted, never re-declares). PUBLISHES `route_plan.json`/`emit_plan.json` — intra-pack RUN artifacts consumed in-run by this formula's own scripts + the shared preflight (intra-component; PAT-030 anti-scope — same adjudication as GCD-WO-CSC-001's audit, recorded for supervisor review) |
+| T4 fixtures | pack import | N/A + justification: fixtures are in-repo real-shaped (`route_plan.json` per fixture-realism; fake-`gc` arms returning REAL observed JSON shapes); no generated pack substrate (ecosystem debt rides the C9 registration) |
+| T5 integration | estate-E2E registration | N/A + justification: platform-fork repo; no estate same-diff suite row (ecosystem debt) |
+| T5 integration | requires-siblings | none (H3) |
+| T6 live | live proof | N/A: live-tier `none` — first live router run = GCD-WO-CSC-006's binding at un-pause (owner named in-body; AC 7) |
+
+### Residue manifest (GEN-6 — silent residue = REJECT)
+
+The implementer fills this table at close-out; ABSENCE of the table is the REJECT
+condition (adopted verbatim via skill §1B). (Layer note: the bead-body "Upstream residue"
+section this WO's router emits is the C9 BEAD-level consumer lane; this table is the
+WO-level close-out record.)
+
+| class | item | detail | vehicle / consumer |
+|---|---|---|---|
+| delivered | <deliverable> | <evidence pointer> | — |
+| not-delivered | <item> | <reason> | <EXISTING vehicle — pending-WO amendment / owning lane> |
+| known-gap | <gap> | <blast radius> | <owning-context lane per rule 7> |
+| re-sweep | <obligation> | <verify-at-dispatch command> | <dispatcher premise check> |
+
+`none` rows are stated explicitly. Vehicle mapping is mandatory — no "future WO" value
+exists.
+
+### Acceptance criteria — Track C additions (binding, additive)
+
+- **AC-T1 (residue manifest):** the structured result carries the GEN-6 residue manifest
+  above; every non-delivered/known-gap row maps to an EXISTING vehicle; silent residue =
+  REJECT.
+- **AC-T2 (same-motion specs impact):** the `## Specs impact` declaration below holds at
+  merge (a false `none` is a reject — CONTRACT §5.5).
+
+## Premises (drift gate)
+
+> premises-watermark: GasCity-Dev@0 + Matchpoint-Platform@79 (authored 2026-07-14)
+
+| spec doc | version | sha256-12 | assumed fact |
+|---|---|---|---|
+| specs/TELOS.md | 3 | 16026788515b | repo telos card: business-agnostic SDK fork; §4 change law binds; zero business literals in pack content |
+| Matchpoint-Platform::specs/patterns/SYSTEM-TELOS.md | 2 | 08994e13e751 | estate telos head; rule 7 governs the C10 publish/adopt lane to GCD-WO-CSC-006/007 |
+| master/city-scaling-improvements/wo-authoring-kit.md | 1 | 68a95bd19427 | K4-C10: this WO IS the router-output authority (one work bead per WO; explicit annotations only; convoy/HOLDING machinery preserved verbatim; watch formula-name var); K2/K6 (sha-only lane — ungoverned master/ doc) |
+| master/generation-architecture/BLUEPRINT.md | 1 | e5ab1de02432 | v1.4 living law the Blueprint-conformance tail binds: QST-1/2/5 decision packages + batching + ACK, GEN-6 residue consumption, LAW-4 verdict-metadata firewall (sha-only lane) |
+| master/DOCTRINE-fixture-realism-and-lifecycle-seam-acceptance.md | 2 | 8ee5795d2e6d | fixture-realism REJECT-level: real-shaped fixtures, zero-item never green, planted-RED self-checks |
+
+## Specs impact
+
+none — deliverables are pack content + packlint tests; no governed `specs/` doc in this
+repo is invalidated. No `specs/SPECS-INDEX.md` exists (pre-SVA `@0` sentinel) — no index
+motion. The in-pack doc obligations (order TOML description text, formula description
+paragraphs, PR line map) are named in-body and ride the diff (WOC-10).
