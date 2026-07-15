@@ -43,7 +43,11 @@ func main() {
 	}
 	dirInfos := map[string]*dirInfo{}
 
-	skipDirs := map[string]bool{"vendor": true, "node_modules": true, ".git": true}
+	skipDirs := map[string]bool{"vendor": true, "node_modules": true, ".git": true,
+		// CONVENTION-repo-walker-exclusions (JR-2026-007): tier-1 nested-checkout
+		// dirs — this tool MUTATES files it finds; descending into live agent
+		// worktrees writes into foreign in-progress work (REJECT-tier).
+		"worktrees": true, ".gc": true, ".beads": true}
 
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {

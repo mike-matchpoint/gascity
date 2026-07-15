@@ -164,7 +164,10 @@ func findPackDirs(root string) ([]string, error) {
 
 func lintSkipDir(name string) bool {
 	switch name {
-	case ".git", ".gc", ".beads", "node_modules":
+	case ".git", ".gc", ".beads", "node_modules",
+		// CONVENTION-repo-walker-exclusions (JR-2026-007) tier-1: never
+		// descend into nested agent-worktree checkouts.
+		"worktrees", "vendor":
 		return true
 	default:
 		return false
