@@ -85,6 +85,11 @@ back to the default prompt. Strict errors on:
   - no agent name given (from args, GC_ALIAS, or GC_AGENT)
   - agent name not in city config (typo detection — the main use case)
   - agent's prompt_template points at a file that cannot be read
+  - a configured inject fragment is missing or fails to render
+    (the default, non-strict path warns and skips instead)
+  - a telos pack fragment configured for this agent is missing from
+    the rendered output (spec-17 R10; only when telos packs are
+    imported into the city's pack graph)
 
 Strict does NOT error on agents whose config intentionally lacks a
 prompt_template (a supported minimal config), on templates that render
@@ -115,7 +120,7 @@ to empty output from valid conditional logic, or on suspended states
 	}
 	cmd.Flags().BoolVar(&hookMode, "hook", false, "compatibility mode for runtime hook invocations")
 	cmd.Flags().StringVar(&hookFormat, "hook-format", "", "format hook output for a provider")
-	cmd.Flags().BoolVar(&strictMode, "strict", false, "fail on missing city, missing or unknown agent, or unreadable prompt_template instead of falling back to the default prompt")
+	cmd.Flags().BoolVar(&strictMode, "strict", false, "fail on missing city, missing or unknown agent, unreadable prompt_template, or missing inject/telos fragments instead of falling back")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit JSON summary")
 	return cmd
 }
@@ -138,7 +143,9 @@ func doPrime(args []string, stdout, stderr io.Writer) int { //nolint:unparam // 
 
 // doPrimeWithMode's strict-mode contract: only states that would indicate
 // a user mistake (missing city config, no agent name, unknown agent name,
-// unreadable prompt_template file) error out. Supported minimal configs
+// unreadable prompt_template file, a configured inject fragment that is
+// missing or fails to render, or a telos pack fragment configured for the
+// role that is absent from the rendered output) error out. Supported minimal configs
 // (agent with no prompt_template at all, or a template that legitimately
 // renders to empty output via conditional logic) and intentional quiet
 // states (suspended city/agent) remain silent even under --strict —
@@ -316,8 +323,30 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 				a.InheritedAppendFragments,
 				cfg.AgentDefaults.AppendFragments,
 			)
-			prompt := renderPrompt(fsys.OSFS{}, cityPath, cityName, a.PromptTemplate, ctx, cfg.Workspace.SessionTemplate, stderr,
-				cfg.PackDirs, fragments, nil)
+			var prompt string
+			if strictMode {
+				// --strict rendering contract (spec-17 R10 enforcement seam):
+				// a configured inject fragment that is missing or fails to
+				// execute is an error, and every telos pack fragment
+				// configured for this role must land in the rendered output.
+				// The default (non-strict) path below keeps warn-and-skip.
+				// Note: in hook mode these failures occur after the strict
+				// preconditions ran hook side effects; render-stage strict
+				// failures do not roll those back.
+				res, rErr := renderPromptWithMetaOptions(fsys.OSFS{}, cityPath, cityName, a.PromptTemplate, ctx, cfg.Workspace.SessionTemplate, stderr,
+					cfg.PackDirs, fragments, nil, promptRenderOptions{StrictInject: true})
+				if rErr != nil {
+					fmt.Fprintf(stderr, "gc prime: agent %q: %v\n", agentName, rErr) //nolint:errcheck // best-effort stderr
+					return 1
+				}
+				if !assertTelosFragmentsRendered(stderr, cfg, agentName, fragments, res) {
+					return 1
+				}
+				prompt = res.Text
+			} else {
+				prompt = renderPrompt(fsys.OSFS{}, cityPath, cityName, a.PromptTemplate, ctx, cfg.Workspace.SessionTemplate, stderr,
+					cfg.PackDirs, fragments, nil)
+			}
 			if prompt != "" {
 				writePrimePromptWithFormat(stdout, cityName, ctx.AgentName, prompt, hookMode, hookFormat, suppressHookPrompt)
 				return 0
