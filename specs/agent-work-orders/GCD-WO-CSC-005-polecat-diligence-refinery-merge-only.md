@@ -1057,6 +1057,45 @@ standing `known-gap` row candidate: owner = city-binding scope.)
 - **AC-T2 (same-motion specs impact):** the `## Specs impact` declaration below holds at
   merge (a false `none` is a reject — CONTRACT §5.5).
 
+## Design-nonconformance vocabulary (amended 2026-07-15 — JR-2026-009 Q5.2)
+
+Tail amendment — BINDING (see the header note); ADDITIVE: the tails above remain
+BINDING, untouched. Authority:
+`Matchpoint-Platform/specs/patterns/rulings/JR-2026-009.md` (Q5.2; family CLASS grammar
+in `SKILL-systemic-fix-closure.md` §2). Amended pre-dispatch; unit verified first-hand
+at edit time (2026-07-15): harness ledger PENDING · 0 attempts · 0 active runs.
+
+1. **`polecat-code-hygiene` fragment additions (Step 1).** The fragment gains, in the
+   same imperative generic register (the Step-1 line budget may extend to ≤ ~70 lines
+   to absorb this — nothing existing is dropped):
+   - **Class vocabulary:** freshly authored work that violates WRITTEN design law — an
+     applicable catalog pattern not applied, a SOLID principle violated, or a mechanical
+     boundary contract breached — is the failure-class family
+     `design-nonconformance/<facet>/<law-object>@<stage>` (facet ∈ `pattern` | `solid` |
+     `boundary`). Writing a fresh bespoke where written law covers the shape is a defect
+     class, not a style preference.
+   - **Token grammar:** such findings are named by the stable token
+     `DESIGN-MISS[<facet>/<law-object>]` (e.g. `DESIGN-MISS[pattern/PAT-024]`,
+     `DESIGN-MISS[solid/srp]`, `DESIGN-MISS[boundary/<contract-name>]`; regex floor
+     `DESIGN-MISS\[`). Evaluator/judge rejections carry it in `rejection_reason` (the C9
+     convention — GCD-WO-CSC-003's same-dated tail); expect it in rejections and use it
+     to locate the governing written law when fixing.
+   - **STOP language (SYSTEM-TELOS §3.10 with §3.3's never-self-serve rule):** SOLID is
+     the base — conformance is a design-review axis, not a preference; a design-law
+     MISFIT (the pattern/principle seems wrong or inapplicable to the case at hand) is
+     NEVER resolved locally and never self-served around — STOP with a structured
+     blocker to the judge lane, in the `polecat-autonomy-and-blockers` decision-package
+     shape. The SYSTEM-TELOS citation rides the telos-binding fragment's existing
+     snapshot binding (the WOC-9 pins) — the fragment carries the rule, never a second
+     copy of the law (D6 v2 guardrail A).
+   - **Packlint pin extension (Step 9a battery):** the `polecat-code-hygiene` content
+     assertions additionally pin the literals `DESIGN-MISS[` and `design-nonconformance`
+     (fixture-realism: assertions FAIL when the content is absent).
+2. **Fragment home unchanged (ruling correction).** `polecat-code-hygiene` STAYS in the
+   `codegen-support` pack per this WO's pinned six-fragment identity — JR-2026-009
+   explicitly corrects the dossier line that suggested re-homing it to `telos-codegen`.
+   No pack-topology change; the D6 v2 constraints above are untouched.
+
 ## Premises (drift gate)
 
 > premises-watermark: GasCity-Dev@0 + Matchpoint-Platform@79 (authored 2026-07-14)
