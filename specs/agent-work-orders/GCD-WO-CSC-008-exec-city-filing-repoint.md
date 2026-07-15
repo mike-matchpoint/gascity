@@ -9,7 +9,15 @@ lands in the upstream `execution-city-operations` pack only).
 Execution classification: Dev-only pack content in the GasCity platform fork (prompt
 templates + emitter/builder shell scripts + a mirrored contract schema + pack-script
 tests; no Go changes beyond none, no AWS mutation — the `aws` CLI path runs only under the
-fake-CLI test harness). `boundary=dev`, **wave 23** (CSC program band 23/24/25),
+fake-CLI test harness). `boundary: dev` (QST-6 fail-closed) · `live-tier: none` (fake-CLI
+harnesses only; the first live C1 emission is AGC-WO-CSC-005's T3 full-loop proof at
+un-pause) · `blast radius:` the `execution-city-operations` pack (emitter, NEW builder,
+schema mirror + example, filer/classifier prompts, two fragments) + ONE intent-preserving
+domain-handoff test swap; closes the exec-city `RepoBugReported.v1` EMIT lane (D11 —
+deliberate, overseer becomes sole producer; the RECEIVE contract stays byte-identical) ·
+`additive vs mutating: additive` (one sanctioned lane closure per D11; no live surface, no
+data mutation; `RepoChangeRequested.v1` lane byte-equivalent, test-pinned). **Wave 23**
+(CSC program band 23/24/25; harness-ledger mega-wave 33 as of 2026-07-14),
 `blocked_by` `Matchpoint-Platform::PAR-WO-CSC-001-error-emission-package-and-envelope`
 (**same-wave, cross-repo — an apply_deps DIRECT-WRITE edge per kit A1 §4**; PAR-WO-CSC-001
 merges before this WO dispatches and its merged contract files are this WO's copy source).
@@ -684,3 +692,181 @@ hosted exec cities only via the AGC-WO-CSC-006A/B runtime-image/deploy lane at u
 gated behind AGC-WO-CSC-004's bus existing and the R3 env injection landing aws-side.
 The D11 doctrine artifact (only the overseer files `RepoBugReported.v1`) is enforced at
 the transport seam by this WO and inherited by the estate cutover as-is.
+
+## WO-CS v1 conformance (audited 2026-07-14 — Track C)
+
+Track C audit-wave C-W1 amendment. Authorities: `master/generation-architecture/
+IMPLEMENTATION-CHECKPOINT.md` §5 (C-2);
+`Matchpoint-Platform/specs/patterns/SKILL-work-order-audit-and-authoring.md` v3.0.0 §1B
+(WOC-1..11 incl. the PAT-030 schema law). ADDITIVE layer: nothing above is weakened.
+Amended under the loop's build-phase PAUSE (ruling R3) with this unit verified PENDING at
+0 runs first-hand.
+
+### WOC map (component → disposition)
+
+| WOC | disposition |
+|---|---|
+| WOC-1 execution classification | UPGRADED in place (R-C2 live-tier terms) |
+| WOC-2 deliverables + AC-named tests | in-body, verified |
+| WOC-3 negative scope fence | in-body, verified complete: owners named (PAR-WO-CSC-001 — every C1 field/enum/cap/fingerprint/marker literal, single author; AGC-WO-CSC-004 — bus resource + intake + R3 env render §11b; AGC-WO-CSC-005 — triage + the T3 live proof; AGC-WO-CSC-001/006B — lifecycle-event producers; exec-mon CITY repos untouched, D5) |
+| WOC-4 static premises | ADDED — `## Premises (drift gate)` + `## Specs impact` below |
+| WOC-5 runtime premises | ADDED below (`library-id: UNWRITTEN (Track B)`, ruling R2) |
+| WOC-6 coordination declaration | ADDED below |
+| WOC-7 policy defaults | in-body (R2/R3/R4/R5 pinned tables) + declaration below (one seed default: truncation implementation) |
+| WOC-8 seam probe / anchor record | ADDED — anchor record below (emitter line drift found + the now-live wave-18 suite recorded). The Step-0 contract-source gate is the in-body probe of the consumed Platform artifact — UNMERGED at audit time, probe executes at Step 0 |
+| WOC-9 pattern + telos pins | ADDED below (PAT-030 + PAT-003 + PAT-019-shaped mirror discipline) |
+| WOC-10 same-motion doc/index obligations | in-body (schemas/README.md registry + mirror-provenance line; header prose; contract-fragment version bump 1.0→1.1) + `## Specs impact` below; index motion N/A (pre-SVA @0; Track B) |
+| WOC-11 TCS declaration + schema law | ADDED below — the T3 row declares the CONSUMED C1 schema; AC-T2 folds the registration verification per supervisor ruling R1 |
+| Residue manifest (GEN-6) | ADDED below + acceptance fold (AC-T1) |
+
+### Anchor re-verification record (WOC-8 — 2026-07-14, GasCity-Dev origin/main @ `e3a3a1673600`)
+
+The `execution-city-operations` pack HAS CHANGED since the authoring SHA (GCD-WO-EVAL-001
++ PE-WO-EVAL-CITY-001 merged) — verified first-hand, all content anchors re-located:
+
+1. **Emitter line drift (content holds, numbers moved):** the `RepoBugReported.v1` schema
+   case arm is now at `publish-cross-city-event.sh:100` (was `:103`); the ownership case
+   arm `RepoBugReported.v1|RepoChangeRequested.v1)` at `:154` (was `:149-166`); source
+   selection `EVENT_SOURCE_VALUE=` at `:276-278` (was `:271-275`); the dry-run bus line at
+   `:289` and the live-publish `GASCITY_EVENT_BUS` requirement at `:295` (was `:291-292`).
+   The script is now 313 lines (was 309). The in-body "re-anchor by content if drifted"
+   rule applies — every quoted literal was found verbatim.
+2. **The wave-18 suite EXISTS**: `execution-city-operations/tests/run-tests.sh` +
+   `tests/fakes/` landed with GCD-WO-EVAL-001 — Step 6's "if present: extend it and reuse
+   its fakes" branch is the LIVE branch (the fallback harness-creation branch is dead).
+3. **embed.go**: the merged line is `//go:embed pack.toml formulas all:agents
+   template-fragments all:schemas all:assets` — EVAL-001 added `formulas` exactly as the
+   Non-Goals note anticipated; the covering terms for this WO's files hold; verify, don't
+   edit.
+4. **Consumed Platform artifact**: `Matchpoint-Platform` `packages/contracts/schemas/
+   events/component-error-raised/v1.json` does NOT exist yet — PAR-WO-CSC-001 is PENDING
+   (verified against the harness ledger). Correct at audit time: the same-wave
+   direct-write edge serializes it first; the Step-0 STOP-gate remains the execution-time
+   probe (never hand-write the schema from this file's restatements).
+
+### Runtime premises (WOC-5)
+
+`library-id: UNWRITTEN (Track B)` (ruling R2). Park-vs-repair per THIS WO's own text.
+
+| # | premise (re-verify at Step 0) | runnable check | on failure |
+|---|---|---|---|
+| RP-1 | repo base current; emitter anchors re-located by content | `git log -1 origin/main` + the R1 quoted-literal greps (drifted line numbers recorded above) | REPAIR (re-anchor by content) |
+| RP-2 | PAR-WO-CSC-001 MERGED; contract source + pin present and sha-consistent | Step 0: locate `packages/contracts/schemas/events/component-error-raised/v1.json` + `pin.json` in the Matchpoint-Platform sibling checkout; `shasum -a 256 v1.json` == `pin.json:bundledSchemaSha256` | PARK (WO text: STOP, structured blocker — never hand-write the schema) |
+| RP-3 | C1 seam registration state verified (AC-T2) | the schema document carries its `$id` + version; check the PAT-019 seam register for the C1 row | PARK if the schema itself is absent (RP-2); the register-ROW gap alone is recorded + routed per AC-T2, not a park |
+| RP-4 | wave-18 suite present (extend, don't create) | `ls examples/gastown/packs/execution-city-operations/tests/run-tests.sh tests/fakes/` — passes at audit time | REPAIR (fallback harness branch only if it vanished) |
+| RP-5 | `GASCITY_ERROR_*` env NOT required to exist | all tests inject fakes; runtime paths die loudly when unset (R3) | — (by design; hosted render = AGC-WO-CSC-004 §11b) |
+| RP-6 | cities remain PAUSED | per the Cities-PAUSED Validation clause | PARK (standing policy + K1) |
+
+### Coordination declaration (WOC-6)
+
+co_repos: `[]` — single-repo unit (matches the harness ledger). Validation traversal set
+is in-repo (pack-script suites with fake `gc`/`aws`, packlint, repo battery).
+`Matchpoint-Platform` is a READ-ONLY consumption of a landed seam (the merged contract
+source is COPIED byte-verbatim, never edited): per R-C1 that is a runtime-premise row
+(RP-2) + the ordering edge (blocked_by, same-wave direct-write per A1 §4) — NOT a co-edit
+leg. CRD-7 lane: the C1 seam rides lane 1 (expand-contract — Platform publishes schema
+v1 + this consumer adopts behind the ordering edge; a defect found in the merged Platform
+contract routes to the OWNING lane as a structured blocker, never repaired in place —
+lane 3 discipline restated in Non-Goals). Deploy surfaces: NONE (`live-tier: none`; the
+bus is AGC-WO-CSC-004's resource). `register: UNWRITTEN (Track B)` (ruling R2).
+
+### Policy defaults (WOC-7)
+
+Pinned in-body as binding law: the R2 wire facts (as import citations), R3 env contract
+(die-loud on missing vars), R4 slug rule (collapse-first, bare-hex guard), R5 mapping
+table (one primary class, single documented exception), the two justified generic-ness
+exemptions (never a blanket exclusion), `retry_state` const, `s3://`-only refs. Seed
+default declared by this audit (WOC-7, resolving Step 2.3's "pick ONE implementation"):
+the UTF-8-safe truncation uses the **python3 one-liner lane when `python3` is available,
+else the byte-cut + trailing-partial-sequence-strip lane** — exactly one is shipped,
+boundary-tested per case 5; a generator asking to confirm this or any pinned default is a
+template defect.
+
+### Pattern + telos pins (WOC-9)
+
+Telos pins: `GasCity-Dev/specs/TELOS.md` v3 @ `16026788515b` +
+`Matchpoint-Platform/specs/patterns/SYSTEM-TELOS.md` v2 @ `08994e13e751`. Catalog
+patterns: **PAT-030@1.0.0** (schema law — the consumed C1 seam declaration, T3 row +
+AC-T2; PAT-030 §4 maps its typed records into the C1 envelope BY CITATION of PAT-003);
+**PAT-003@0.1.0** (error-emission + typed-error taxonomy — the estate law the C1 envelope
+family rides; this WO consumes its taxonomy via PAR-WO-CSC-001's enums, never re-declares);
+the schema-mirror + `pin.json` sha-parity discipline is PAT-019-SHAPED (pinned contract
+artifact consumption) — cited as discipline, not as a stub obligation. This repo carries
+no `specs/patterns/` consumer stubs / PATTERN-INDEX shard (pre-adoption; Track B owns
+stub adoption) — pins here are import citations; `pattern_index.py --check` does not yet
+apply to this repo.
+
+### Test-contract declaration (WOC-11 — every row marked; unmarked = authoring-audit RED)
+
+| tier | path class | proving test (path::name) or N/A + justification |
+|---|---|---|
+| T1 logical | decision logic | builder guard battery (suite case 5 — R4 slug rules incl. collapse-before-validate, bare-hex guard, enum guards, redaction, multi-byte truncation boundary) + the fingerprint regression pin (case 4 — gold sha256 precomputed in the fixture, the R2 join rule byte-pinned). Misbuild check: the planted-RED battery + the pinned-fingerprint fixture ARE the misbuild pins; no mutation harness exists (recorded honestly) |
+| T1 logical | parity oracle (refactor-sensitive) | case 2 `RepoChangeRequested.v1` lane byte-equivalent dry-run vs the pre-change contract + case 8 `RepoBugReported` artifacts byte-identical (`git diff --quiet`) — the retention oracles for the surgically-edited emitter |
+| T2 behavioral | happy | case 3 C1 flat publish (fake `aws` captures ONE entry: bus/source/detail-type/detail round-trip) + case 4 golden envelope validates against the mirrored schema |
+| T2 behavioral | failure (full-spectrum via T4 negatives) | case 1 RepoBugReported rejection incl. the `--schema-file` bypass guard (stderr cites "overseer" + "D11"); case 5 planted-RED battery; missing env dies NAMING the var. Negatives are hand-enumerated (see T4 — pack generation rides the registration) |
+| T2 behavioral | destructive | N/A + justification: the emit-lane CLOSURE (case 1) is the deliberate destructive-shaped behavior and is fully tested; no live state exists to destroy at this tier |
+| T2 behavioral | partial-failure (forced single-leg) | case 5 partial-input handling: 26 evidence URIs → FIRST 25 kept + warning; >2KB message → truncated with marker, still valid UTF-8; leading/trailing/multi-space signatures → collapsed-then-accepted (the forced-single-leg analogs for a one-shot builder) |
+| T2 behavioral | zero-item (never a GREEN path) | suite fails RED if any `CURRENT_TEST` block runs zero assertions; the summary asserts the expected case COUNT (in-body Test Coverage law) |
+| T3 contract | schema consumed/published | **CONSUMES `ComponentErrorRaised.v1`** — the versioned JSON Schema authored by `Matchpoint-Platform::PAR-WO-CSC-001` Step 9 (`$id` = the Platform contract id under `https://contracts.matchpointintelligence.com/…`, `schema_version "1.0"`; copy source `packages/contracts/schemas/events/component-error-raised/v1.json` + `pin.json:bundledSchemaSha256`). At audit time the publisher WO is PENDING — the `$id` document does not exist on disk yet; the Step-0 STOP-gate parks execution until it does (RP-2). REGISTER state: the schema DOCUMENT will exist with an `$id`; the estate register ROW (PAT-019 seam register + the R-C6 `$id` column) is not yet minted — gap recorded; AC-T2 folds the verification per supervisor ruling R1. Consumer tests: case 6 mirror sha-parity + case 4 validation against the mirror. Also consumes the `Overseer-Issue:` marker grammar (PAR-WO-CSC-001 Step 10 — text-trailer grammar, import-cited). PUBLISHES no new seam (the mirror is a byte-verbatim downstream copy per the pack's mirror doctrine — never a second authority) |
+| T4 fixtures | pack import | Recorded gap (PAT-030 rule 4): the full-envelope example + test fixtures are HAND-BUILT canonical envelopes (fixture-realism full-envelope rule; fingerprint recomputed by test, never eyeballed) — no generated fixture pack exists for C1 yet. Once the C1 registration completes (publisher-side), schema-generated packs from declared variant axes become the owed form; the census signal is this row (never deleted to look green) |
+| T5 integration | estate-E2E registration | N/A + justification: platform-fork repo; no estate same-diff suite row (ecosystem debt). The estate-side full-loop integration proof is AGC-WO-CSC-005's T3 gate (A1 §14) |
+| T5 integration | requires-siblings | `Matchpoint-Platform` (READ-ONLY merged-tree copy source; ordering edge exists — see WOC-6) (H3) |
+| T6 live | live proof | N/A: live-tier `none` — the first live C1 emission from an exec city is AGC-WO-CSC-005's T3 full-loop proof at un-pause (owner named in-body); the emitter's live `aws` arm runs only under the fake CLI here |
+
+### Residue manifest (GEN-6 — silent residue = REJECT)
+
+The implementer fills this table at close-out; ABSENCE of the table is the REJECT
+condition (adopted verbatim via skill §1B):
+
+| class | item | detail | vehicle / consumer |
+|---|---|---|---|
+| delivered | <deliverable> | <evidence pointer> | — |
+| not-delivered | <item> | <reason> | <EXISTING vehicle — pending-WO amendment / owning lane> |
+| known-gap | <gap> | <blast radius> | <owning-context lane per rule 7> |
+| re-sweep | <obligation> | <verify-at-dispatch command> | <dispatcher premise check> |
+
+`none` rows are stated explicitly. Vehicle mapping is mandatory — no "future WO" value
+exists. Standing row candidates already named in-body: the two SEAM FLAGS (marker-duty
+carrier; R3 env render owned by AGC-WO-CSC-004 §11b), surfaced in the PR for the program
+seam round.
+
+### Acceptance criteria — Track C additions (binding, additive)
+
+- **AC-T1 (residue manifest):** the structured result carries the GEN-6 residue manifest
+  above; every non-delivered/known-gap row maps to an EXISTING vehicle; silent residue =
+  REJECT.
+- **AC-T2 (PAT-030 consumed-seam registration — supervisor ruling R1, Track C
+  2026-07-14):** BEFORE building against the C1 seam, VERIFY its registration per
+  PAT-030@1.0.0: (a) the merged Platform schema document exists, `$id`-addressed and
+  versioned, with `pin.json` sha parity (the Step-0 gate — PARK if absent); (b) the
+  PAT-019 seam register (`Matchpoint-Platform/specs/patterns/CONTRACT-SEAM-REGISTER-pat019.md`)
+  carries a C1 seam ROW referencing that `$id` — if the row is ABSENT at execution, the
+  gap routes to the OWNING lane (the Platform contract authority — PAR-WO-CSC-001's
+  amendment lane / the Platform Track C band; CRD-7 rule 3: never registered from this
+  repo, which must stay business-agnostic and never author estate register rows) and is
+  recorded as a `known-gap` residue row naming that vehicle. The T3 declaration is then
+  completed in the result with the observed `$id` + version. This WO's schema MIRROR
+  remains a byte-verbatim downstream copy — consuming, never registering.
+- **AC-T3 (same-motion specs impact):** the `## Specs impact` declaration below holds at
+  merge (a false `none` is a reject — CONTRACT §5.5).
+
+## Premises (drift gate)
+
+> premises-watermark: GasCity-Dev@0 + Matchpoint-Platform@79 (authored 2026-07-14)
+
+| spec doc | version | sha256-12 | assumed fact |
+|---|---|---|---|
+| specs/TELOS.md | 3 | 16026788515b | repo telos card: business-agnostic fork; no business-domain VALUES in pack runtime surfaces (the R3 env-injection design + the two justified mirror exemptions are this card's law applied) |
+| Matchpoint-Platform::specs/patterns/SYSTEM-TELOS.md | 2 | 08994e13e751 | estate telos head; §4 rule 7 — the C1 seam rides expand-contract with Platform as single writer; defects in the merged contract route to the owning lane |
+| Matchpoint-Platform::specs/patterns/PAT-030-schema-law.md | 1 | 357bee458fc8 | schema law: consumed-seam `$id`+version declaration in the T3 row; register-first STOP; fixture packs generate from registered schemas (binds AC-T2 + the T4 gap row) |
+| Matchpoint-Platform::specs/patterns/PAT-003-error-emission-and-typed-error-taxonomy.md | 2 | 485d4185067b | typed-error taxonomy + emit-then-raise discipline the C1 envelope family rides (consumed via PAR-WO-CSC-001's enums — never re-declared here) |
+| master/city-scaling-improvements/wo-authoring-kit.md | 1 | 68a95bd19427 | A1 §3: this WO is the SOLE exec-city change; K4-C1 envelope authority = PAR-WO-CSC-001; K3 bus naming (resource by AGC-WO-CSC-004; injected as env, never named in the pack) (sha-only lane — ungoverned master/ doc) |
+| master/DOCTRINE-fixture-realism-and-lifecycle-seam-acceptance.md | 2 | 8ee5795d2e6d | fixture-realism REJECT-level: FULL canonical envelopes (all 22 keys, real-shaped ARNs, real computed fingerprints); zero-item never green |
+
+## Specs impact
+
+none — deliverables are pack content (`schemas/README.md` registry + mirror-provenance
+line, the contract-fragment 1.0→1.1 bump, prompts, scripts, mirrored schema + example)
+plus the one domain-handoff test swap; no governed `specs/` doc in this repo is
+invalidated. No `specs/SPECS-INDEX.md` exists (pre-SVA `@0` sentinel) — no index motion.
+The in-pack doc obligations are named in Steps 4–5 and ride the diff (WOC-10).

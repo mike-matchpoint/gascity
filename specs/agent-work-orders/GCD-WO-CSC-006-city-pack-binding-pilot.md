@@ -7,7 +7,13 @@ implementing; the **Binding template** section at the bottom is NORMATIVE for th
 
 Execution classification: Dev-only city-source configuration (TOML patches + template
 fragments + repo-native tests in a deployed-city SOURCE repo; no AWS mutation, no deploy
-surface, no city runs). `boundary=dev`, **wave 24** (CSC program band 23/24/25), `blocked_by`
+surface, no city runs). `boundary: dev` (QST-6 fail-closed) · `live-tier: none` (no hosted
+interaction of any kind; runtime exposure arrives only via source-sync at un-pause under
+the AGC WOs' gates) · `blast radius:` `vehicle-graph-city` source config (city.toml
+providers/patches/vars, city doctrine fragments, runbook, tests) + the NORMATIVE Binding
+template GCD-WO-CSC-007 executes · `additive vs mutating: additive` (enumerated in-place
+extensions only; existing bindings byte-preserved — content-assertion-pinned). **Wave 24**
+(CSC program band 23/24/25; harness-ledger mega-wave 34 as of 2026-07-14), `blocked_by`
 `GasCity-Dev::GCD-WO-CSC-003-evaluator-judge-primitives`,
 `GasCity-Dev::GCD-WO-CSC-004-wo-router-formula`, and
 `GasCity-Dev::GCD-WO-CSC-005-polecat-diligence-refinery-merge-only` (all wave 23 —
@@ -783,3 +789,160 @@ constraint is stated here — an executor reading only this WO needs nothing els
    single evaluator/judge lane.
 4. **Guardrails (verbatim, BINDING):**
    "(A) packs carry primitives + sha-pinned POINTERS to the SYSTEM-TELOS snapshot, never a second copy of the law; (B) the monitoring pack emits telemetry/findings ONLY — conformance verdicts stay in the single evaluator/judge lane (GCD-WO-CSC-003 / GCD-WO-EVAL-001, shaped to blueprint ROL-5/6 pre-merge; no telos-specific judge role)."
+
+## WO-CS v1 conformance (audited 2026-07-14 — Track C)
+
+Track C audit-wave C-W1 amendment. Authorities: `master/generation-architecture/
+IMPLEMENTATION-CHECKPOINT.md` §5 (C-2);
+`Matchpoint-Platform/specs/patterns/SKILL-work-order-audit-and-authoring.md` v3.0.0 §1B.
+ADDITIVE layer: nothing above is weakened — the NORMATIVE Binding template and the
+2026-07-14 "Telos pack topology" tail section above remain BINDING and untouched. Amended
+under the loop's build-phase PAUSE (ruling R3) with this unit verified PENDING at 0 runs
+first-hand.
+
+### WOC map (component → disposition)
+
+| WOC | disposition |
+|---|---|
+| WOC-1 execution classification | UPGRADED in place (R-C2 live-tier terms) |
+| WOC-2 deliverables + AC-named tests | in-body, verified |
+| WOC-3 negative scope fence | in-body, verified complete: owners named (upstream pack defects → structured blocker against the owning wave-23 WO, never a city patch-over; render/deploy → AGC-WO-CSC-006A/B; secrets → operator via aws-GasCity, A1 §11; fan-out cities → GCD-WO-CSC-007; the 4 DEAD stubs never patched, A1 §8) |
+| WOC-4 static premises | ADDED — `## Premises (drift gate)` + `## Specs impact` below |
+| WOC-5 runtime premises | ADDED below (`library-id: UNWRITTEN (Track B)`, ruling R2) |
+| WOC-6 coordination declaration | in-body (co_repos preamble) — COMPLETED below (traversal-set derivation + CRD-7 lane + deploy-surface declaration) |
+| WOC-7 policy defaults | in-body (kit C9/C11 pins; upstream defaults untouched) + declaration below |
+| WOC-8 seam probe / anchor record | ADDED — anchor record below (city-repo drift found and recorded). The R1a–R1d discovery gates are this WO's in-body probe battery; the wave-23 sources are unmerged at audit time — probes execute at Step 0 |
+| WOC-9 pattern + telos pins | ADDED below |
+| WOC-10 same-motion doc/index obligations | in-body (runbook, `csc-resolved-names.env`, template reconciliation AC 8) + `## Specs impact` below; index motion N/A in both repos (no SPECS-INDEX in GasCity-Dev or vehicle-graph-city; Track B) |
+| WOC-11 TCS declaration + schema law | ADDED below |
+| Residue manifest (GEN-6) | ADDED below + acceptance fold (AC-T1) |
+
+### Anchor re-verification record (WOC-8 — 2026-07-14; GasCity-Dev @ `e3a3a1673600`, vehicle-graph-city origin/main @ `0ccf4007f2b8`)
+
+Verified first-hand (read-only): `vehicle-graph-city` has moved from the pinned survey SHA
+`71ee67ec` to `0ccf4007f2b8`. The R0 anchors HOLD with line drift: the
+`[providers.codex-cartographer]` block is at `city.toml:18` (as quoted); the rig patch
+region (cartographer/polecat/refinery + `integration_branch_auto_land = "true"`) now sits
+at ~`:79–:103` (WO quotes `:70-96` — re-anchor by content, the blocks read as quoted).
+DRIFT RECORDED (premise re-pin, ruling R-C3): **`template-fragments/` NOW EXISTS** in
+vehicle-graph-city carrying `telos-binding.template.md` (the P1.5 telos delivery artifact —
+exactly what the Telos tail section anticipates). Step 5's "creates it" therefore executes
+as CREATE-IF-ABSENT: add the three doctrine fragments BESIDE the existing
+`telos-binding.template.md`, which is PRESERVED byte-identical (guardrail A — never a
+second copy of the law, never an edit). The `tests/` inventory at `0ccf4007` matches the
+in-body count (7 scripts). Wave-23 sources (GCD-WO-CSC-003/004/005) are NOT yet merged —
+correct at audit time; the Step-0 discovery gates remain the execution-time probes.
+
+### Runtime premises (WOC-5)
+
+`library-id: UNWRITTEN (Track B)` (ruling R2). Park-vs-repair per THIS WO's own text —
+the R1 STOP column is the park law.
+
+| # | premise (re-verify at Step 0) | runnable check | on failure |
+|---|---|---|---|
+| RP-1 | wave-23 WOs (003/004/005) MERGED in the home worktree | R1a–R1d discovery commands (record outputs; write `tests/csc-resolved-names.env`) | PARK per each R1 row's STOP column (structured blocker; never improvise a binding) |
+| RP-2 | co_repo worktree current | `git -C <vehicle-graph-city> fetch origin && git log -1 origin/main` | REPAIR (rebase; re-verify R0 anchors by content) |
+| RP-3 | `template-fragments/` state re-checked | `ls template-fragments/` — telos-binding.template.md preserved byte-identical | REPAIR (create-if-absent; NEVER edit the telos artifact — guardrail A) |
+| RP-4 | supersession language present in the merged submit fragment | the Step-3 done-routing supersession gate (read the merged fragment) | PARK (STOP — blocker against GCD-WO-CSC-005; never ship two live done-targets) |
+| RP-5 | post-wave-23 `gc` binary buildable | `make build` in the home worktree; `$GC_BIN` resolvable | REPAIR (tests SKIP-fail loud, never silently pass) |
+| RP-6 | cities remain PAUSED | per the Cities-PAUSED Validation clause | PARK (standing policy + K1) |
+| RP-7 | secrets NOT required to exist | acceptance independence check (AC 7) | — (by design: punch-list item, `optional = false` fails loud at un-pause) |
+
+### Coordination declaration (WOC-6)
+
+co_repos: `[{"repo": "vehicle-graph-city", "role": "edit", "test": true}]` — matches the
+harness ledger. Traversal-set derivation: ALL code/config edits AND the acceptance battery
+(five `csc-*.sh` suites, `gc config show --validate`, `gc lint .`) run in the
+vehicle-graph-city worktree; the home repo (GasCity-Dev) contributes the READ side (merged
+wave-23 discovery) + the `gc` binary build — an edit leg is declared for
+vehicle-graph-city because its config may need editing on lane failure (R-C1). CRD-7 lane:
+**pre-declared co-edit leg (lane 2)** — grant provenance: owner ruling D10 + kit C11/A1
+§8 (the CSC program's owner-commissioned binding lane); the harness CoordinatedMerge saga
+owns the multi-repo merge. Deploy surfaces: NONE touched (`live-tier: none`; the hosted
+city surface is reached only via source-sync at un-pause — AGC WOs' gates).
+`register: UNWRITTEN (Track B)` (ruling R2).
+
+### Policy defaults (WOC-7)
+
+Pinned in-body as binding law: providers/pools/models (kit C9/C11 — claude-evaluator/
+claude-judge, opus/high, 4/2), upstream defaults NOT tuned (`max_eval_rejects`,
+resume-and-fix, convoy-autoland battery, `regenerate_on_reject` reserved), `optional =
+false` fail-loud credentials, the R1a scope-deviation decision rule (mirror the merged
+scope; state the deviation in the PR). No open posture choice remains. A generator asking
+to confirm a stated default is a template defect.
+
+### Pattern + telos pins (WOC-9)
+
+Telos pins: `GasCity-Dev/specs/TELOS.md` v3 @ `16026788515b` +
+`Matchpoint-Platform/specs/patterns/SYSTEM-TELOS.md` v2 @ `08994e13e751` (the D6 v2 tail
+section + the P1.5 artifacts in the co_repo are the same law's delivery arms;
+vehicle-graph-city carries no telos card of its own — cities ride the sha-pinned snapshot
+pointer, guardrail A). Catalog patterns: NONE pinned (no-stretch — city-source TOML
+binding; the C9/C10/C11 contracts consumed are program contracts, see T3). Neither repo
+carries `specs/patterns/` consumer stubs (pre-adoption; Track B).
+
+### Test-contract declaration (WOC-11 — every row marked; unmarked = authoring-audit RED)
+
+| tier | path class | proving test (path::name) or N/A + justification |
+|---|---|---|
+| T1 logical | decision logic | N/A + justification: configuration binding — no decision logic is authored (the discovery gates are procedural STOPs; the binding values are kit-pinned constants) |
+| T1 logical | parity oracle (refactor-sensitive) | `tests/csc-binding-patches.sh` content assertions that cartographer/polecat/refinery patch fields are UNDISTURBED + the preservation rule (byte-identical outside enumerated extensions) |
+| T2 behavioral | happy | the five `tests/csc-*.sh` suites + `gc config show --validate` exit 0 + `gc lint .` clean (post-wave-23 binary) |
+| T2 behavioral | failure (full-spectrum via T4 negatives) | planted-RED self-check (`csc-binding-fragments-resolve.sh`: injected bogus fragment name → resolver FAILS, demonstrated in evidence) + `$GC_BIN` unavailable → loud SKIP-fail; token-grep negative (`sk-ant-`/oauth patterns find nothing) |
+| T2 behavioral | destructive | N/A + justification: source-config only — nothing to destroy; no state mutated |
+| T2 behavioral | partial-failure (forced single-leg) | N/A + justification: no multi-leg runtime in-WO; the multi-repo merge legs are owned by the harness CoordinatedMerge saga (harness-level machinery, not WO acceptance) |
+| T2 behavioral | zero-item (never a GREEN path) | planted-RED per the fixture-realism doctrine + non-trivial fragment assertions (≥ 30 lines) + doctrine-marker greps with expected hits |
+| T3 contract | schema consumed/published | CONSUMES the C9 (GCD-WO-CSC-003), C10 (GCD-WO-CSC-004), C11 (this WO's own template authority) contract NAMES via discovery-first import — `$id`: the C9 seam is UNREGISTERED (gap recorded; register-first obligation FOLDED into the C9 authority WO per supervisor ruling R1 — its AC-T2; this consumer binds merged names and pins the `$id` once minted). PUBLISHES no data seam (config + prompt doctrine content + the Binding template, a procedure — no schema class) |
+| T4 fixtures | pack import | N/A + justification: no fixture-pack substrate for city bindings; tests assert against the REAL materialized packs + real TOML (fixture-realism) — ecosystem debt rides the C9 registration |
+| T5 integration | estate-E2E registration | N/A + justification: city-source repo; no estate same-diff suite row (ecosystem debt) |
+| T5 integration | requires-siblings | `GasCity-Dev` (home — post-wave-23 `gc` binary + discovery source) + `vehicle-graph-city` (co_repo) (H3) |
+| T6 live | live proof | N/A: live-tier `none` — live behavior validation (evaluator/judge claiming beads on the pilot) is THIS WO's NAMED un-pause follow-up under the standing pilot policy, never an acceptance criterion here (Cities-PAUSED clause); the evidence-vars + secrets punch items gate it (A2.10/A1 §11) |
+
+### Residue manifest (GEN-6 — silent residue = REJECT)
+
+The implementer fills this table at close-out; ABSENCE of the table is the REJECT
+condition (adopted verbatim via skill §1B):
+
+| class | item | detail | vehicle / consumer |
+|---|---|---|---|
+| delivered | <deliverable> | <evidence pointer> | — |
+| not-delivered | <item> | <reason> | <EXISTING vehicle — pending-WO amendment / owning lane> |
+| known-gap | <gap> | <blast radius> | <owning-context lane per rule 7> |
+| re-sweep | <obligation> | <verify-at-dispatch command> | <dispatcher premise check> |
+
+`none` rows are stated explicitly. Vehicle mapping is mandatory — no "future WO" value
+exists. Standing row candidates already named in-body: the credentials punch item (owner
+supplies, operator applies — A1 §11), the evidence-vars un-pause item (A2.10), the P6
+capacity flag handed to 007.
+
+### Acceptance criteria — Track C additions (binding, additive)
+
+- **AC-T1 (residue manifest):** the structured result carries the GEN-6 residue manifest
+  above; every non-delivered/known-gap row maps to an EXISTING vehicle; silent residue =
+  REJECT.
+- **AC-T2 (same-motion specs impact):** the `## Specs impact` declaration below holds at
+  merge (a false `none` is a reject — CONTRACT §5.5).
+- **AC-T3 (telos artifact preservation):** `template-fragments/telos-binding.template.md`
+  in vehicle-graph-city is byte-identical before/after this WO's diff (guardrail A; the
+  anchor record above found the file already present — never edit, never fork).
+
+## Premises (drift gate)
+
+> premises-watermark: GasCity-Dev@0 + Matchpoint-Platform@79 (authored 2026-07-14)
+
+| spec doc | version | sha256-12 | assumed fact |
+|---|---|---|---|
+| specs/TELOS.md | 3 | 16026788515b | home-repo telos card: business-agnostic upstream; MatchPoint doctrine text lands ONLY city-side (D10 placement — this WO's whole premise) |
+| Matchpoint-Platform::specs/patterns/SYSTEM-TELOS.md | 2 | 08994e13e751 | estate telos head; the sha-pinned snapshot POINTER (guardrail A) is what cities carry — never a second copy of the law |
+| master/city-scaling-improvements/wo-authoring-kit.md | 1 | 68a95bd19427 | C11: this WO IS the binding-template authority, proven on vehicle-graph-city; C9/C10 imported; A1 §2 marker; A1 §8 dead stubs; A1 §11 credential pre-stage (sha-only lane — ungoverned master/ doc) |
+| master/DOCTRINE-fixture-realism-and-lifecycle-seam-acceptance.md | 2 | 8ee5795d2e6d | binds the test discipline (planted-RED, zero-item never green) AND is the content SOURCE for the `city-evidence-doctrine` fragment |
+
+## Specs impact
+
+none — deliverables are city-source config (city.toml, template-fragments, runbook,
+tests) in the co_repo plus zero GasCity-Dev content; no governed `specs/` doc in either
+repo is invalidated (vehicle-graph-city has no `specs/` tree; GasCity-Dev's TELOS/
+architecture are untouched). Neither repo has a `specs/SPECS-INDEX.md` (pre-SVA `@0`
+sentinel) — no index motion. The doc obligations (credentials runbook, punch-list line,
+`csc-resolved-names.env`, the AC-8 template reconciliation) are named in-body and ride
+the diff (WOC-10).

@@ -4,7 +4,16 @@ NOTE: this WO is long — read the FULL file at
 `specs/agent-work-orders/GCD-WO-CSC-001-runtime-event-nudge-transport.md` in your worktree
 before implementing; tail amendments are BINDING.
 
-Execution classification: **Dev-only** (`boundary=dev`, **wave 23**, `blocked_by` = none).
+Execution classification: **Dev-only** — `boundary: dev` (QST-6 fail-closed: an UNKNOWN
+boundary would classify as production and park) · `live-tier: none` (no live surface
+touched — engine code + repo-native tests only; hosted validation is
+aws-GasCity::AGC-WO-CSC-002's named drill) · `blast radius:` GasCity-Dev engine
+(events/nudges transport, API wire surface, k8s-provider projection) + generated
+OpenAPI/genclient/dashboard artifacts; contracts consumed downstream by GCD-WO-CSC-002 and
+aws-GasCity::AGC-WO-CSC-002 · `additive vs mutating: additive` (new provider, endpoints,
+config surfaces; the nudge queue-op relocation is behavior-preserving code motion with
+file-mode byte-parity pinned; no pre-existing data transformed). **Wave 23** (CSC band;
+harness-ledger mega-wave 33 as of 2026-07-14), `blocked_by` = none.
 Engine Go + generated-client + OpenAPI + k8s-provider projection changes inside this repo only;
 no AWS resources, no deploy surface, no city runs. Master cutover contribution: **None
 (platform repo, no AWS)** — see the section below.
@@ -921,3 +930,157 @@ harness that finds no events/nudges must FAIL.
 `master/` prod-cutover tracking. The hosted rollout of this transport (image build/deploy,
 Service/NetworkPolicy render, mayor PVC) is tracked by the aws-GasCity CSC WOs
 (AGC-WO-CSC-002/006A/006B) in their own cutover entries.
+
+## WO-CS v1 conformance (audited 2026-07-14 — Track C)
+
+Track C audit-wave C-W1 amendment. Authorities: `master/generation-architecture/
+IMPLEMENTATION-CHECKPOINT.md` §5 (C-2 per-WO additions);
+`Matchpoint-Platform/specs/patterns/SKILL-work-order-audit-and-authoring.md` v3.0.0 §1B
+(WOC-1..11). ADDITIVE layer: nothing above is weakened; where a component already lives
+in-body, this section maps it instead of restating it. Amended under the loop's
+build-phase PAUSE (the armed amend-window, ruling R3) with this unit verified PENDING at
+0 runs against the harness ledger and `run_results` first-hand.
+
+### WOC map (component → disposition)
+
+| WOC | disposition |
+|---|---|
+| WOC-1 execution classification | UPGRADED in place (header — R-C2 live-tier terms) |
+| WOC-2 deliverables + AC-named tests | in-body, verified: every Acceptance Criterion names its backing test |
+| WOC-3 negative scope fence | in-body, verified complete: every deferred seam names its owner (GCD-WO-CSC-002 — pack fragments / mirror / workspace; aws-GasCity::AGC-WO-CSC-002 — manifests, PVC, NetworkPolicy, Service render, the live k8s drill). "NO Dolt-backed event transport" is a REJECTED alternative (E1 resolution), not a deferred seam — no owner owed |
+| WOC-4 static premises | ADDED — `## Premises (drift gate)` + `## Specs impact` below |
+| WOC-5 runtime premises | ADDED below (`library-id: UNWRITTEN (Track B)`, ruling R2) |
+| WOC-6 coordination declaration | ADDED below |
+| WOC-7 policy defaults | in-body (pinned literals throughout) + declaration below |
+| WOC-8 seam probe / anchor record | ADDED — anchor re-verification record below. Executable upstream-artifact probe: N/A — wave-head unit (`blocked_by = none`); no consumed upstream WO artifact exists to probe |
+| WOC-9 pattern + telos pins | ADDED below |
+| WOC-10 same-motion doc/index obligations | in-body (Done Means doc list) + `## Specs impact` below; index motion N/A — repo is pre-SVA (no `specs/SPECS-INDEX.md`; adoption = Track B) |
+| WOC-11 TCS declaration + schema law | ADDED below |
+| Residue manifest (GEN-6) | ADDED below + acceptance fold (AC-T1) |
+
+### Anchor re-verification record (WOC-8 — 2026-07-14, GasCity-Dev origin/main @ `e3a3a1673600`)
+
+Verified first-hand (read-only git): every engine surface this WO anchors is byte-identical
+from the authoring SHA to current main — `git diff --name-only c85d92cf..e3a3a167 --
+internal/events internal/api internal/nudgequeue internal/runtime/k8s internal/config
+internal/citylayout internal/supervisor internal/session cmd/gc` returns only
+`cmd/gc/embed_builtin_packs_test.go` (a test file this WO does not anchor). Every
+`file:line` reference in Packages To Inspect / Implementation Steps therefore holds at
+`e3a3a167`. The in-body re-verify-at-execution duty stands unchanged (main keeps moving).
+
+### Runtime premises (WOC-5)
+
+`library-id: UNWRITTEN (Track B)` — GasCity-Dev has no per-repo RUNTIME-PREMISES library
+yet; the rows below are WO-declared and migrate to library rows when Track B lands (honest
+marker, ruling R2 — never a dead pointer). Park-vs-repair defaults follow THIS WO's own
+text (ruling R-C1, Beat-5 refinement).
+
+| # | premise (re-verify at Step 0) | runnable check | on failure |
+|---|---|---|---|
+| RP-1 | repo base is current `origin/main` | `git fetch origin && git log -1 --format=%H origin/main`, then rebase | REPAIR (WO text: "rebase + re-verify") |
+| RP-2 | toolchain present (Go, oapi-codegen generate script, dashboard npm) | `make setup && make build` | REPAIR (install per CONTRIBUTING.md) |
+| RP-3 | cities remain PAUSED — no hosted interaction performed | per this WO's Cities-PAUSED Validation clause (observation record; performing NO kubectl/AWS call IS the check's form) | PARK (standing policy + kit K1; a required live surface appearing mid-run is a structured blocker) |
+| RP-4 | no cloud credentials / cluster / city runtime used | Required Inputs hold (httptest + fake `k8sOps` only) | PARK (a test requiring live infra = design defect; STOP) |
+
+### Coordination declaration (WOC-6)
+
+co_repos: `[]` — single-repo unit (matches the harness ledger). The validation traversal
+set of the acceptance battery is entirely in-repo (httptest, fake `k8sOps`, repo-native
+suites): no cross-repo edit leg, no read-only assertion against another repo's landed
+seam. Ordering: consumed-by `GasCity-Dev::GCD-WO-CSC-002-ephemeral-workspace-mode`
+(same-wave direct-write DEPS edge, kit A1 §4) and
+`aws-GasCity::AGC-WO-CSC-002-mirror-and-ephemeral-workspaces` (wave 24) — downstream
+consumption rides import citations of the contracts this WO authors (publish-first,
+adopt-behind-ordering-edges; SYSTEM-TELOS §4 rule 7 lane-1 posture, no co-edit legs).
+Deploy surfaces: NONE touched (`live-tier: none`); the hosted Service/NetworkPolicy/PVC
+surface belongs to aws-GasCity::AGC-WO-CSC-002. `register: UNWRITTEN (Track B)` — no
+DEPLOY-SURFACES register exists yet (honest marker, ruling R2).
+
+### Policy defaults (WOC-7)
+
+All posture choices are pinned in-body as BINDING law, not confirmable suggestions: the
+250 ms `recordHTTPTimeout`, SSE reconnect backoff (250 ms, ×2, cap 5 s), http-not-https
+for the in-namespace hop, default port `9443`, the CLOSED two-literal mutation-class set
+(`events_emit`, `nudges`), the `api:<base-url>` scheme grammar, the narrow two-field
+SiteBinding `[api]` surface, and the 5 s correctness-op timeout for claim/ack/withdraw.
+A generator asking to confirm any of them is a template defect. No open posture choice
+remains; no seed default is required.
+
+### Pattern + telos pins (WOC-9)
+
+Telos pins: `GasCity-Dev/specs/TELOS.md` v3 @ sha256-12 `16026788515b` (this repo's card;
+its §4 change law binds this diff) + `Matchpoint-Platform/specs/patterns/SYSTEM-TELOS.md`
+v2 @ `08994e13e751` (estate head). Catalog patterns: NONE pinned — the estate
+PATTERN-CATALOG's AWS/orchestration patterns do not govern this engine-fork transport
+seam (no-stretch rule; PAT-001 does not bind: no AWS resource is named). GasCity-Dev
+carries no `specs/patterns/` consumer stubs and no PATTERN-INDEX shard (pre-adoption;
+Track B owns stub adoption), so `pattern_index.py --check` does not yet apply here.
+
+### Test-contract declaration (WOC-11 — every row marked; unmarked = authoring-audit RED)
+
+| tier | path class | proving test (path::name) or N/A + justification |
+|---|---|---|
+| T1 logical | decision logic | Test 5 `internal/nudgequeue/queue_test.go` (claim-fence truth table, supersession, lease recovery, outcome routing — gold behavioral values inline) + Test 9 `internal/api/mutation_class_test.go` (allowlist truth table). Misbuild check: Test 9's shared-const metadata-key drift pin + the Test 5 fence table are the misbuild pins; no dedicated mutation-testing harness exists in this repo (recorded honestly, not deleted to look green) |
+| T1 logical | parity oracle (refactor-sensitive) | Test 10 golden pod-env byte-parity (projection disabled ⇒ byte-identical) + Test 11 file-mode byte-parity golden (the relocation + strip-map refactor oracle) |
+| T2 behavioral | happy | Test 1 `internal/events/apitransport/conformance_test.go` (full provider conformance) + Test 6 enqueue→list→claim→ack over real HTTP |
+| T2 behavioral | failure (full-spectrum via T4 negatives) | Test 2(b) invalid registered payload → 422; Test 9 403 battery; Test 11 malformed `api:` configs; Test 14 self-pointing guard. No generated negative pack exists (see T4) — negatives are in-body named cases |
+| T2 behavioral | destructive | Test 4 controller restart (SSE resume + convergence) + Test 7 pod-eviction survival (deliverable declared `additive` — WOC-1; the T-7 scrutiny hook is not armed) |
+| T2 behavioral | partial-failure (forced single-leg) | Test 4 (server stopped mid-stream; reconnect via Last-Event-ID = the forced single-leg) |
+| T2 behavioral | zero-item (never a GREEN path) | Test Coverage preamble (REJECT-level: every list/stream assertion requires the expected non-zero count first) + Test 3 exact gap-free `1..1600` |
+| T3 contract | schema consumed/published | PUBLISHES the events/nudges wire contract as generated OpenAPI 3.1 (`internal/api/openapi.json`, regenerated + `TestOpenAPISpecInSync`; single authoring direction Go types → spec — PAT-030 rule-3-conformant). `$id`: none in the estate register — ADJUDICATED intra-component (controller and agent legs of the ONE `gc` binary; every consumer in-repo: genclient, dashboard types; no estate component consumes these shapes as a data seam) per PAT-030@1.0.0 ANTI-SCOPE; estate registration not owed. Recorded as a Track C adjudication for supervisor review — deliberately NOT `N/A + ecosystem-debt` (a seam contract exists; its register is the in-repo generated spec) |
+| T4 fixtures | pack import | N/A + justification: no generated fixture-pack substrate exists for engine seams; fixtures are in-repo real-producer-shaped per the fixture-realism doctrine (registered payload shapes through the REAL Huma server). Ecosystem note: schema-generated packs become owed only if this seam is ever estate-registered |
+| T5 integration | estate-E2E registration | N/A + justification: GasCity-Dev is the platform fork — no estate same-diff E2E suite row exists for it (ecosystem debt: engine repo outside the estate integration idiom) |
+| T5 integration | requires-siblings | none (H3) |
+| T6 live | live proof | N/A: live-tier `none` — the hosted drill is aws-GasCity::AGC-WO-CSC-002's named follow-up (WOC-3 fence names the owner) |
+
+### Residue manifest (GEN-6 — silent residue = REJECT)
+
+The implementer fills this table at close-out; ABSENCE of the table is the REJECT
+condition, not merely unstated rows (adopted verbatim via skill §1B from
+`TEMPLATE-residue-manifest.md`):
+
+| class | item | detail | vehicle / consumer |
+|---|---|---|---|
+| delivered | <deliverable> | <evidence pointer> | — |
+| not-delivered | <item> | <reason> | <EXISTING vehicle — pending-WO amendment / owning lane> |
+| known-gap | <gap> | <blast radius> | <owning-context lane per rule 7> |
+| re-sweep | <obligation> | <verify-at-dispatch command> | <dispatcher premise check> |
+
+`none` rows are stated explicitly (e.g. `not-delivered: none`). Vehicle mapping is
+mandatory — no "future WO" value exists (no-new-WOs law). Downstream WOC-4/WOC-5 premise
+checks consume these rows as machine input.
+
+### Acceptance criteria — Track C additions (binding, additive)
+
+- **AC-T1 (residue manifest):** the structured result carries the GEN-6 residue manifest
+  above with every non-delivered/known-gap row mapped to an EXISTING vehicle; silent
+  residue = REJECT.
+- **AC-T2 (same-motion specs impact):** the `## Specs impact` declarations below land in
+  the same motion (premise-pinning CONTRACT §5.5 — the evaluator verifies declared
+  updates at merge; a false `none` is a reject).
+
+## Premises (drift gate)
+
+> premises-watermark: GasCity-Dev@0 + Matchpoint-Platform@79 (authored 2026-07-14)
+
+| spec doc | version | sha256-12 | assumed fact |
+|---|---|---|---|
+| specs/TELOS.md | 3 | 16026788515b | repo telos card: business-agnostic orchestration-SDK fork; §4 change law binds every diff; §3 row 11 already anticipates C6 ("events.jsonl becomes controller-owned single-writer under C6") |
+| Matchpoint-Platform::specs/patterns/SYSTEM-TELOS.md | 2 | 08994e13e751 | estate telos head the card points at; §4 rule 7 (cross-context changes ride versioned seams) governs the downstream consumption lane of this WO's contracts |
+| specs/architecture.md | 1 | bcdd248fd274 | typed-wire law (no hand-written JSON on wire paths; generated OpenAPI; documented exceptions) + event-typing registry invariants bind Steps 1–2 (sha-only lane — doc carries no version header) |
+| master/city-scaling-improvements/wo-authoring-kit.md | 1 | 68a95bd19427 | C6 §A-TRANSPORT is this WO's pinned design authority (kit wins over this file on conflict); A2.6 platform-rendered Service lane RATIFIED; K1 cities-paused; K2 bounded context (sha-only lane — ungoverned master/ doc) |
+| master/DOCTRINE-fixture-realism-and-lifecycle-seam-acceptance.md | 2 | 8ee5795d2e6d | fixture-realism is REJECT-level: fixtures replicate real producer behavior; zero-item runs never green |
+
+## Specs impact
+
+- `specs/architecture.md` — §2 (projection/API operations), §3 (documented typed-wire
+  exceptions: `EventEmitRequest.Payload` joins the exception list), §4 (registry
+  semantics unchanged — verify): update in the same motion wherever the shipped surface
+  invalidates the text (the doc's own §8 maintenance rule; the doc has no version header —
+  content update only; header adoption is Track B scope).
+- `specs/TELOS.md` §3 row 11 — verify the C6 anticipation wording ("becomes
+  controller-owned single-writer") still reads true at merge; bump v3→v4 ONLY if the row
+  is edited.
+- No `specs/SPECS-INDEX.md` exists (pre-SVA `@0` sentinel) — no index motion. The engdocs
+  obligations (`engdocs/architecture/api-control-plane.md`, `internal/api/genclient/doc.go`)
+  are named in Done Means and ride the diff (WOC-10).

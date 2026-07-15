@@ -9,8 +9,15 @@ the six pre-existing `polecat-*` names) — they are IDENTITY, never rename.
 Execution classification: Dev-only (pack content — six new codegen-support template
 fragments, `evaluator_gated` branches in the gastown `mol-refinery-patrol` formula, one
 edit to the `refinery-wisp-pour-vars-override` fragment — plus repo-native packlint tests;
-no AWS, no deploy surface, no city runs). `boundary=dev`, **wave 23** (CSC program band
-23/24/25), `blocked_by` `GasCity-Dev::GCD-WO-CSC-003-evaluator-judge-primitives`
+no AWS, no deploy surface, no city runs). `boundary: dev` (QST-6 fail-closed) ·
+`live-tier: none` (inert until a city sets `evaluator_gated="true"` and appends the
+fragments — GCD-WO-CSC-006/007; ungated behavior byte-identical) · `blast radius:` six new
+codegen-support fragments + `mol-refinery-patrol` v5 (additive gated branches, default
+`"false"`) + one wisp-pour fragment edit; fragment NAMES are discovery identity for
+GCD-WO-CSC-006 R1c · `additive vs mutating: additive` (byte-preservation audits pin
+predecessors + ungated recipes). **Wave 23** (CSC program band 23/24/25; harness-ledger
+mega-wave 33 as of 2026-07-14), `blocked_by`
+`GasCity-Dev::GCD-WO-CSC-003-evaluator-judge-primitives`
 (**same wave — apply_deps DIRECT-WRITE edge `GCD-005←GCD-003` per kit A1 §4**; this WO
 imports C9 and MUST be generated against 003's MERGED content).
 Consumed by: `GasCity-Dev::GCD-WO-CSC-006-city-pack-binding-pilot` (wave 24 — appends the
@@ -925,3 +932,146 @@ R5, Steps 4/5/7a/7b/7c, Step 9a/9b, AC 2/5, Risks); summary and citation map:
    Silent residue is an evaluator REJECT (enforced by GCD-WO-CSC-003's ordered
    checks); downstream planning (GCD-WO-CSC-004's router) consumes the rows as
    premises.
+
+## WO-CS v1 conformance (audited 2026-07-14 — Track C)
+
+Track C audit-wave C-W1 amendment. Authorities: `master/generation-architecture/
+IMPLEMENTATION-CHECKPOINT.md` §5 (C-2);
+`Matchpoint-Platform/specs/patterns/SKILL-work-order-audit-and-authoring.md` v3.0.0 §1B.
+ADDITIVE layer: nothing above is weakened — the 2026-07-14 "Blueprint conformance" tail
+section above remains BINDING and untouched. Amended under the loop's build-phase PAUSE
+(ruling R3) with this unit verified PENDING at 0 runs first-hand.
+
+### WOC map (component → disposition)
+
+| WOC | disposition |
+|---|---|
+| WOC-1 execution classification | UPGRADED in place (R-C2 live-tier terms) |
+| WOC-2 deliverables + AC-named tests | in-body, verified |
+| WOC-3 negative scope fence | in-body, verified complete: owners named (GCD-WO-CSC-003 — C9/evaluator/judge; GCD-WO-CSC-002 — push cadence, with the packlint-pinned string boundary; GCD-WO-CSC-004 — router/watch; GCD-WO-CSC-006/007 — city bindings; GCD-WO-CSC-008 — exec-city change; the auto-resolve-fragment interaction is FLAGGED with its owner = city-binding scope) |
+| WOC-4 static premises | ADDED — `## Premises (drift gate)` + `## Specs impact` below |
+| WOC-5 runtime premises | ADDED below (`library-id: UNWRITTEN (Track B)`, ruling R2) |
+| WOC-6 coordination declaration | ADDED below |
+| WOC-7 policy defaults | in-body (gate default `"false"`; fail-safe full battery) + declaration below |
+| WOC-8 seam probe / anchor record | ADDED — anchor record below. The consumed upstream artifact (MERGED GCD-WO-CSC-003 content) is UNMERGED at audit time — probe impossible; the same-wave direct-write serialization + Step-0 gates are the guard (probe becomes RP-2's runnable check at execution) |
+| WOC-9 pattern + telos pins | ADDED below |
+| WOC-10 same-motion doc/index obligations | in-body (fragment self-documentation; wisp-pour fragment prose correction in Step 8 — an E1-style in-place truth fix, kept) + `## Specs impact` below; index motion N/A (pre-SVA @0; Track B) |
+| WOC-11 TCS declaration + schema law | ADDED below |
+| Residue manifest (GEN-6) | ADDED below + acceptance fold (AC-T1). NOTE: this WO's Step-5 fragment AUTHORS the C9 bead-level residue WRITER; the table below is this WO's own WO-level close-out record |
+
+### Anchor re-verification record (WOC-8 — 2026-07-14, GasCity-Dev origin/main @ `e3a3a1673600`)
+
+Verified first-hand: `examples/gastown/packs/codegen-support/` AND
+`examples/gastown/packs/gastown/` are byte-identical `c85d92cf..e3a3a167` (git diff
+empty) — `mol-refinery-patrol.toml` still 982 lines at `version = 4`; the in-formula
+pour-site count is 6 (`grep -c "bd mol wisp mol-refinery-patrol"` — matches the Step-0e
+expectation); the R3 supersession anchors (`polecat-handoff-override`,
+`polecat-done-target-override`, polecat prompt `:253`) hold byte-identical. The
+GCD-WO-CSC-003 deliverables are NOT yet on `origin/main` (that WO is PENDING — correct
+per the same-wave serialization); its merged content remains this WO's Step-0 copy
+source, never this file's restatements.
+
+### Runtime premises (WOC-5)
+
+`library-id: UNWRITTEN (Track B)` (ruling R2). Park-vs-repair per THIS WO's own text.
+
+| # | premise (re-verify at Step 0) | runnable check | on failure |
+|---|---|---|---|
+| RP-1 | repo base ≥ `c85d92cf`, rebased | `git log -1 origin/main` + rebase | REPAIR |
+| RP-2 | GCD-WO-CSC-003 MERGED (C9 import source) | `ls examples/gastown/packs/codegen-support/agents/evaluator/` non-empty + `grep -n "eval_request" …/agents/evaluator/agent.toml` + README present (Step 0a) | PARK (WO text: "STOP with a structured blocker, never improvise the C9 imports") |
+| RP-3 | `effective_rig_var` block + jq path copyable | extract from the MERGED `mol-evaluate-task.formula.toml` (Step 0b) | PARK (STOP — one canonical spelling estate-wide) |
+| RP-4 | R3 anchors byte-match; six fragment files absent | Step 0c/0d checks | PARK (anchor drift / overlap = STOP) |
+| RP-5 | pour-site count recorded | Step 0e grep (expected 6; edit ALL found) | REPAIR (edit whatever count is found — the WO's own rule) |
+| RP-6 | cities remain PAUSED | per the Cities-PAUSED Validation clause | PARK (standing policy + K1) |
+
+### Coordination declaration (WOC-6)
+
+co_repos: `[]` — single-repo unit (matches the harness ledger). Validation traversal set
+is in-repo (packlint + repo battery + `gc lint` over an in-test scratch city).
+`matchpoint-loop-harness/mlh/prompts/implementer.md` is READ-ONLY content-derivation
+prior art (no premise row, no edit leg). The `Overseer-Issue` marker grammar is consumed
+by IMPORT CITATION from `Matchpoint-Platform::PAR-WO-CSC-001` Step 10 (a WO contract —
+not pinnable per the premise-pinning CONTRACT; the citation + grammar restatement in
+provenance is the sanctioned form). Ordering: blocked_by `GCD-WO-CSC-003` (same-wave
+direct-write edge — producer↔consumer handshake pinned in R1 on both sides); consumed-by
+GCD-WO-CSC-006/007. Deploy surfaces: NONE (`live-tier: none`).
+`register: UNWRITTEN (Track B)` (ruling R2).
+
+### Policy defaults (WOC-7)
+
+Pinned in-body as binding law: `evaluator_gated` default `"false"` (every existing city
+byte-behaviorally unchanged), the fail-safe rule (ANY lookup failure → `"false"` → full
+battery — more testing, never less), the R5 triple predicate, the gated
+no-branch-delete rule (resume-and-fix), the cadence-boundary string bans. No open
+posture choice remains; no seed default required. A generator asking to confirm a stated
+default is a template defect.
+
+### Pattern + telos pins (WOC-9)
+
+Telos pins: `GasCity-Dev/specs/TELOS.md` v3 @ `16026788515b` +
+`Matchpoint-Platform/specs/patterns/SYSTEM-TELOS.md` v2 @ `08994e13e751`. Catalog
+patterns: NONE pinned (no-stretch — pack content; the C9 seam it consumes is
+GCD-WO-CSC-003's, see T3; the marker grammar is PAR-WO-CSC-001's). No consumer stubs /
+shard in this repo (pre-adoption; Track B).
+
+### Test-contract declaration (WOC-11 — every row marked; unmarked = authoring-audit RED)
+
+| tier | path class | proving test (path::name) or N/A + justification |
+|---|---|---|
+| T1 logical | decision logic | `test/packlint/csc_refinery_gating_test.go` — the R5 triple-predicate gate block literals (approved verdict + patch-id match + `integration/*` glob) with gold truth conditions inline in R5; `csc_polecat_fragments_test.go` routing-write assertions. Misbuild check: the absence battery (refinery assignment ABSENT in the submit fragment; ungated delete-line count UNCHANGED) is the misbuild pin; no mutation harness exists (recorded honestly) |
+| T1 logical | parity oracle (refactor-sensitive) | Byte-preservation audit (Validation): predecessor fragments + polecat/refinery prompts `git diff --quiet`; `mol-refinery-patrol` diff = ONLY the 7a–7e insertions; ungated fork's single pre-existing branch-delete line count unchanged |
+| T2 behavioral | happy | 9(a) contains-assertions: six fragments with pinned defines, supersession language, the full submit command block |
+| T2 behavioral | failure (full-spectrum via T4 negatives) | 9(a) absence battery (NO refinery assignment / wake / nudge in the submit fragment; cadence strings absent across all six) + 9(b) gated-rejection clears incl. `verdict_patch_id=`; no generated negative pack exists (see T4) |
+| T2 behavioral | destructive | N/A + justification: pack content — no state mutated at this tier; the destructive lanes (gated smoke-failure rejection, branch preservation) are 9(b)-pinned literals; live proof = the pilot (owner: GCD-WO-CSC-006's named follow-up) |
+| T2 behavioral | partial-failure (forced single-leg) | N/A + justification: no multi-leg runtime here; the R5(d) mismatch-runs-full-battery leg and the 7c gated rejection leg are string-pinned; behavioral proof rides the pilot (same owner) |
+| T2 behavioral | zero-item (never a GREEN path) | K6 count pins: `--var evaluator_gated=` occurrence count ≥ the Step-0e pour-site count; contains-assertions fail-when-absent by construction (planted-RED discipline stated in Step 9) |
+| T3 contract | schema consumed/published | CONSUMES the C9 seam (authority `GCD-WO-CSC-003` — this WO is the pinned residue WRITER and verdict-clear writer) — `$id`: UNREGISTERED (gap recorded; register-first obligation FOLDED into the C9 authority WO per supervisor ruling R1; this consumer verifies field-for-field against MERGED 003 content — the C9 import audit — and pins the `$id` once minted). Also CONSUMES the `Overseer-Issue:` marker-line grammar (authority Matchpoint-Platform PAR-WO-CSC-001 Step 10 — a text-trailer grammar, import-cited; not a JSON-schema seam class) |
+| T4 fixtures | pack import | N/A + ecosystem-debt: no generated fixture pack for the C9 seam (blocked on the C9 registration — GCD-WO-CSC-003 AC-T2); fragments are prompt content, not data fixtures |
+| T5 integration | estate-E2E registration | N/A + justification: platform-fork repo; no estate same-diff suite row (ecosystem debt) |
+| T5 integration | requires-siblings | none (H3) — the MERGED GCD-WO-CSC-003 tree is an ORDERING premise (RP-2), not a sibling test dependency |
+| T6 live | live proof | N/A: live-tier `none` — live gated-flow validation on the vehicle-graph pilot is GCD-WO-CSC-006's named un-pause follow-up (owner named in-body) |
+
+### Residue manifest (GEN-6 — silent residue = REJECT)
+
+Layer note: the Step-5 fragment this WO ships makes GENERATED work write C9 bead-level
+residue rows; the table below is THIS WO's own WO-level close-out record — the
+implementer fills it in the structured result; ABSENCE of the table is the REJECT
+condition (adopted verbatim via skill §1B):
+
+| class | item | detail | vehicle / consumer |
+|---|---|---|---|
+| delivered | <deliverable> | <evidence pointer> | — |
+| not-delivered | <item> | <reason> | <EXISTING vehicle — pending-WO amendment / owning lane> |
+| known-gap | <gap> | <blast radius> | <owning-context lane per rule 7> |
+| re-sweep | <obligation> | <verify-at-dispatch command> | <dispatcher premise check> |
+
+`none` rows are stated explicitly. Vehicle mapping is mandatory — no "future WO" value
+exists. (The in-body `refinery-rebase-conflict-auto-resolve` interaction FLAG is a
+standing `known-gap` row candidate: owner = city-binding scope.)
+
+### Acceptance criteria — Track C additions (binding, additive)
+
+- **AC-T1 (residue manifest):** the structured result carries the GEN-6 residue manifest
+  above; every non-delivered/known-gap row maps to an EXISTING vehicle; silent residue =
+  REJECT.
+- **AC-T2 (same-motion specs impact):** the `## Specs impact` declaration below holds at
+  merge (a false `none` is a reject — CONTRACT §5.5).
+
+## Premises (drift gate)
+
+> premises-watermark: GasCity-Dev@0 + Matchpoint-Platform@79 (authored 2026-07-14)
+
+| spec doc | version | sha256-12 | assumed fact |
+|---|---|---|---|
+| specs/TELOS.md | 3 | 16026788515b | repo telos card: business-agnostic SDK fork; §4 change law binds; zero business literals in pack runtime surfaces |
+| Matchpoint-Platform::specs/patterns/SYSTEM-TELOS.md | 2 | 08994e13e751 | estate telos head; rule 7 (single writer per seam) is why C9 is imported field-for-field, never re-declared |
+| master/city-scaling-improvements/wo-authoring-kit.md | 1 | 68a95bd19427 | C9 authority = GCD-WO-CSC-003 (imported here); this WO's kit scope line (six fragments + `evaluator_gated` branches, default "false", FULL battery kept for `integration/*` autolands); A1 §2 marker duty (sha-only lane — ungoverned master/ doc) |
+| master/generation-architecture/BLUEPRINT.md | 1 | e5ab1de02432 | v1.4 living law the Blueprint-conformance tail binds: LAW-4 content-state degrade guard, ROL-5/6 consumer sides, QST-1/2/5 decision packages, GEN-6 residue producer (sha-only lane) |
+| master/DOCTRINE-fixture-realism-and-lifecycle-seam-acceptance.md | 2 | 8ee5795d2e6d | fixture-realism REJECT-level: assertions FAIL when content absent; zero-item never green; doctrine TEXT stays city-side |
+
+## Specs impact
+
+none — deliverables are pack fragments + one gastown formula edit + packlint tests; no
+governed `specs/` doc in this repo is invalidated. No `specs/SPECS-INDEX.md` exists
+(pre-SVA `@0` sentinel) — no index motion. The Step-8 wisp-pour-fragment prose correction
+is an in-pack doc truth fix and rides the diff (WOC-10).
