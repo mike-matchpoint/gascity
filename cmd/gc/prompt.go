@@ -62,6 +62,20 @@ type PromptRenderResult struct {
 	Text    string
 	Version string
 	SHA     string
+	// InjectedFragments maps each inject fragment name that was appended to
+	// the rendered text it contributed. Fragments that were missing, failed
+	// to execute, or never reached the inject stage (e.g. plain .md prompt
+	// files, which skip template execution) are absent.
+	InjectedFragments map[string]string
+}
+
+// promptRenderOptions controls render-time strictness. The zero value
+// preserves the default warn-and-skip contract exactly.
+type promptRenderOptions struct {
+	// StrictInject upgrades a missing or failing inject fragment from
+	// warn-and-skip to a hard error. Only --strict rendering paths set
+	// this; the default render path never does.
+	StrictInject bool
 }
 
 // renderPrompt reads a prompt template file and renders it with the given
@@ -83,13 +97,25 @@ func renderPrompt(fs fsys.FS, cityPath, cityName, templatePath string, ctx Promp
 // Callers persisting prompt provenance (session metadata, WorkerOperation
 // payloads) should use this entry point.
 func renderPromptWithMeta(fs fsys.FS, cityPath, cityName, templatePath string, ctx PromptContext, sessionTemplate string, stderr io.Writer, packDirs []string, injectFragments []string, store beads.Store) PromptRenderResult {
+	// The zero options never take an error path, so the error is always nil.
+	res, _ := renderPromptWithMetaOptions(fs, cityPath, cityName, templatePath, ctx, sessionTemplate, stderr, packDirs, injectFragments, store, promptRenderOptions{})
+	return res
+}
+
+// renderPromptWithMetaOptions is the render core. With zero options it
+// behaves exactly like renderPromptWithMeta (warn-and-skip on missing or
+// failing inject fragments, graceful fallbacks, nil error). With
+// StrictInject set, a configured inject fragment that cannot be found or
+// fails to execute returns an error instead of being skipped — the
+// --strict rendering contract.
+func renderPromptWithMetaOptions(fs fsys.FS, cityPath, cityName, templatePath string, ctx PromptContext, sessionTemplate string, stderr io.Writer, packDirs []string, injectFragments []string, store beads.Store, opts promptRenderOptions) (PromptRenderResult, error) {
 	if templatePath == "" {
-		return PromptRenderResult{}
+		return PromptRenderResult{}, nil
 	}
 	sourcePath := promptTemplateSourcePath(cityPath, templatePath)
 	data, err := fs.ReadFile(sourcePath)
 	if err != nil {
-		return PromptRenderResult{}
+		return PromptRenderResult{}, nil
 	}
 	raw := string(data)
 	fm, body := promptmeta.Parse(raw)
@@ -102,7 +128,7 @@ func renderPromptWithMeta(fs fsys.FS, cityPath, cityName, templatePath string, c
 			Text:    body,
 			Version: fm.Version,
 			SHA:     promptmeta.SHA(body),
-		}
+		}, nil
 	}
 
 	// templateFirst (registered via promptFuncMap) needs to call tmpl.Lookup
@@ -156,7 +182,7 @@ func renderPromptWithMeta(fs fsys.FS, cityPath, cityName, templatePath string, c
 			Text:    body,
 			Version: fm.Version,
 			SHA:     promptmeta.SHA(body),
-		}
+		}, nil
 	}
 
 	td := buildTemplateData(ctx)
@@ -167,31 +193,44 @@ func renderPromptWithMeta(fs fsys.FS, cityPath, cityName, templatePath string, c
 			Text:    body,
 			Version: fm.Version,
 			SHA:     promptmeta.SHA(body),
-		}
+		}, nil
 	}
 
-	// Append injected fragments.
+	// Append injected fragments. Default contract: warn-and-skip on a
+	// missing or failing fragment. Under StrictInject those become errors.
+	var injected map[string]string
 	for _, name := range injectFragments {
 		frag := tmpl.Lookup(name)
 		if frag == nil {
+			if opts.StrictInject {
+				return PromptRenderResult{}, fmt.Errorf("inject_fragment %q: template not found", name)
+			}
 			fmt.Fprintf(stderr, "gc: inject_fragment %q: template not found\n", name) //nolint:errcheck // best-effort stderr
 			continue
 		}
 		var fbuf bytes.Buffer
 		if err := frag.Execute(&fbuf, td); err != nil {
+			if opts.StrictInject {
+				return PromptRenderResult{}, fmt.Errorf("inject_fragment %q: %w", name, err)
+			}
 			fmt.Fprintf(stderr, "gc: inject_fragment %q: %v\n", name, err) //nolint:errcheck // best-effort stderr
 			continue
 		}
+		if injected == nil {
+			injected = make(map[string]string, len(injectFragments))
+		}
+		injected[name] = fbuf.String()
 		buf.WriteString("\n\n")
 		buf.Write(fbuf.Bytes())
 	}
 
 	rendered := buf.String()
 	return PromptRenderResult{
-		Text:    rendered,
-		Version: fm.Version,
-		SHA:     promptmeta.SHA(rendered),
-	}
+		Text:              rendered,
+		Version:           fm.Version,
+		SHA:               promptmeta.SHA(rendered),
+		InjectedFragments: injected,
+	}, nil
 }
 
 func promptTemplateSourcePath(cityPath, templatePath string) string {
