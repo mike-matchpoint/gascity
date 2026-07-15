@@ -66,6 +66,31 @@ WO remains the C9 authority per its own header ("defined ONCE here, everyone els
 imports") — the kit table gains `verdict_patch_id`/`NOT_REQUIRED`/`residue` via the
 Mayor's governed-doc lane, not via this WO.
 
+## Telos injection coverage — Finding (code-cited; re-anchor by content, not line number)
+
+> Relocated VERBATIM 2026-07-15 (same file-cap remediation lane as the header note;
+> pre-relocation in-file bytes at this repo's
+> GCD-WO-CSC-003-evaluator-judge-primitives.md @ `bb4a7083`). Subsection of the WO's
+> `## Telos injection coverage (amended 2026-07-15 — Track-D investigation)` tail; the
+> executable Scope additions remain in the WO body and stand alone.
+
+- Plain-`.md` prompts never receive fragments: `renderPromptWithMeta`
+  (`cmd/gc/prompt.go:100–106` @ origin/main `76591be5`; content anchor: the
+  `!isPromptTemplatePath(templatePath)` early return) exits BEFORE shared-template
+  loading and the `injectFragments` append loop (`cmd/gc/prompt.go:173–187`); the
+  `AgentDefaults.AppendFragments` doc comment (`internal/config/config.go`): "plain .md
+  remains inert."
+- The implicit per-provider utility agents ride exactly that path: `InjectImplicitAgents`
+  (`internal/config/config.go:3205` area; content anchor: `promptTemplate :=
+  citylayout.SystemPacksRoot + "/core/assets/prompts/pool-worker.md"`) gives every
+  implicit provider agent — city scope AND per-rig, one per configured provider — that
+  plain-md template and `default_sling_formula` fallback `"mol-do-work"`; estate count at
+  investigation: 8 implicit utility agents.
+- Consequence: those rendered prompts carry ZERO city fragments (no
+  `workspace.global_fragments`, no `[agent_defaults]` or per-agent `append_fragments`) —
+  zero telos fragments; real work slung at an implicit provider agent gets an un-primed
+  session outside every doctrine seam this WO authors.
+
 ### Anchor re-verification record (WOC-8 — 2026-07-14, origin/main @ `e3a3a1673600`)
 
 The in-body @`a47df8f5` claim ("commits past `c85d92cf` are CSC spec-file-only") was TRUE

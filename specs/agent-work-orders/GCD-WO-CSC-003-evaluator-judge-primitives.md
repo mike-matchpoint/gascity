@@ -1206,22 +1206,9 @@ seam contract.
 
 ### Finding (code-cited; re-anchor by content, not line number)
 
-- Plain-`.md` prompts never receive fragments: `renderPromptWithMeta`
-  (`cmd/gc/prompt.go:100–106` @ origin/main `76591be5`; content anchor: the
-  `!isPromptTemplatePath(templatePath)` early return) exits BEFORE shared-template
-  loading and the `injectFragments` append loop (`cmd/gc/prompt.go:173–187`); the
-  `AgentDefaults.AppendFragments` doc comment (`internal/config/config.go`): "plain .md
-  remains inert."
-- The implicit per-provider utility agents ride exactly that path: `InjectImplicitAgents`
-  (`internal/config/config.go:3205` area; content anchor: `promptTemplate :=
-  citylayout.SystemPacksRoot + "/core/assets/prompts/pool-worker.md"`) gives every
-  implicit provider agent — city scope AND per-rig, one per configured provider — that
-  plain-md template and `default_sling_formula` fallback `"mol-do-work"`; estate count at
-  investigation: 8 implicit utility agents.
-- Consequence: those rendered prompts carry ZERO city fragments (no
-  `workspace.global_fragments`, no `[agent_defaults]` or per-agent `append_fragments`) —
-  zero telos fragments; real work slung at an implicit provider agent gets an un-primed
-  session outside every doctrine seam this WO authors.
+Relocated VERBATIM — zero content change, 100k dispatch-bundle file-cap remediation
+2026-07-15 — to `specs/agent-work-orders/appendices/GCD-WO-CSC-003-relocated-records.md`
+(pinned path, this repo; BINDING with this WO). The Scope additions below stand alone.
 
 ### Scope additions (binding, additive)
 
@@ -1324,6 +1311,35 @@ verified first-hand at edit time (2026-07-15): harness ledger PENDING · 0 attem
    `pattern_conformance` field is NOT added; the C9 key set (R2's 9 keys) is UNCHANGED.
    Any future typed field lands via a single-writer authority-WO amendment at city
    resume, never improvised here.
+
+## Per-task token telemetry (amended 2026-07-15 — owner order, both substrates)
+
+Tail amendment — BINDING (header note); ADDITIVE: all tails above stay BINDING, untouched.
+Authority: owner order 2026-07-15 — tokens per task tracked system-wide for ALL agents as
+part of the telos system, plus model type and agent role, on BOTH substrates. Harness
+counterpart: the loop-harness per-task token layer (`mlh/telos/registry.py` MetricSpecs;
+dashboard dimensions role × model × substrate). GasCity substrate law:
+`aws-GasCity/specs/18-gascity-telos-dashboard.md` v4 (per-task law + `TaskTokens` row).
+Amended pre-dispatch; unit verified first-hand at edit time (2026-07-15): harness ledger
+PENDING · 0 attempts · 0 active runs. Three ADDITIVE C9 keys via the single-writer
+authority-WO amendment lane Q5.1 item 3 names (its `pattern_conformance` non-goal is
+unchanged); the R2 verdict-keys row extends by these three, every "9 keys" count above
+now reads 12, AC-T2 registers 12:
+
+| Key | Value shape |
+|---|---|
+| `tokens` | provider-reported token total of the writing agent's task session (integer string); CAPTURED, never estimated/recalled/synthesized (R6); OMITTED when no provider surface reports it — honest absence, never zero-fill |
+| `model` | the model id the session actually ran (resolved `[option_defaults] model` / provider model id) |
+| `agent_role` | the writing agent's role name (`polecat`, `evaluator`, `judge`, `refinery`, …) |
+
+Write convention: each agent writes the three keys fresh WITH its existing terminal write
+for the task (polecat submit — GCD-WO-CSC-005's mirrored tail; every evaluator/judge
+verdict write — the R3 rows; refinery merge close — CSC-005's gated branch). Task id = the
+bead id. The record is each WRITE (the typed bead-update event), never last-writer bead
+state; the spec-18 Track D-3 export carries the series to AWS-layer sinks; counts reach
+the harness telos dashboard ONLY via the spec-18 read-only substrate="gascity" pull —
+never synthesized. Declared-not-emitting until this CSC lane lands (spec-18
+dormant-honest law).
 
 ## Premises (drift gate)
 

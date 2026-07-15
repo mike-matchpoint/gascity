@@ -1096,6 +1096,46 @@ at edit time (2026-07-15): harness ledger PENDING · 0 attempts · 0 active runs
    explicitly corrects the dossier line that suggested re-homing it to `telos-codegen`.
    No pack-topology change; the D6 v2 constraints above are untouched.
 
+## Per-task token telemetry (amended 2026-07-15 — owner order, both substrates)
+
+Tail amendment — BINDING (see the header note); ADDITIVE: the tails above remain BINDING,
+untouched. Authority: owner order 2026-07-15 — tokens per task tracked system-wide for ALL
+agents as part of the telos system, plus model type and agent role, on BOTH substrates.
+C9 authority: GCD-WO-CSC-003's same-dated per-task token telemetry tail — three ADDITIVE
+keys `tokens`, `model`, `agent_role`, imported here field-for-field like the rest of R1,
+never re-declared. Harness counterpart: the loop-harness per-task token layer
+(`matchpoint-loop-harness/mlh/telos/registry.py` MetricSpecs; dashboard dimensions
+role × model × substrate). GasCity substrate law:
+`aws-GasCity/specs/18-gascity-telos-dashboard.md` v4 (per-task token telemetry law +
+declared `TaskTokens` row). Amended pre-dispatch; unit verified first-hand at edit time
+(2026-07-15): harness ledger PENDING · 0 attempts · 0 active runs.
+
+1. **R1 import extension.** The C9 import gains the three keys with 003's merged value
+   shapes: `tokens` — provider-reported token total of the writing agent's task session
+   (integer string), CAPTURED, never estimated/recalled/synthesized (the R6 taxonomy
+   applies), OMITTED when no provider surface reports a capturable value (honest absence,
+   never a zero-fill); `model` — the model id the session actually ran; `agent_role` —
+   the writing agent's role name.
+2. **Submit-sequence extension (Step 5 — `polecat-submit-to-evaluator`).** The submission
+   metadata write (the first `gc bd update` block) additionally writes the three keys
+   fresh on EVERY submission: `agent_role` and `model` from the session's own
+   identity/config surfaces; `tokens` under capture-or-omit — a recalled or estimated
+   number is the R6 fabrication class. If no capturable token surface exists at build
+   time, the two capturable keys still land and the `tokens` omission is recorded as a
+   `known-gap` residue row (GEN-6) mapped to the spec-18 Track D-3 export lane — never
+   silently, never synthesized.
+3. **Refinery terminal write (`mol-refinery-patrol`, gated branches only).** The gated
+   merge-close write carries the same three keys under the same capture-or-omit law. The
+   ungated recipes stay byte-identical per this WO's additive constraint — the ungated
+   lane is pre-telos-era under the spec-18 baseline law, so no telemetry write lands
+   there.
+4. **Packlint pin extension (Step 9 battery).** The content assertions additionally pin
+   the literals `agent_role`, `model`, and `tokens` in the new submit sequence
+   (fixture-realism: assertions FAIL when the content is absent).
+5. **Flow posture (unchanged).** Per-task records reach the harness telos dashboard ONLY
+   via the spec-18 read-only substrate="gascity" pull; declared-not-emitting until this
+   CSC lane lands (dormant-honest).
+
 ## Premises (drift gate)
 
 > premises-watermark: GasCity-Dev@0 + Matchpoint-Platform@79 (authored 2026-07-14)
