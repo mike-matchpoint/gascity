@@ -1266,6 +1266,106 @@ above (Mayor governed-doc lane) is a standing `re-sweep` row candidate.
   operating tables but cites the `$id` as ground truth. Single-writer discipline
   unchanged: this WO remains the C9 authority; consumers pin the `$id`, never re-declare.
 
+## Telos injection coverage (amended 2026-07-15 — Track-D investigation)
+
+Tail amendment — BINDING (see the header note). ADDITIVE layer: nothing above is
+weakened or contradicted; the "Blueprint conformance", "Telos pack topology", and
+"WO-CS v1 conformance" tail sections above remain BINDING and untouched. This section
+ADDS scope (in-scope systemic work, no-new-WOs law): the owner-ordered Track-D
+telos-injection investigation (Beat 64, 2026-07-15) found a coverage hole in the very
+fragment-append mechanism this WO's seam design (Goal 6, Step 5) and the telos packs
+(D6 v2 section above) depend on. The fix lands here because this WO is the pending
+vehicle that authors the fragment-injection seam contract.
+
+### Finding (code-cited; re-anchor by content, not line number)
+
+- **Plain-`.md` prompts never receive fragments.** `renderPromptWithMeta`
+  (`cmd/gc/prompt.go:100–106` @ origin/main `76591be5`; content anchor: the
+  `!isPromptTemplatePath(templatePath)` early return) exits BEFORE the shared-template
+  loading and before the `injectFragments` append loop (`cmd/gc/prompt.go:173–187`).
+  The upstream doc comment on `AgentDefaults.AppendFragments`
+  (`internal/config/config.go`) states it plainly: "plain .md remains inert."
+- **The implicit per-provider utility agents ride exactly that path.**
+  `InjectImplicitAgents` (`internal/config/config.go:3205` area; content anchor:
+  `promptTemplate := citylayout.SystemPacksRoot + "/core/assets/prompts/pool-worker.md"`)
+  gives every implicit provider agent — city scope AND per-rig scope, one per configured
+  provider — the plain-md template
+  `internal/bootstrap/packs/core/assets/prompts/pool-worker.md` and
+  `default_sling_formula` fallback `"mol-do-work"`. The Track-D investigation counted 8
+  such implicit utility agents across the estate's current city role mix.
+- **Consequence:** those agents' rendered prompts carry ZERO city fragments — no
+  `workspace.global_fragments`, no `[agent_defaults] append_fragments`, no per-agent
+  `append_fragments`, and therefore zero telos fragments. Any city that slings real work
+  at an implicit provider agent gets an un-primed session outside every doctrine seam
+  this WO authors.
+
+### Scope additions (binding, additive)
+
+1. **Convert `internal/bootstrap/packs/core/assets/prompts/pool-worker.md` →
+   `pool-worker.template.md`.** The file is directive-free markdown today (verified: no
+   `{{` template actions), so the conversion is a rename — the content parses as a
+   trivial template and renders byte-equivalently, after which the fragment-append loop
+   applies to it. Registration facts (verified at `76591be5`):
+   - The core pack embed glob already covers the renamed file
+     (`internal/bootstrap/packs/core/embed.go`: `//go:embed pack.toml all:assets
+     formulas orders all:overlay skills`) — NO embed edit is needed in ANY pack. The
+     Non-Goals "NO embed.go change" fence (codegen-support) is untouched and stays
+     BINDING.
+   - TWO Go path constants name the old file and must follow the rename:
+     (a) `internal/config/config.go` — `InjectImplicitAgents`'s `promptTemplate`
+     string; (b) `cmd/gc/cmd_prime.go` — the builtin-prompt fallback `promptFile`
+     for pool agents without a `prompt_template` (content anchor: `core/assets/prompts/
+     pool-worker.md` under `citylayout.SystemPacksRoot`). These are path-string edits
+     only — no decision logic, no new behavior beyond the already-existing
+     `.template.md` render path (ZFC intact). This section grants a NARROW,
+     file-enumerated exception to the "Go edits are LIMITED to test files" fence for
+     exactly those two path constants; the fence stands unchanged for everything else.
+   - Test files that pin the old name follow mechanically (verified referrers:
+     `cmd/gc/prompt_test.go` `TestFormulaFilesystemSearchGuidanceCoversPromptSources`
+     path list; `cmd/gc/embed_builtin_packs_test.go` materialization assertions). Go
+     test-file edits were already in scope.
+   - **Same-class sweep (systemic-fix closure law — CLASS: plain-md-prompt-skips-
+     fragments):** `graph-worker.md` (same directory, same plain-md class, the
+     `formula_v2` lane selected by the same `cmd/gc/cmd_prime.go` fallback) receives the
+     SAME conversion in the same motion. The remaining member of the class — the
+     `cmd_prime.go` raw `os.ReadFile` fallback for agents with NO `prompt_template`,
+     which never renders and therefore never appends regardless of file suffix — is
+     OUTSIDE the implicit-agent fix (implicit agents HAVE a `prompt_template`): close it
+     in-scope if the fix is a straight reuse of the existing render path, otherwise
+     record it as an explicit `known-gap` residue row (GEN-6) naming this class — never
+     silently.
+2. **Acceptance addition — AC-T3 (fragment append reaches plain-template-configured
+   agents):** a test or prime-check proving the fix end-to-end: in a scratch city with a
+   configured provider (so `InjectImplicitAgents` injects the implicit agent) and a
+   city-level fragment list (`[agent_defaults] append_fragments` naming a sentinel
+   define), the implicit provider agent's rendered prompt — `gc prime <provider-agent>`
+   or the equivalent in-repo render-path test — CONTAINS the sentinel fragment text.
+   Planted-RED discipline (fixture-realism doctrine): the sentinel-absent case must
+   fail. OR-clause: if the conversion route were replaced by a render-path change that
+   appends fragments to plain `.md` prompts, the SAME test bar applies unchanged — the
+   proof is fragment text in the rendered prompt, not the file suffix.
+3. **Doctrine line (city side — rides the C9 binding doc):** the pack README's
+   city-binding recipe (Step 8 item 7) gains this line verbatim: **"Real work is never
+   slung at un-primed implicit provider sessions."** Implicit per-provider agents are
+   utility surfaces (`mol-do-work` default) — until a rendered prompt provably carries
+   the city's fragment set (`gc prime` shows the fragment text), cities route real work
+   ONLY at explicitly bound agents (the `[[rigs.patches]]`-bound polecat/evaluator/judge
+   lanes). Cross-ref: the city-binding lane `GCD-WO-CSC-006` (pilot) / `GCD-WO-CSC-007`
+   (fanout) discover this WO's README as their binding doc (CSC-006 R1b), so the line
+   binds city-side through the same discovery gate; their `gc prime`-based verification
+   steps are the enforcement point.
+
+### Fence statement (diff audit)
+
+The Validation diff-audit fence above ("NO changes outside
+`examples/gastown/packs/codegen-support/` + the named test files") remains BINDING for
+the original CSC deliverable. THIS section's additional deliverable carries its own
+enumerated fence: `internal/bootstrap/packs/core/assets/prompts/pool-worker.template.md`
+(+ `graph-worker.template.md`, renames), the two named path constants
+(`internal/config/config.go` `InjectImplicitAgents`; `cmd/gc/cmd_prime.go` builtin-prompt
+fallback), and test files. A diff outside the UNION of the two fences is a finding.
+`pack.toml` and `embed.go` stay byte-identical in BOTH packs (core and codegen-support).
+
 ## Premises (drift gate)
 
 > premises-watermark: GasCity-Dev@0 + Matchpoint-Platform@79 (authored 2026-07-14)
