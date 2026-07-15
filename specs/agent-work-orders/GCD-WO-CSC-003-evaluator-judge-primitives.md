@@ -1340,6 +1340,41 @@ enumerated fence: `internal/bootstrap/packs/core/assets/prompts/pool-worker.temp
 fallback), and test files. A diff outside the UNION of the two fences is a finding.
 `pack.toml` and `embed.go` stay byte-identical in BOTH packs (core and codegen-support).
 
+## Design-nonconformance token convention (amended 2026-07-15 — JR-2026-009 Q5.1)
+
+Tail amendment — BINDING (header note); ADDITIVE: all tails above stay BINDING,
+untouched. Authority: `Matchpoint-Platform/specs/patterns/rulings/JR-2026-009.md` (Q5.1;
+family CLASS grammar in `SKILL-systemic-fix-closure.md` §2). Amended pre-dispatch; unit
+verified first-hand at edit time (2026-07-15): harness ledger PENDING · 0 attempts ·
+0 active runs.
+
+1. **`rejection_reason` token convention (C9 — the R2 verdict-keys row + the R3
+   evaluator/judge REJECT rows).** When a REJECT substantiates a violation of WRITTEN
+   design law by a NEWLY AUTHORED surface (failure-class family
+   `design-nonconformance/<facet>/<law-object>@<stage>`), the `rejection_reason` value
+   carries the stable token `DESIGN-MISS[<facet>/<law-object>]` — e.g.
+   `DESIGN-MISS[pattern/PAT-024]`, `DESIGN-MISS[solid/srp]`,
+   `DESIGN-MISS[boundary/<contract-name>]`; facet ∈ `pattern` | `solid` | `boundary`;
+   machine-countable regex floor `DESIGN-MISS\[`. The token rides INSIDE the existing
+   value shapes (`<failure + required fix>` / `<one line>`) — NO new C9 key, NO value-set
+   change, NO routing change; the required-fix text still names the pattern/principle.
+   Guards (the family's calibration bounds): substantiability — the REJECT quotes the
+   written law line it enforces (an unquotable objection never carries the token);
+   no-stretch — only within a catalog PAT's decision table or the audit skill's §1.3
+   stated criteria, never an invented axis; pre-existing conforming surfaces and
+   behavior-preserving extraction are out of scope (SR-22 carve-out).
+2. **Judge Step-4: the existing review IS the check — reporting convention only.**
+   Step-4's REQUIRED code-review-skill procedure (the city-bound code-review skill
+   reviewed at the CONSUMER'S `bound_version`, never hosting HEAD — the D18 section
+   above) is the design-conformance check; nothing is added to the judge's procedure.
+   This amendment adds ONLY the reporting convention: when that review substantiates a
+   design-nonconformance finding, the judge REJECT's `rejection_reason` carries the
+   item-1 token. No new judge step, no new gate, no new verdict key.
+3. **Explicit non-goal (evidence-gated — JR-2026-009 P3).** A TYPED C9
+   `pattern_conformance` field is NOT added; the C9 key set (R2's 9 keys) is UNCHANGED.
+   Any future typed field lands via a single-writer authority-WO amendment at city
+   resume, never improvised here.
+
 ## Premises (drift gate)
 
 > premises-watermark: GasCity-Dev@0 + Matchpoint-Platform@79 (authored 2026-07-14)
