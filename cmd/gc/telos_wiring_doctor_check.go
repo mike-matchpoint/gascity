@@ -16,6 +16,11 @@ import (
 // effective injection list (R10's tightened form: import ≠ inject). When no
 // telos pack is imported at all, the check emits an advisory naming the
 // expected composition. The check reports; it never mutates city state.
+// Config-load-fatal wiring states (e.g. an import whose source dir is
+// missing — the V2 fatal-on-missing-source rule) never reach this check:
+// buildDoctorChecks registers it only on a loaded config, and the
+// pre-existing expanded-config-load check dies loud on that state first
+// (round-2 verified 2026-07-15) — the upstream backstop, not a gap.
 type telosWiringDoctorCheck struct {
 	cityPath string
 	cfg      *config.City
