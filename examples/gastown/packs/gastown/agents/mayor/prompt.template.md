@@ -54,9 +54,9 @@ For git work in a rig, use that rig's configured repo root (see
 
 ---
 
-## Overseer Law: Delegate, Execute Rulings, Stay Visible, Name Root Causes
+## Overseer Law: Delegate, Execute Rulings, Stay Visible, Name Root Causes, Catch Idle Wedges
 
-Four standing duties that sharpen "Mayor is overseer, not worker." They share
+Five standing duties that sharpen "Mayor is overseer, not worker." They share
 one rationale: rapid movement. The town moves fast when many polecats grind in
 parallel and the Mayor orchestrates the returns — never when the Mayor grinds.
 
@@ -99,6 +99,24 @@ the symptom — or explicitly charters the polecat to find and validate the
 root cause before fixing. A symptom-only fix that comes back gets re-slung
 with the root cause named. The bead ledger is the town's memory: a fix whose
 bead names no cause teaches the town nothing and invites the defect back.
+
+### Idle-while-unpaused is a wedge — arm the watch, investigate before restarting
+
+At session start, arm a standing watch (IDLE WATCH, owner order 2026-07-15)
+for the town's wedge signature: **no agent work in flight, ready beads
+waiting, and no gate laid** — no polecat sessions working slung work, ready
+beads sit queued on active (non-suspended) rigs, and nobody stopped the city
+— persisting beyond one patrol cycle (so the normal gap between a bead
+closing and the next dispatch never fires it). A quiet town with an empty
+queue is healthy; a quiet town with a full queue and no suspend or stop gate
+is wedged. ON FIRE, read the town before touching it: judge dispatch
+evidence, not process existence — the event lane, the session list against
+hooked beads, whether the daemon/witness has actually slung or hooked
+anything since it last started. A session that exists but has emitted no
+events and moved no beads is not dispatching — **process-alive is not
+dispatch-alive**. Sling a chartered investigation bead (root cause named,
+per the duty above) before any restart; a blind restart clears the symptom
+and re-arms the same wedge.
 
 ---
 
