@@ -941,7 +941,8 @@ capacity flag handed to 007.
 
 none — deliverables are city-source config (city.toml, template-fragments, runbook,
 tests) in the co_repo plus zero GasCity-Dev content; no governed `specs/` doc in either
-repo is invalidated (vehicle-graph-city has no `specs/` tree; GasCity-Dev's TELOS/
+repo is invalidated (vehicle-graph-city's `specs/` holds only the estate SYSTEM-TELOS
+snapshot — byte-preserved under guardrail A, P1.5, never edited here; GasCity-Dev's TELOS/
 architecture are untouched). Neither repo has a `specs/SPECS-INDEX.md` (pre-SVA `@0`
 sentinel) — no index motion. The doc obligations (credentials runbook, punch-list line,
 `csc-resolved-names.env`, the AC-8 template reconciliation) are named in-body and ride

@@ -447,11 +447,14 @@ template's parameterized form already tolerates it):**
    AUTHORING-TIME SURVEY VALUES, not law. P5 invariants derivation for this city covers
    the ON-DISK roster (CE/CM/MPP replace pc/so — derive from those repos' `specs/` +
    `AGENTS.md`).
-2. **No `[workspace] max_active_sessions` cap exists in ANY of the five cities today**
-   (the surveyed 24-caps on compat-orch/client-platform are gone). The P6 rule already
-   conditions on presence ("if present") — with no cap present, the P6 comment-update
-   actions are NO-OPS and the two "capacity flags" in Step 7 reduce to an owner-visible
-   note that the caps were removed upstream; re-derive at execution.
+2. **`[workspace] max_active_sessions = 24` caps VERIFIED PRESENT at the recorded heads**
+   in compatibility-orchestration (city.toml:10) and client-platform (city.toml:11) —
+   never removed in either repo's history; the other three cities carry per-rig
+   `[[rigs.patches]]` caps (=20) and no `[workspace]` cap. The survey rows above (P6
+   comment-update ONLY, cap value unchanged) stand as written; the Step-7 capacity flags
+   stand LIVE; re-derive at execution. *(Round-2 correction 2026-07-14: the round-1
+   anchor record falsely reported these caps absent — refuted first-hand at the same
+   recorded heads.)*
 3. **`template-fragments/` NOW EXISTS in all five cities**, each carrying
    `telos-binding.template.md` (P1.5 delivery). T5's "create if absent" executes as
    create-if-absent; the telos artifact is PRESERVED byte-identical in every city
