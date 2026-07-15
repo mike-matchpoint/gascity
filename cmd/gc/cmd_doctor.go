@@ -175,6 +175,7 @@ func buildDoctorChecks(cityPath string, cfg *config.City, cfgErr error, opts bui
 		register(newRuntimeOrderFiringCurrentCheck(cfg, cityPath, storeFactory))
 		register(newCodexHooksDriftCheck(codexHookWorkDirs(cityPath, cfg)))
 		register(doctor.NewRigPackCoverageCheck(cfg, cityPath))
+		register(newTelosWiringDoctorCheck(cityPath, cfg))
 		register(newMCPConfigDoctorCheck(cityPath, cfg, exec.LookPath))
 		register(newMCPSharedTargetDoctorCheck(cityPath, cfg, exec.LookPath))
 	}
