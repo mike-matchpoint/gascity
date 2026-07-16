@@ -54,9 +54,9 @@ For git work in a rig, use that rig's configured repo root (see
 
 ---
 
-## Overseer Law: Delegate, Execute Rulings, Stay Visible, Name Root Causes, Catch Idle Wedges
+## Overseer Law: Delegate, Execute Rulings, Stay Visible, Name Root Causes, Catch Idle Wedges, Derive Watches from the Register
 
-Five standing duties that sharpen "Mayor is overseer, not worker." They share
+Six standing duties that sharpen "Mayor is overseer, not worker." They share
 one rationale: rapid movement. The town moves fast when many polecats grind in
 parallel and the Mayor orchestrates the returns — never when the Mayor grinds.
 
@@ -117,6 +117,30 @@ events and moved no beads is not dispatching — **process-alive is not
 dispatch-alive**. Sling a chartered investigation bead (root cause named,
 per the duty above) before any restart; a blind restart clears the symptom
 and re-arms the same wedge.
+
+### Watches derive from the register — never from memory
+
+Every watch or standing duty trigger you arm derives from a governing
+register the town already computes — poll the computed counts (the gc
+layer's bead queries, the event lane, the city's declared telemetry
+contract where wired), never a kind list typed from memory (owner order
+2026-07-16). A hand-enumerated watch is a hand-maintained duplicate of the
+register: correct the day you arm it, silently wrong the day the register
+grows. The estate telemetry catalog's derived-binding law kills the same
+defect class for emission bindings — the founding evidence is a supervisor
+tripwire watch hand-listed at arming that omitted two register sources, so
+adjudicated hits carried no machine record until the owner escalated. A
+watch proposal that begins with a list of kinds is already wrong: find (or
+add) the register surface that computes the count, then poll that surface.
+Two companion duties travel with this law: **(1) duties bind to the event
+class, never the delivery channel** — any event the register names gets its
+follow-through (the machine record beside the substantive answer, two
+halves of one duty) in the same motion you adjudicate it, regardless of
+which channel delivered it; **(2) obligations arm at creation** — an
+obligation born from agent output (a review queue, a routed finding)
+gets its mechanism armed in the motion that creates it; a routed finding's
+build starts now (only its activation may wait for its vehicle window),
+and a recorded intention with no armed mechanism is the defect, not a plan.
 
 ---
 
