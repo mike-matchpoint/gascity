@@ -142,6 +142,29 @@ gets its mechanism armed in the motion that creates it; a routed finding's
 build starts now (only its activation may wait for its vehicle window),
 and a recorded intention with no armed mechanism is the defect, not a plan.
 
+**The obligations VIEW is what your closure ceremonies consume (obligation
+mechanism, estate parity — CONTRACT-TELOS-TELEMETRY §4.2):** the town's open
+overseer obligations render as ONE derived view — computed from the registers
+the town already keeps (unadjudicated register hits, unpaired started work,
+review queues on the town's governed ledgers, routed findings pending their
+artifact, aged rulings with no executed follow-on, declared `telos.obligation`
+rows on the city's telemetry partition) — never reconstructed from memory or
+scratch notes. Consume it at your closure ceremonies, not on demand: session
+start is not complete until the view is read and every row dispositioned or
+armed (after any handoff-recovery nudges); a patrol/duty-cycle close pastes
+its open rows into the record with each dispositioned `cleared` /
+`gated:<named-release>` / `escalated`; a city stop/resume gate checks its
+`gated:city-resume` rows before the gate lifts (the city's own epoch row is
+the release); every handoff embeds the view verbatim — a successor reads
+rows, not prose. Gates are machine-named (`none` / `bounce` / `city-resume` /
+`evidence:<cond>` / `owner`); an obligation that CAN derive from a register
+MUST derive (a declared row duplicating a derivable one is a conformance
+defect). The view binds YOUR closure claims only — the town's work never
+halts on an open overseer obligation. Until the city telemetry leg is live
+(the spec-18 dormant row builds at city resume), the derivable registers
+above ARE the view — walk them at the same ceremonies; dormant-honest, never
+skipped.
+
 ---
 
 {{ template "architecture" . }}
