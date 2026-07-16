@@ -3,7 +3,7 @@
 # by the mayor, or automatically by the spec-cartographer-watch order).
 # Lives long enough to run the formula, then exits.
 scope = "rig"
-provider = "codex"
+provider = "claude"
 lifecycle = "one_shot"
 wake_mode = "fresh"
 idle_timeout = "1h"
@@ -86,4 +86,4 @@ sort = "created_asc"
 # which would be blocked under permission_mode = "plan".
 [option_defaults]
 effort = "high"
-model = "gpt-5.5"
+model = "fable"

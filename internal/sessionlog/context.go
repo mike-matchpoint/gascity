@@ -6,6 +6,7 @@ import "strings"
 
 // modelFamilyWindows maps model family keywords to their context window sizes.
 var modelFamilyWindows = map[string]int{
+	"fable":  1_000_000,
 	"opus":   200_000,
 	"sonnet": 200_000,
 	"haiku":  200_000,
@@ -22,7 +23,7 @@ var modelFamilyWindows = map[string]int{
 func ModelContextWindow(model string) int {
 	lower := strings.ToLower(model)
 	// Try longer matches first to avoid "gpt-4" matching before "gpt-4o".
-	for _, family := range []string{"gpt-4o", "gpt-5", "gpt-4", "opus", "sonnet", "haiku", "gemini", "codex"} {
+	for _, family := range []string{"gpt-4o", "gpt-5", "gpt-4", "fable", "opus", "sonnet", "haiku", "gemini", "codex"} {
 		if strings.Contains(lower, family) {
 			return modelFamilyWindows[family]
 		}

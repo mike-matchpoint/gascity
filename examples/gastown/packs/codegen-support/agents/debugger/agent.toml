@@ -13,7 +13,7 @@
 # The agent reads the plan bead's rig_name metadata into $RIG to scope its
 # work to a specific rig per invocation.
 scope = "city"
-provider = "codex"
+provider = "claude"
 lifecycle = "one_shot"
 wake_mode = "fresh"
 idle_timeout = "1h"
@@ -61,4 +61,4 @@ sort = "created_asc"
 
 [option_defaults]
 effort = "xhigh"
-model = "gpt-5.5"
+model = "fable"

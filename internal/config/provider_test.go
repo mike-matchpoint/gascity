@@ -120,9 +120,9 @@ func TestBuiltinClaudeCommandString(t *testing.T) {
 	if cs != "claude" {
 		t.Errorf("CommandString() = %q, want %q", cs, "claude")
 	}
-	// Default args should produce the permission flag and effort flag.
+	// Default args should produce the permission, effort, and model flags.
 	defaultArgs := rp.ResolveDefaultArgs()
-	wantArgs := []string{"--dangerously-skip-permissions", "--effort", "max"}
+	wantArgs := []string{"--dangerously-skip-permissions", "--effort", "max", "--model", "claude-fable-5"}
 	if len(defaultArgs) != len(wantArgs) {
 		t.Errorf("ResolveDefaultArgs() = %v, want %v", defaultArgs, wantArgs)
 	} else {

@@ -111,6 +111,18 @@ var claudeDefaults = []ModelPricing{
 			CacheCreationUSDPer1M: 6.25,
 		},
 	},
+	// Claude Fable 5.
+	{
+		Provider:     "claude",
+		Model:        "claude-fable-5",
+		LastVerified: "2026-07-15",
+		Tier: Tier{
+			PromptUSDPer1M:        10.00,
+			CompletionUSDPer1M:    50.00,
+			CacheReadUSDPer1M:     1.00,
+			CacheCreationUSDPer1M: 12.50,
+		},
+	},
 	// Claude 4.5 Haiku.
 	{
 		Provider:     "claude",

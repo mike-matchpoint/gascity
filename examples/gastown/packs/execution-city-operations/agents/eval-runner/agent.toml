@@ -1,5 +1,5 @@
 scope = "city"
-provider = "codex"
+provider = "claude"
 lifecycle = "one_shot"
 wake_mode = "fresh"
 work_dir = ".gc/agents/execution-city-operations/eval-runners/{{.AgentBase}}"
@@ -28,3 +28,4 @@ sort = "created_asc"
 
 [option_defaults]
 effort = "high"
+model = "fable"

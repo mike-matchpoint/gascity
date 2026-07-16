@@ -27,7 +27,7 @@ func TestBuildProviderLaunchCommandAddsDefaultsAndSettings(t *testing.T) {
 		t.Fatalf("BuildProviderLaunchCommand: %v", err)
 	}
 
-	wantCommand := fmt.Sprintf("claude --dangerously-skip-permissions --effort max --settings %q", filepath.Join(dir, ".gc", "settings.json"))
+	wantCommand := fmt.Sprintf("claude --dangerously-skip-permissions --effort max --model claude-fable-5 --settings %q", filepath.Join(dir, ".gc", "settings.json"))
 	if got.Command != wantCommand {
 		t.Fatalf("Command = %q, want %q", got.Command, wantCommand)
 	}
@@ -51,7 +51,7 @@ func TestBuildProviderLaunchCommandAppliesOptionOverrides(t *testing.T) {
 		t.Fatalf("BuildProviderLaunchCommand: %v", err)
 	}
 
-	want := "claude --permission-mode plan --effort low"
+	want := "claude --permission-mode plan --effort low --model claude-fable-5"
 	if got.Command != want {
 		t.Fatalf("Command = %q, want %q", got.Command, want)
 	}
@@ -72,7 +72,7 @@ func TestBuildProviderLaunchCommandIgnoresInitialMessageOverride(t *testing.T) {
 		t.Fatalf("BuildProviderLaunchCommand: %v", err)
 	}
 
-	want := "claude --dangerously-skip-permissions --effort low"
+	want := "claude --dangerously-skip-permissions --effort low --model claude-fable-5"
 	if got.Command != want {
 		t.Fatalf("Command = %q, want %q", got.Command, want)
 	}
