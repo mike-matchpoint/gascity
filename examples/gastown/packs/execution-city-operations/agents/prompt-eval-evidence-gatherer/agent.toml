@@ -1,5 +1,5 @@
 scope = "city"
-provider = "claude"
+provider = "codex"
 lifecycle = "one_shot"
 wake_mode = "fresh"
 work_dir = ".gc/agents/execution-city-operations/prompt-eval-evidence-gatherers/{{.AgentBase}}"
@@ -28,4 +28,3 @@ sort = "created_asc"
 
 [option_defaults]
 effort = "high"
-model = "fable"

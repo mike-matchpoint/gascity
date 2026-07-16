@@ -58,4 +58,4 @@ sort = "created_asc"
 # provider default; the formula calls `gc bd create` / `gc bd update`
 # which are blocked under permission_mode = "plan".
 [option_defaults]
-model = "fable"
+model = "opus"

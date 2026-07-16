@@ -111,7 +111,7 @@ func TestResolveProviderAgentProvider(t *testing.T) {
 		t.Errorf("CommandString() = %q, want %q", cs, "claude")
 	}
 	defaultArgs := rp.ResolveDefaultArgs()
-	wantArgs := []string{"--dangerously-skip-permissions", "--effort", "max", "--model", "claude-fable-5"}
+	wantArgs := []string{"--dangerously-skip-permissions", "--effort", "max"}
 	if len(defaultArgs) != len(wantArgs) {
 		t.Errorf("ResolveDefaultArgs() = %v, want %v", defaultArgs, wantArgs)
 	} else {

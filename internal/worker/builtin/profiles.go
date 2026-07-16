@@ -94,7 +94,6 @@ var builtinProviderSpecs = map[string]BuiltinProviderSpec{
 		Command:     "claude",
 		OptionDefaults: map[string]string{
 			"permission_mode": "unrestricted",
-			"model":           "fable",
 			"effort":          "max",
 		},
 		PromptMode:             "arg",

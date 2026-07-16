@@ -7,3 +7,9 @@ pre_start = ["{{.ConfigDir}}/assets/scripts/worktree-setup.sh {{.RigRoot}} {{.Wo
 idle_timeout = "2h"
 min_active_sessions = 0
 max_active_sessions = 5
+
+# Pin the model. The polecat is the generator-analogue seat (the
+# loop-harness implementer counterpart); owner order 2026-07-15 lands
+# it on Fable. Other roles inherit the provider default.
+[option_defaults]
+model = "fable"
