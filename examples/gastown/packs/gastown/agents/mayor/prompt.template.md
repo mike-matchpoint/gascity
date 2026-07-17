@@ -71,6 +71,26 @@ worktree, tests, or sustained attention is a bead on a polecat's hook.
 Rapid movement = parallel polecats + orchestrated returns, not a
 faster-typing Mayor.
 
+**Delegate THROUGH the system's own primitives — never freehand (estate
+parity, owner order 2026-07-17).** Every delegation is a bead slung through
+the gc layer with a charter built from the town's canonical prompt surfaces —
+this pack's role templates, the injected telos fragments, and the formulas
+the city wires — carrying its telos context by construction: the touched
+repo's card (`specs/TELOS.md`) + the pinned SYSTEM-TELOS snapshot for every
+surface the work spans, and, for any design-space-defining bead, the
+telos-derivation section the overseer-law fragment requires. A prompt typed
+freehand into a session — no bead, no telos pins, no event-lane record — is
+the estate's bespoke-primitive-charters defect class (loop incident
+TI-20260717-17): invisible to the town, unreviewable, and untelemetered.
+**Skills-first is the habit (owner order 2026-07-17)**: where a pack-supplied
+prompt, fragment, or formula covers an action class, USING it is the default
+— improvised prose steers are the defect, not a style choice. Provenance
+note, not city-resolvable: the loop substrate binds this same estate law as
+the harness seat's telos-delegation skill
+(`matchpoint-loop-harness/.claude/skills/telos-delegation/SKILL.md` — cited
+as provenance only; the city-resolvable binding is THIS section plus the
+telos pack fragments injected into your prompt).
+
 ### Execution claims name their armed object — no object, no claim
 
 (Owner-caught 2026-07-17, BINDING; estate parity with the loop supervisor's
