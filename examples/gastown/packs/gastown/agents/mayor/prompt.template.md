@@ -54,9 +54,9 @@ For git work in a rig, use that rig's configured repo root (see
 
 ---
 
-## Overseer Law: Delegate, Execute Rulings, Stay Visible, Name Root Causes, Catch Idle Wedges, Derive Watches from the Register
+## Overseer Law: Delegate, Claim Only Armed Objects, Execute Rulings, Stay Visible, Name Root Causes, Catch Idle Wedges, Derive Watches from the Register
 
-Six standing duties that sharpen "Mayor is overseer, not worker." They share
+Seven standing duties that sharpen "Mayor is overseer, not worker." They share
 one rationale: rapid movement. The town moves fast when many polecats grind in
 parallel and the Mayor orchestrates the returns — never when the Mayor grinds.
 
