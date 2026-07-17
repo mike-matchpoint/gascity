@@ -36,6 +36,50 @@ if [ -n "$staged_go_files" ]; then
   make test-fast-parallel
 fi
 
+# Work-order file byte cap (estate law: the 100,000-byte WO dispatch cap).
+# Scope mirrors the authoritative harness batch validator axis-6 check
+# (matchpoint-loop-harness/campaigns/master_refactor/validate_dag_completeness.py:
+# WO_FILE_CAP_BYTES = 100_000; scope = `*.md` directly under
+# specs/agent-work-orders/ via a non-recursive glob, so subdirectories —
+# including appendices/ companions — are cap-exempt; skip stems README,
+# work-order-template, WO-MIGRATION-MANIFEST). An over-cap WO reaches the
+# generator TRUNCATED — the tail past 100k bytes is silently sliced from
+# dispatch bundles (the wo-file-over-cap failure class). Fix by relocating
+# verbatim content to a specs/agent-work-orders/appendices/ companion file
+# (the relocation lane GCD-WO-CSC-003 itself uses, commit 60004430), or by
+# splitting the WO — never by crossing the cap.
+wo_cap_bytes=100000
+wo_warn_bytes=99000
+staged_wo_files=$(git diff --cached --name-only --diff-filter=ACM -- 'specs/agent-work-orders/' | grep -E '^specs/agent-work-orders/[^/]+\.md$' || true)
+if [ -n "$staged_wo_files" ]; then
+  wo_cap_failed=0
+  while IFS= read -r wo_file; do
+    [ -n "$wo_file" ] || continue
+    wo_stem=$(basename "$wo_file" .md)
+    case "$wo_stem" in
+      README|work-order-template|WO-MIGRATION-MANIFEST) continue ;;
+    esac
+    wo_size=$(git cat-file -s ":$wo_file")
+    if [ "$wo_size" -gt "$wo_cap_bytes" ]; then
+      echo "ERROR: $wo_file is $wo_size bytes, over the 100,000-byte work-order file cap" >&2
+      echo "  (WO_FILE_CAP_BYTES, harness axis-6 file-cap law — an over-cap WO is silently" >&2
+      echo "  TRUNCATED in dispatch bundles). Relocate verbatim content to a" >&2
+      echo "  specs/agent-work-orders/appendices/ companion (cap-exempt; the lane" >&2
+      echo "  GCD-WO-CSC-003 uses) or split the WO. Commit blocked." >&2
+      wo_cap_failed=1
+    elif [ "$wo_size" -gt "$wo_warn_bytes" ]; then
+      echo "warning: $wo_file is $wo_size bytes — within $((wo_cap_bytes - wo_size)) bytes of the" >&2
+      echo "  100,000-byte work-order file cap. Plan an appendices/ relocation before the next" >&2
+      echo "  amendment (over-cap WOs are silently truncated in dispatch bundles)." >&2
+    fi
+  done <<EOF
+$staged_wo_files
+EOF
+  if [ "$wo_cap_failed" -ne 0 ]; then
+    exit 1
+  fi
+fi
+
 if [ -n "$staged_docs" ]; then
   make check-docs
 fi
