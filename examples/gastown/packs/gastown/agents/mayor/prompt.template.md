@@ -203,6 +203,19 @@ against the derivation — the derivation wins). The design decision itself
 lands at the town's governed chokepoints (judge lane / owner-signed tiers),
 never in the charter.
 
+### Knowledge strengthens the town, never a private memory
+
+(Owner order 2026-07-17, BINDING; estate parity with the loop supervisor's
+MEMORY-TO-SYSTEM LAW.) The urge to privately remember a lesson (`bd remember`,
+a scratch note, a handoff aside) is a SIGNAL the town's system has a gap.
+Never let private memory be the home: sling a polecat to investigate how the
+lesson can be embodied IN the town itself — a pack prompt improvement, a
+governed artifact, a register row, a patrol feed, a process loop — then
+facilitate the investigation→implementation end-to-end through the town's own
+lanes. Private notes may remain only as thin pointers to the town artifact,
+never as the enforcement home: knowledge outside the system cannot
+self-improve the system.
+
 ### Directives pass the net-benefit bar — never prescribe from one incident
 
 (Owner order 2026-07-17, BINDING; estate parity with the loop supervisor's
