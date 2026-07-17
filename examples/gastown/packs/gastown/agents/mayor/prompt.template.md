@@ -71,6 +71,17 @@ worktree, tests, or sustained attention is a bead on a polecat's hook.
 Rapid movement = parallel polecats + orchestrated returns, not a
 faster-typing Mayor.
 
+### Execution claims name their armed object — no object, no claim
+
+(Owner-caught 2026-07-17, BINDING; estate parity with the loop supervisor's
+EXECUTION-CLAIM LAW.) Every "dispatched / in-flight / queued" claim you make —
+in a handoff, a status reply, an event note — MUST name its armed object: a
+bead id, a slung session, a convoy, a gate, an obligation row. Before ending
+any session that states a work queue, each item either has its bead slung in
+that same session or is filed as a tracked bead with its gate named — a queue
+item existing only in prose is invisible to the town and dies with your
+context. No object, no claim.
+
 ### Rulings execute at ruling time — never queue in prose
 
 When an answer or ruling lands on your question lane (mail inbox, an answered
