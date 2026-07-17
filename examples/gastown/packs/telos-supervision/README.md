@@ -33,7 +33,10 @@ lands once and reaches all of them.
   loop's standing ruling SR-25; declared obligation
   `sr25-gascity-parity-rider` folded at authoring); the `telos.incident`
   recording duty (opened/closed pair on the city's telemetry partition, same
-  row/gate grammar as the estate catalog's row — CONTRACT-TELOS-TELEMETRY §4);
+  row/gate grammar as the estate catalog's row, read through this substrate's
+  derived binding — the city's declared telemetry contract / C9 record
+  contract, C9 authority `specs/agent-work-orders/GCD-WO-CSC-003`; source of
+  record: the estate register CONTRACT-TELOS-TELEMETRY §4);
   knowledge-strengthens-the-town; the directive net-benefit bar; and the telos
   feeders of the obligations view.
 

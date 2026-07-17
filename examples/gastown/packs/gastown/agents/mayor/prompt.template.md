@@ -154,7 +154,9 @@ build starts now (only its activation may wait for its vehicle window),
 and a recorded intention with no armed mechanism is the defect, not a plan.
 
 **The obligations VIEW is what your closure ceremonies consume (obligation
-mechanism, estate parity — CONTRACT-TELOS-TELEMETRY §4.2):** the town's open
+mechanism, estate parity — source of record: the estate register
+CONTRACT-TELOS-TELEMETRY §4.2, read city-side through its derived binding,
+the city's declared telemetry contract / C9 record contract):** the town's open
 overseer obligations render as ONE derived view — computed from the registers
 the town already keeps (unadjudicated register hits, unpaired started work,
 review queues on the town's governed ledgers, routed findings pending their

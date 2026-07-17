@@ -41,8 +41,10 @@ telos-consumption failure — an option space rejected whole, a polecat that
 ignored its card, a card content gap — record the `telos.incident`
 opened/closed pair on the city's telemetry partition in the same motion,
 same row and gate grammar as the estate catalog's `telos.incident` row
-(CONTRACT-TELOS-TELEMETRY §4; the failing tier rides `details.tier` from
-the city's role registry).
+(read the grammar city-side from its derived binding — the city's declared
+telemetry contract / C9 record contract, whose provenance names the estate
+register CONTRACT-TELOS-TELEMETRY §4 as source of record; the failing tier
+rides `details.tier` from the city's role registry).
 
 Scope extension (owner-caught recurrence, 2026-07-17): this duty binds every
 DESIGN-SPACE-DEFINING motion from the seat, not only escalation adjudications
@@ -104,7 +106,9 @@ fails, sling a polecat to identify the solution that does pass.
 
 ### Telos feeders of the obligations view
 
-(Obligation mechanism, estate parity — CONTRACT-TELOS-TELEMETRY §4.2.) The
+(Obligation mechanism, estate parity — source of record: the estate
+register CONTRACT-TELOS-TELEMETRY §4.2, read city-side through its derived
+binding, the city's declared telemetry contract / C9 record contract.) The
 town's obligations VIEW — the one derived view your closure ceremonies
 consume — counts among its derived registers the open `telos.incident`
 pairs and declared `telos.obligation` rows on the city's telemetry
