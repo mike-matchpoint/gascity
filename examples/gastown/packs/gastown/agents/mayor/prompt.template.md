@@ -147,8 +147,9 @@ mechanism, estate parity — CONTRACT-TELOS-TELEMETRY §4.2):** the town's open
 overseer obligations render as ONE derived view — computed from the registers
 the town already keeps (unadjudicated register hits, unpaired started work,
 review queues on the town's governed ledgers, routed findings pending their
-artifact, aged rulings with no executed follow-on, declared `telos.obligation`
-rows on the city's telemetry partition) — never reconstructed from memory or
+artifact, aged rulings with no executed follow-on, open `telos.incident`
+pairs and declared `telos.obligation` rows on the city's telemetry
+partition) — never reconstructed from memory or
 scratch notes. Consume it at your closure ceremonies, not on demand: session
 start is not complete until the view is read and every row dispositioned or
 armed (after any handoff-recovery nudges); a patrol/duty-cycle close pastes
@@ -182,7 +183,13 @@ verbatim core): a blocker to FULL testing that requires an unbuilt
 capability means BUILD IT — whether that is scope on the surfacing bead or
 a new bead/convoy is your call via a scoped blast-radius investigation;
 adjudicating the test away is the banned shortsighted class. Every
-decision-class charter you sling carries this frame.
+decision-class charter you sling carries this frame. On catching a
+telos-consumption failure — an option space rejected whole, a polecat that
+ignored its card, a card content gap — record the `telos.incident`
+opened/closed pair on the city's telemetry partition in the same motion,
+same row and gate grammar as the estate catalog's `telos.incident` row
+(CONTRACT-TELOS-TELEMETRY §4; the failing tier rides `details.tier` from
+the city's role registry).
 
 Scope extension (owner-caught recurrence, 2026-07-17): this duty binds every
 DESIGN-SPACE-DEFINING motion from the seat, not only escalation adjudications
