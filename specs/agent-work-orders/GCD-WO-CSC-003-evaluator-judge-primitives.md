@@ -1081,21 +1081,16 @@ intact; pre-slim prose: this file @ `f8935e2b`.
 
 ### WOC map
 
-WOC-1 UPGRADED in place (R-C2 live-tier terms — header block). WOC-2 in-body, verified
-(each AC names its backing test). WOC-3 in-body (§ Non-Goals), verified complete — every
-deferred seam names its owner there; `regenerate_on_reject` = RESERVED name, not a
-deferred seam. WOC-4/-5/-6/-9/-11 + GEN-6 residue ADDED below (WOC-4 = `## Premises
-(drift gate)` + `## Specs impact`; WOC-11's T3 row records the C9 registration GAP →
-AC-T2; residue rides AC-T1). WOC-7 in-body + declaration below. WOC-8 in-body EXEMPLAR —
-RE-VERIFIED below. WOC-10 in-body (pack README = the C9 binding doc; Done Means
-checklist) + `## Specs impact` below (incl. the index-motion N/A).
+Relocated VERBATIM 2026-07-17 (path + binding law: the Blueprint-conformance
+relocation note above — same appendices companion, same file-cap lane). WOC-1..11 +
+GEN-6 residue all remain PRESENT — in-body or in the tail sections below — with
+locations + verification status recorded there.
 
 ### Anchor re-verification record (WOC-8 — 2026-07-14, origin/main @ `e3a3a1673600`)
 
-Relocated VERBATIM — zero content change, 100k dispatch-bundle file-cap remediation
-2026-07-15 — to `specs/agent-work-orders/appendices/GCD-WO-CSC-003-relocated-records.md`
-(pinned path, this repo; BINDING with this WO). WOC-8 remains RE-VERIFIED as recorded
-there; every R1/R2 pack-content anchor held at `e3a3a167`.
+Relocated VERBATIM (path + binding law: the Blueprint-conformance relocation note
+above). WOC-8 remains RE-VERIFIED as recorded there; every R1/R2 pack-content anchor
+held at `e3a3a167`.
 
 ### Runtime premises (WOC-5)
 
@@ -1209,9 +1204,8 @@ seam contract.
 
 ### Finding (code-cited; re-anchor by content, not line number)
 
-Relocated VERBATIM — zero content change, 100k dispatch-bundle file-cap remediation
-2026-07-15 — to `specs/agent-work-orders/appendices/GCD-WO-CSC-003-relocated-records.md`
-(pinned path, this repo; BINDING with this WO). The Scope additions below stand alone.
+Relocated VERBATIM (path + binding law: the Blueprint-conformance relocation note
+above). The Scope additions below stand alone.
 
 ### Scope additions (binding, additive)
 

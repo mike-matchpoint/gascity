@@ -103,3 +103,21 @@ byte-identical. Drift notes: (a)
 Step-0(b) gate passes TODAY (3 formulas; EVAL-001 = MERGED_DEV). Every R1/R2 pack-content
 anchor holds at `e3a3a167`.
 
+## WOC map (WO-CS v1 conformance audit, 2026-07-14 — Track C)
+
+> Relocated VERBATIM 2026-07-17 (same file-cap remediation lane as the header note;
+> pre-relocation in-file bytes at this repo's
+> GCD-WO-CSC-003-evaluator-judge-primitives.md @ `d44c5c04`). Subsection of the WO's
+> `## WO-CS v1 conformance (audited 2026-07-14 — Track C)` tail; "below" in the
+> verbatim text means below THAT tail in the WO file, where the referenced sections
+> remain.
+
+WOC-1 UPGRADED in place (R-C2 live-tier terms — header block). WOC-2 in-body, verified
+(each AC names its backing test). WOC-3 in-body (§ Non-Goals), verified complete — every
+deferred seam names its owner there; `regenerate_on_reject` = RESERVED name, not a
+deferred seam. WOC-4/-5/-6/-9/-11 + GEN-6 residue ADDED below (WOC-4 = `## Premises
+(drift gate)` + `## Specs impact`; WOC-11's T3 row records the C9 registration GAP →
+AC-T2; residue rides AC-T1). WOC-7 in-body + declaration below. WOC-8 in-body EXEMPLAR —
+RE-VERIFIED below. WOC-10 in-body (pack README = the C9 binding doc; Done Means
+checklist) + `## Specs impact` below (incl. the index-motion N/A).
+
