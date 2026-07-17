@@ -4,8 +4,8 @@ Shared core primitives of the telos layer. A distinct contained pack — never a
 extension of `codegen-support`, `gastown`, or any foreign pack. In Gas City the
 pack is the IMPORT UNIT: cities import only the telos packs their role mix
 uses, so the telos layer ships as separate packs for separate processes
-(`telos-core` / `telos-codegen` / `telos-exec-monitoring`), with this pack
-carrying what the other two share.
+(`telos-core` / `telos-codegen` / `telos-exec-monitoring` /
+`telos-supervision`), with this pack carrying what the lane packs share.
 
 ## Guardrails (BINDING)
 
@@ -13,7 +13,8 @@ carrying what the other two share.
 
 In-repo law: the "Telos pack topology" tail sections of
 `specs/agent-work-orders/GCD-WO-CSC-003/006/007` bind where telos-layer content
-may live. Any telos primitive lands ONLY in the three telos packs.
+may live. Any telos primitive lands ONLY in the telos packs (the four-pack
+family above — pack-topology ruling v3, owner-ratified 2026-07-17).
 
 ## What this pack ships
 

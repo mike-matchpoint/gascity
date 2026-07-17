@@ -93,7 +93,7 @@ func TestMaterializedTelosPacksDiscoversFragments(t *testing.T) {
 }
 
 func TestBundledTelosPackNamesMatchesRegistryFamily(t *testing.T) {
-	want := []string{"telos-core", "telos-codegen", "telos-exec-monitoring"}
+	want := []string{"telos-core", "telos-codegen", "telos-exec-monitoring", "telos-supervision"}
 	if got := bundledTelosPackNames(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("bundledTelosPackNames() = %v, want %v", got, want)
 	}

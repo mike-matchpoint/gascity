@@ -400,6 +400,12 @@ is stated here — an executor reading only this WO needs nothing else:
    role — conformance verdicts stay in the single evaluator/judge lane.
 2. **Guardrails (verbatim, BINDING):**
    "(A) packs carry primitives + sha-pinned POINTERS to the SYSTEM-TELOS snapshot, never a second copy of the law; (B) the monitoring pack emits telemetry/findings ONLY — conformance verdicts stay in the single evaluator/judge lane (GCD-WO-CSC-003 / GCD-WO-EVAL-001, shaped to blueprint ROL-5/6 pre-merge; no telos-specific judge role)."
+3. **v3 amendment (owner-ratified 2026-07-17 — D6 v3).** The telos pack family gains
+   the FOURTH pack `telos-supervision` (supervisor/overseer telos law as injection
+   FRAGMENTS — never an agent; guardrails A/B unchanged). "Applicable telos packs"
+   in the template rows includes it for every templated city — the supervisor lane
+   runs wherever a mayor runs; injection rides the per-city mayor pack-patch
+   (`append_fragments`).
 
 ## WO-CS v1 conformance (audited 2026-07-14 — Track C)
 

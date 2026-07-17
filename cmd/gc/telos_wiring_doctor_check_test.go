@@ -113,7 +113,7 @@ func TestTelosWiringDoctorCheckAdvisoryWhenNoTelosImported(t *testing.T) {
 	if !strings.Contains(result.Message, "R10 advisory: no telos packs imported") {
 		t.Fatalf("message = %q", result.Message)
 	}
-	if len(result.Details) != 1 || !strings.Contains(result.Details[0], "telos-core, telos-codegen, telos-exec-monitoring") {
+	if len(result.Details) != 1 || !strings.Contains(result.Details[0], "telos-core, telos-codegen, telos-exec-monitoring, telos-supervision") {
 		t.Fatalf("details = %#v", result.Details)
 	}
 }

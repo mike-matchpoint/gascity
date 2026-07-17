@@ -37,6 +37,18 @@ and cross-city coordination.
 - Do not mutate domain state directly.
 - Do not close execution incidents without evidence or a typed downstream owner.
 
+## Supervisor Telos Duties Arrive Via The telos-supervision Fragment
+
+Your telos duties as overseer — telos-first adjudication + the option-space
+law and its design-space scope extension, the capability-wall BUILD-branch
+rider, knowledge-strengthens-the-town, the directive net-benefit bar, the
+`telos.incident` recording duty, and the telos feeders of the obligations
+view — live in the `telos-overseer-law` fragment of the `telos-supervision`
+pack (pack-topology ruling v3, 2026-07-17), injected city-side via the mayor
+pack-patch. This template carries a POINTER only, never a second copy. In a
+telos-wired city its absence at prime time is a LOUD defect, never a silent
+skip: state `TELOS SUPERVISION: MISSING` in your notes and surface it.
+
 ## Startup Protocol
 
 ```bash

@@ -1,4 +1,4 @@
-> specs-version: 3 | updated: 2026-07-14
+> specs-version: 4 | updated: 2026-07-17
 # TELOS — GasCity-Dev
 
 ## §1 Purpose (≤80 words)
@@ -77,4 +77,4 @@ Factory-engine role (TD §D): one canonical Go object model, two typed projectio
 | engine deep docs | engdocs/architecture/ (beads, formulas incl. SLING-path precedence, life-of-a-bead, life-of-a-molecule, controller, session) · engdocs/contributors/ (codebase-map, primitive-test, reconciler-debugging) · TESTING.md · CONTRIBUTING.md · TRACK3_CONTRACT.md |
 | pack law | docs/specs/pack-spec.md (PackV2, authoritative; pack schema 2) · docs/guides/shareable-packs.md (formula-name precedence) |
 | estate-side law | aws-GasCity/specs/00 + 17 (+ ADR-023) — hosting + city-topology law (city = business domain, rig = process/repo; topology from `PROCESS_SPECS`) · master/city-scaling-improvements/wo-authoring-kit.md (C9/C10/C11 program contracts) |
-| telos delivery (packs LANDED; city artifacts pending) | master/telos/agent-execution-plan.md rows P1.5/P1.5b/P1.5c/P1.5d + delta D6 — the three telos packs (telos-core / telos-codegen / telos-exec-monitoring) are IN-REPO at `examples/gastown/packs/telos-*` + `internal/builtinpacks/registry.go`, fragment-only, guardrails A/B verbatim in each pack README (topology law = the "Telos pack topology" tail sections of GCD-WO-CSC-003/006/007); the sha-pinned SYSTEM-TELOS snapshot + `telos-binding` doctrine fragment stay CITY-SIDE delivery artifacts (P1.5c/d, dormant until cities resume) — never pack content |
+| telos delivery (packs LANDED; city artifacts pending) | master/telos/agent-execution-plan.md rows P1.5/P1.5b/P1.5c/P1.5d + delta D6 (v3 owner-ratified 2026-07-17) — the four telos packs (telos-core / telos-codegen / telos-exec-monitoring / telos-supervision) are IN-REPO at `examples/gastown/packs/telos-*` + `internal/builtinpacks/registry.go`, fragment-only, guardrails A/B verbatim in each pack README (topology law = the "Telos pack topology" tail sections of GCD-WO-CSC-003/006/007; telos-supervision = the overseer-law fragment home, injected into every mayor variant via per-city mayor pack-patches); the sha-pinned SYSTEM-TELOS snapshot + `telos-binding` doctrine fragment stay CITY-SIDE delivery artifacts (P1.5c/d, dormant until cities resume) — never pack content |

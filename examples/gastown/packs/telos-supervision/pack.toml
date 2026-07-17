@@ -1,0 +1,45 @@
+[pack]
+name = "telos-supervision"
+schema = 2
+
+# Telos layer — supervisor/overseer lane.
+#
+# Distinct contained pack (never an extension of codegen-support, gastown, or
+# any foreign pack): the pack is the IMPORT UNIT, and cities import only the
+# telos packs their role mix uses — separate packs for separate processes.
+# Supervision is a distinct lane from codegen-priming and monitoring-emission,
+# so it ships as the FOURTH telos pack (pack-topology ruling v3, owner-ratified
+# 2026-07-17; supersedes the three-pack phrasing of the 2026-07-14 ruling).
+#
+# This pack carries the overseer telos law as an injection FRAGMENT for the
+# city's supervisor role (the mayor, whichever pack supplies it): telos-first
+# adjudication + the option-space law + the design-space scope extension, the
+# capability-wall BUILD-branch rider, knowledge-strengthens-the-town, the
+# directive net-benefit bar, the telos.incident recording duty, and the telos
+# feeders of the obligations view. A supervisor primitive here is a FRAGMENT,
+# never an agent.
+#
+# It defines NO agents, NO formulas, and NO orders. It emits nothing and
+# renders no verdicts. Content is generic: domain specificity arrives at
+# runtime through the city-side snapshot and per-repo cards, never baked in.
+#
+# Injection wiring lives city-side (import ≠ inject — bootstrap rule R10):
+# cities inject the fragment into their overseer role via the pack-patch
+# lever, e.g.
+#
+#   [[patches.agent]]
+#   name = "mayor"
+#   append_fragments = ["telos-overseer-law"]
+#
+# (a city whose mayor patch already sets append_fragments lists this fragment
+# alongside the existing entries — the patch field replaces, never merges).
+# Activation stays gated on the city wiring branches behind the image gate;
+# city-runtime telemetry duties additionally gate at city resume.
+#
+# Requires: telos-core imported alongside (its telos-snapshot-pin and
+# telos-evidence-line fragments carry the shared snapshot/evidence mechanics
+# this lane's duties point at).
+#
+# Guardrails (binding — verbatim text in README.md): pointers to the snapshot,
+# never a second copy of the law; conformance verdicts stay in the city's
+# single evaluator/judge lane.

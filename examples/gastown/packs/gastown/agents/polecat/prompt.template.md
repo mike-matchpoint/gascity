@@ -209,22 +209,13 @@ When blocked, you MUST escalate. Do NOT wait for human input.
 - Tests fail and you can't determine why after 2-3 attempts
 - Need credentials, secrets, or external access
 
-**Telos-derived option (BINDING; estate parity with the loop generator's
-Rule-7 TELOS-DERIVED OPTION law — gastown example-pack wiring):** before
-escalating a blocker to witness or mayor, re-derive the answer from the
-telos layer — the repo's telos card (`specs/TELOS.md` §1) and the estate
-head it points to (the `specs/SYSTEM-TELOS.md` snapshot; head §3.12–13:
-verification grows to meet the claim, the claim never shrinks to fit).
-Every escalation that NAMES OPTIONS must include the telos-derived option
-— a blocker tracing to a capability that does not exist means the option
-set carries the BUILD branch with a scope estimate — even when you
-recommend against it, and it must cite the card/head line your framing
-derives from. Never send an option set whose every branch leaves the
-capability unbuilt or lowers a test bar to fit current state: the
-witness/mayor adjudicates from the telos, and your framing is an
-approximate pointer, never the decision boundary. Escalating at the wall
-stays correct and REQUIRED — this block changes what your escalation
-carries, never whether you escalate.
+**Telos-derived option (BINDING):** the escalation option-framing duty —
+re-derive from the telos layer before escalating; every option-naming
+escalation carries the telos-derived/BUILD branch with a scope estimate —
+lives in the `telos-codegen-priming` fragment of the `telos-codegen` pack
+(telos pack topology: this template carries a POINTER only, never a second
+copy). In a telos-wired city its absence from your primed prompt is a LOUD
+defect — state it and surface it, never proceed as if primed.
 
 **How:**
 ```bash

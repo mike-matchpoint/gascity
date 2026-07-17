@@ -23,6 +23,7 @@ import (
 	teloscodegen "github.com/gastownhall/gascity/examples/gastown/packs/telos-codegen"
 	teloscore "github.com/gastownhall/gascity/examples/gastown/packs/telos-core"
 	telosexecmonitoring "github.com/gastownhall/gascity/examples/gastown/packs/telos-exec-monitoring"
+	telossupervision "github.com/gastownhall/gascity/examples/gastown/packs/telos-supervision"
 	"github.com/gastownhall/gascity/internal/bootstrap/packs/core"
 	"github.com/gastownhall/gascity/internal/fsys"
 	gitutil "github.com/gastownhall/gascity/internal/git"
@@ -62,6 +63,7 @@ func All() []Pack {
 		{Name: "telos-core", Subpath: "examples/gastown/packs/telos-core", FS: teloscore.PackFS},
 		{Name: "telos-codegen", Subpath: "examples/gastown/packs/telos-codegen", FS: teloscodegen.PackFS},
 		{Name: "telos-exec-monitoring", Subpath: "examples/gastown/packs/telos-exec-monitoring", FS: telosexecmonitoring.PackFS},
+		{Name: "telos-supervision", Subpath: "examples/gastown/packs/telos-supervision", FS: telossupervision.PackFS},
 	}
 }
 

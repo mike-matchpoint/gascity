@@ -15,7 +15,7 @@ import (
 // must carry it VERBATIM.
 const telosGuardrailsVerbatim = `"(A) packs carry primitives + sha-pinned POINTERS to the SYSTEM-TELOS snapshot, never a second copy of the law; (B) the monitoring pack emits telemetry/findings ONLY — conformance verdicts stay in the single evaluator/judge lane (GCD-WO-CSC-003 / GCD-WO-EVAL-001, shaped to blueprint ROL-5/6 pre-merge; no telos-specific judge role)."`
 
-var telosPackNames = []string{"telos-core", "telos-codegen", "telos-exec-monitoring"}
+var telosPackNames = []string{"telos-core", "telos-codegen", "telos-exec-monitoring", "telos-supervision"}
 
 func telosPackDir(t *testing.T, name string) string {
 	t.Helper()
@@ -207,6 +207,43 @@ func TestTelosCodegenFragmentCarriesReadOrderAndStopDuty(t *testing.T) {
 	// telos-exec-monitoring alone.
 	if strings.Contains(text, "telos-effectiveness |") {
 		t.Fatal("telos-codegen-priming fragment must not carry the telemetry emission surface")
+	}
+}
+
+func TestTelosSupervisionFragmentCarriesOverseerLaw(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(telosPackDir(t, "telos-supervision"), "template-fragments", "telos-overseer-law.template.md"))
+	if err != nil {
+		t.Fatalf("reading telos-overseer-law fragment: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		// The fragment-not-agent law and the verdict boundary open the file.
+		"FIRST LAW — this is a fragment, never an agent",
+		"evaluator/judge lane",
+		// Activation stays honest about its gates.
+		"Activation gate (dormant-honest)",
+		"import ≠ inject",
+		"LOUD defect, never a silent skip",
+		// The overseer duties migrated from the mayor templates.
+		"### Adjudicate from the telos — the option space is not the decision boundary",
+		"TELOS-FIRST ADJUDICATION LAW",
+		"opened/closed pair on the city's telemetry partition",
+		"### Capability walls — the option space carries the BUILD branch",
+		"sr25-gascity-parity-rider",
+		"### Knowledge strengthens the town, never a private memory",
+		"MEMORY-TO-SYSTEM LAW",
+		"### Directives pass the net-benefit bar — never prescribe from one incident",
+		"DIRECTIVE NET-BENEFIT LAW",
+		"### Telos feeders of the obligations view",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("telos-overseer-law fragment missing required duty text %q", want)
+		}
+	}
+	// The supervision lane renders no verdicts and emits no telemetry record
+	// shapes: the emission surface belongs to telos-exec-monitoring alone.
+	if strings.Contains(text, "telos-effectiveness |") {
+		t.Fatal("telos-overseer-law fragment must not carry the telemetry emission surface")
 	}
 }
 

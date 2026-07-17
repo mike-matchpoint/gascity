@@ -4,7 +4,8 @@ The telos layer's priming/conscience lane for codegen roles. A distinct
 contained pack — never an extension of `codegen-support`, `gastown`, or any
 foreign pack. In Gas City the pack is the IMPORT UNIT: cities import only the
 telos packs their role mix uses, so the telos layer ships as separate packs for
-separate processes (`telos-core` / `telos-codegen` / `telos-exec-monitoring`).
+separate processes (`telos-core` / `telos-codegen` / `telos-exec-monitoring` /
+`telos-supervision`).
 This pack is the codegen-process lane; it requires `telos-core` imported
 alongside it.
 

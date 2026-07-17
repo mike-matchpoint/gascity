@@ -1060,9 +1060,12 @@ constraint is stated here — an executor reading only this WO needs nothing els
    here and nowhere else. No downstream binding may add a telos-specific judge role.
 2. **Telos primitives have exactly one home.** Any telos primitive this WO's work is
    tempted to introduce lands ONLY in the distinct contained packs `telos-core` /
-   `telos-codegen` / `telos-exec-monitoring` — never as extensions of
-   `codegen-support`, `gastown`, or any foreign pack. The pack is the IMPORT UNIT;
-   separate packs for separate processes.
+   `telos-codegen` / `telos-exec-monitoring` / `telos-supervision` — never as
+   extensions of `codegen-support`, `gastown`, or any foreign pack. The pack is the
+   IMPORT UNIT; separate packs for separate processes. *(v3 amendment, owner-ratified
+   2026-07-17 — D6 v3, dossier-city-telos-channel-20260717 §5.0: the family gains the
+   FOURTH pack `telos-supervision`, carrying the supervisor/overseer telos law as
+   injection FRAGMENTS — never an agent; guardrails A/B below bind it unchanged.)*
 3. **Guardrails (verbatim, BINDING):**
    "(A) packs carry primitives + sha-pinned POINTERS to the SYSTEM-TELOS snapshot, never a second copy of the law; (B) the monitoring pack emits telemetry/findings ONLY — conformance verdicts stay in the single evaluator/judge lane (GCD-WO-CSC-003 / GCD-WO-EVAL-001, shaped to blueprint ROL-5/6 pre-merge; no telos-specific judge role)."
 

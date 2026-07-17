@@ -15,8 +15,8 @@ import (
 )
 
 // telosPackNamePrefix identifies packs belonging to the telos layer family
-// (the bundled members are telos-core, telos-codegen, and
-// telos-exec-monitoring — see internal/builtinpacks). Spec-17 R10 binds city
+// (the bundled members are telos-core, telos-codegen, telos-exec-monitoring,
+// and telos-supervision — see internal/builtinpacks). Spec-17 R10 binds city
 // bootstrap to this family: imported telos packs must materialize into the
 // pack graph and every fragment they ship must be wired into role injection
 // lists (import ≠ inject). The prefix is a pack-family naming convention,

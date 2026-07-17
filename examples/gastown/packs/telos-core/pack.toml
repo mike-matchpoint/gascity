@@ -20,8 +20,9 @@ schema = 2
 # runtime through the city-side snapshot and per-repo cards, never baked in.
 #
 # Companion lane packs (import alongside this one): telos-codegen
-# (priming/conscience for codegen roles) and telos-exec-monitoring
-# (effectiveness/TELOS-GAP telemetry emitters). Both assume this pack's
+# (priming/conscience for codegen roles), telos-exec-monitoring
+# (effectiveness/TELOS-GAP telemetry emitters), and telos-supervision
+# (the overseer lane's telos law fragment). All assume this pack's
 # fragments are present in the city's template namespace.
 #
 # Guardrails (binding — verbatim text in README.md): pointers to the snapshot,

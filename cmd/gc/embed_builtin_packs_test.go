@@ -400,6 +400,11 @@ func TestTelosBuiltinPacksComposeWithGastownAndStayGeneric(t *testing.T) {
 			filepath.Join("template-fragments", "telos-effectiveness-telemetry.template.md"),
 			filepath.Join("template-fragments", "telos-gap-finding.template.md"),
 		},
+		"telos-supervision": {
+			"pack.toml",
+			"README.md",
+			filepath.Join("template-fragments", "telos-overseer-law.template.md"),
+		},
 	}
 	for pack, files := range telosPacks {
 		packDir := filepath.Join(dir, citylayout.SystemPacksRoot, pack)
@@ -432,6 +437,16 @@ source = ".gc/system/packs/telos-codegen"
 
 [imports.telos-exec-monitoring]
 source = ".gc/system/packs/telos-exec-monitoring"
+
+[imports.telos-supervision]
+source = ".gc/system/packs/telos-supervision"
+
+# The supervisor telos law injects into the mayor role via the per-city
+# pack-patch lever (pack-topology ruling v3, 2026-07-17) — the same
+# append_fragments mechanism the hosted cities use.
+[[patches.agent]]
+name = "mayor"
+append_fragments = ["telos-overseer-law"]
 `), 0o644); err != nil {
 		t.Fatalf("WriteFile(pack.toml): %v", err)
 	}
@@ -495,6 +510,23 @@ path = "."
 	for name := range got {
 		if strings.Contains(name, "telos") {
 			t.Fatalf("telos packs must not define agents; got composed agent %q", name)
+		}
+	}
+	// The supervisor telos law reaches the mayor role through the per-city
+	// pack-patch lever (append_fragments) — the injection wiring the hosted
+	// city configs carry (pack-topology ruling v3).
+	for i := range cfg.Agents {
+		if cfg.Agents[i].QualifiedName() != "gastown.mayor" {
+			continue
+		}
+		found := false
+		for _, frag := range cfg.Agents[i].AppendFragments {
+			if frag == "telos-overseer-law" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("gastown.mayor append_fragments = %v, want telos-overseer-law injected via the pack patch", cfg.Agents[i].AppendFragments)
 		}
 	}
 }
