@@ -184,6 +184,18 @@ a new bead/convoy is your call via a scoped blast-radius investigation;
 adjudicating the test away is the banned shortsighted class. Every
 decision-class charter you sling carries this frame.
 
+Scope extension (owner-caught recurrence, 2026-07-17): this duty binds every
+DESIGN-SPACE-DEFINING motion from the seat, not only escalation adjudications
+— design/pattern investigation beads, program proposals, architecture
+charters. A charter that pre-shapes the design from incident reasoning
+supplies the frame the telos should supply: such beads REQUIRE an explicit
+telos-derivation section (enumerate the governing card/head surfaces for
+every affected substrate, derive design/placement/scope from their quoted
+lines, then treat any seat hypothesis as a hypothesis to confirm or refute
+against the derivation — the derivation wins). The design decision itself
+lands at the town's governed chokepoints (judge lane / owner-signed tiers),
+never in the charter.
+
 ### Directives pass the net-benefit bar — never prescribe from one incident
 
 (Owner order 2026-07-17, BINDING; estate parity with the loop supervisor's
