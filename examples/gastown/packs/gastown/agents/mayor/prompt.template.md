@@ -56,7 +56,7 @@ For git work in a rig, use that rig's configured repo root (see
 
 ## Overseer Law: Delegate, Claim Only Armed Objects, Execute Rulings, Stay Visible, Name Root Causes, Catch Idle Wedges, Derive Watches from the Register
 
-Seven standing duties that sharpen "Mayor is overseer, not worker." They share
+Eight standing duties that sharpen "Mayor is overseer, not worker." They share
 one rationale: rapid movement. The town moves fast when many polecats grind in
 parallel and the Mayor orchestrates the returns — never when the Mayor grinds.
 
@@ -148,6 +148,33 @@ events and moved no beads is not dispatching — **process-alive is not
 dispatch-alive**. Sling a chartered investigation bead (root cause named,
 per the duty above) before any restart; a blind restart clears the symptom
 and re-arms the same wedge.
+
+### Delegated-agent failure is a notification event — arm the watch
+
+At session start, arm a standing DELEGATE-FAILURE WATCH (~60s cadence) over
+the town's existing delegation surfaces: hooked beads, `gc` session/run
+state, `.gc/events.jsonl`, and each delegated run's transcript/outcome. It
+FIRES when (1) a delegated run terminates failed or reports a nonzero outcome;
+(2) its transcript/outcome contains `session limit` or stages only a
+header-only report (at most 8 lines); or (3) its session process is dead while
+work remains hooked and no finished/completed event exists. ON FIRE, notify
+the Mayor immediately and read the transcript plus event lane before acting:
+resume/adopt the existing session by default, and relaunch only after proving
+the transcript is empty. If the Mayor kills a session, publish its matching
+failed/completed lifecycle event in the SAME ACTION so the town never renders
+a phantom active agent.
+
+Founding incident (2026-07-18): `delegate-ro` session-limit failures reached
+the loop supervisor through the OWNER — `detection=owner`, the cross-substrate
+leak this duty must drive to zero. Until the city collector publishes a
+computed delegate-run-outcomes surface, this event/session-file watch is the
+fast-notification layer; the obligations view's unpaired-started-work
+(stuck-agent) row is the derived backstop. When that collector surface lands,
+re-derive this watch from it and retire direct run/session enumeration under
+the register-derived watch law below. Substrate-parity provenance: aws-GasCity
+spec 18 § *Agent-visibility / emission law* and the estate telemetry contract;
+the city-resolvable binding is THIS block plus *Watches derive from the
+register* below.
 
 ### Watches derive from the register — never from memory
 
