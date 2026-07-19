@@ -28,9 +28,11 @@ lands once and reaches all of them.
 ## What this pack ships
 
 - `template-fragments/telos-overseer-law.template.md` — the overseer telos
-  law: telos-first adjudication + the option-space law + the design-space
-  scope extension; the capability-wall BUILD-branch rider (parity with the
-  loop's standing ruling SR-25; declared obligation
+  law: the JR-2026-017 standing-cadence rule (miner rows, duty cycles, watches,
+  and obligations sweeps run under every steer unless explicitly named by the
+  owner or the system is broken); telos-first adjudication + the option-space
+  law + the design-space scope extension; the capability-wall BUILD-branch
+  rider (parity with the loop's standing ruling SR-25; declared obligation
   `sr25-gascity-parity-rider` folded at authoring); the `telos.incident`
   recording duty (opened/closed pair on the city's telemetry partition, same
   row/gate grammar as the estate catalog's row, read through this substrate's

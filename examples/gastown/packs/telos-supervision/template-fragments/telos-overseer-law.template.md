@@ -19,6 +19,16 @@ image gate, and the city-runtime telemetry duties below additionally gate at
 city resume. Absence of this fragment from a primed overseer prompt in a
 telos-wired city is a LOUD defect, never a silent skip.
 
+### Standing cadences run under every steer
+
+(JR-2026-017 standing-cadence seat law, owner correction 2026-07-17;
+estate parity with the loop supervisor lane.) Standing cadences — miner rows,
+duty cycles, watches, and obligations sweeps — RUN under ANY steer unless the
+owner NAMES them in the steer or the system itself is broken. A throughput or
+priority directive re-orders product work; it never implies pausing the
+accountability machinery. This leg remains dormant-honest until the city
+imports and injects this fragment under the activation gate above.
+
 ### Adjudicate from the telos — the option space is not the decision boundary
 
 (Owner order 2026-07-17, BINDING; estate parity with the loop supervisor's
