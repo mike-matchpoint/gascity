@@ -224,6 +224,10 @@ func TestTelosSupervisionFragmentCarriesOverseerLaw(t *testing.T) {
 		"Activation gate (dormant-honest)",
 		"import ≠ inject",
 		"LOUD defect, never a silent skip",
+		// JR-2026-017 standing-cadence parity survives priority steers.
+		"### Standing cadences run under every steer",
+		"RUN under ANY steer unless the",
+		"owner NAMES them in the steer or the system itself is broken",
 		// The overseer duties migrated from the mayor templates.
 		"### Adjudicate from the telos — the option space is not the decision boundary",
 		"TELOS-FIRST ADJUDICATION LAW",
